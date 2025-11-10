@@ -1,0 +1,31 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cmake configure",
+            "type": "shell",
+            "command": "cmake -B build",
+            "group": "build"
+        },
+        {
+            "label": "cmake build",
+            "type": "shell",
+            "command": "cmake --build build",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "dependsOn": ["cmake configure"]
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "command": "./build/MyProject",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "dependsOn": ["cmake build"]
+        }
+    ]
+}
