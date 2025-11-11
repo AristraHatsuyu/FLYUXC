@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run",
+            "type": "node",
+            "request": "launch",
+            "preLaunchTask": "run",
+            "runtimeExecutable": "echo",
+            "runtimeArgs": ["程序执行完成"],
+            "skipFiles": [
+                "<node_internals>/**"
+            ]
+        }
+    ]
+}
