@@ -1,7 +1,9 @@
 #include "flyuxc/cli.h"
 #include "flyuxc/io.h"
 #include "flyuxc/normalize.h"
+#include "flyuxc/lexer.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 int main(int argc, char *argv[]) {
     CliOptions options = parse_arguments(argc, argv);
@@ -17,9 +19,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (options.input) {
-        // 当前阶段：先做规范化（去注释、格式化），再输出
-        int rc = normalize_file_to_stdout(options.input);
-        return rc;
+        
+        return 0;
     }
 
     // 如果没有输入文件，则提示并退出
