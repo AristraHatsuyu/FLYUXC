@@ -34,3 +34,48 @@ int print_file_to_stdout(const char *path) {
     fclose(f);
     return 0;
 }
+
+char* read_file_to_string(const char *path) {
+    if (!path) {
+        fprintf(stderr, "No path provided\n");
+        return NULL;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        perror(path);
+        return NULL;
+    }
+
+    // 获取文件大小
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size < 0) {
+        perror("ftell");
+        fclose(f);
+        return NULL;
+    }
+
+    // 分配内存
+    char *content = malloc(file_size + 1);
+    if (!content) {
+        fprintf(stderr, "Memory allocation failed\n");
+        fclose(f);
+        return NULL;
+    }
+
+    // 读取内容
+    size_t bytes_read = fread(content, 1, file_size, f);
+    if (bytes_read != file_size) {
+        perror("fread");
+        free(content);
+        fclose(f);
+        return NULL;
+    }
+
+    content[file_size] = '\0';
+    fclose(f);
+    return content;
+}

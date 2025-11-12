@@ -19,6 +19,25 @@ int main(int argc, char *argv[]) {
     }
 
     if (options.input) {
+        // 读取源文件
+        char* source_code = read_file_to_string(options.input);
+        if (!source_code) {
+            fprintf(stderr, "Failed to read file: %s\n", options.input);
+            return 1;
+        }
+
+        // 规范化代码
+        NormalizeResult norm_result = flyux_normalize(source_code);
+        free(source_code);
+
+        if (norm_result.error_code != 0) {
+            fprintf(stderr, "Normalization error: %s\n", norm_result.error_msg);
+            return 1;
+        }
+
+        // 输出规范化结果
+        printf("%s\n", norm_result.normalized);
+        normalize_result_free(&norm_result);
         
         return 0;
     }
