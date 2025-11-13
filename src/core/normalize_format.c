@@ -5,394 +5,398 @@
 
 /**
  * 格式规范化模块
- * 处理空白、括号嵌套等
+ * - 空白紧凑化
+ * - 基于运算优先级的安全括号化简
+ * - 保护函数定义参数列表括号与调用括号
+ * - 允许在任何位置（包括代码块内）化简分组括号
  */
 
-/**
- * 检查位置是否在字符串内
- */
-static int is_in_string_format(const char* text, int pos) {
-    int in_str = 0;
-    int escape = 0;
-    
-    for (int i = 0; i < pos && text[i] != '\0'; i++) {
-        if (escape) {
-            escape = 0;
-            continue;
-        }
-        
-        if (text[i] == '\\') {
-            escape = 1;
-            continue;
-        }
-        
-        if (text[i] == '"' || text[i] == '\'') {
-            in_str = !in_str;
-        }
-    }
-    
-    return in_str;
+/* ---------------- 基础工具 ---------------- */
+
+static int is_space_c(int c){ return c==' '||c=='\t'||c=='\n'||c=='\r'||c=='\v'||c=='\f'; }
+static int is_ident_char(int c){ return (c=='_'||isalnum((unsigned char)c)||(unsigned char)c>=0x80); }
+
+static int prev_nonspace_idx(const char* s, int i){
+    for(int k=i;k>=0;k--){ if(!is_space_c((unsigned char)s[k])) return k; }
+    return -1;
+}
+static int next_nonspace_idx(const char* s, int i){
+    int n=(int)strlen(s);
+    for(int k=i;k<n;k++){ if(!is_space_c((unsigned char)s[k])) return k; }
+    return n;
 }
 
-/**
- * 规范化空白和操作符周围的空格
- * 删除所有不必要的空白
- */
-static char* normalize_whitespace(const char* stmt) {
+static char* dup_range(const char* s, int l, int r_incl){
+    if (l>r_incl){ char* z=(char*)malloc(1); if(z) z[0]='\0'; return z; }
+    int n=r_incl-l+1; char* out=(char*)malloc(n+1); if(!out) return NULL;
+    memcpy(out, s+l, n); out[n]='\0'; return out;
+}
+
+/* ---------------- 括号/字符串步进 ---------------- */
+
+static int find_matching_paren(const char* s, int i){
+    int n=(int)strlen(s), in_str=0, esc=0, pd=0;
+    for (int k=i; k<n; k++){
+        char c=s[k];
+        if (esc){ esc=0; continue; }
+        if (c=='\\'){ esc=1; continue; }
+        if ((c=='"'||c=='\'') && !in_str){ in_str=1; continue; }
+        if ((c=='"'||c=='\'') &&  in_str){ in_str=0; continue; }
+        if (in_str) continue;
+
+        if (c=='(') pd++;
+        else if (c==')'){ pd--; if (pd==0) return k; }
+    }
+    return -1;
+}
+
+/* '(' 是否为调用括号（紧随标识符/后缀） */
+static int is_call_paren(const char* s, int open_pos){
+    int j=prev_nonspace_idx(s, open_pos-1);
+    if (j<0) return 0;
+    if (is_ident_char((unsigned char)s[j])) return 1;
+    if (s[j]==')'||s[j]==']'||s[j]=='}') return 1;
+    if (s[j]=='.') return 1;
+    if (j>=1 && s[j-1]=='.' && s[j]=='>') return 1; // .>
+    return 0;
+}
+
+/* '(' 是否为函数定义的参数列表：左侧是 '='（或 ':=' 的 '='），右侧紧跟 '{' */
+static int is_function_param_list(const char* s, int open_pos, int close_pos){
+    int prev = prev_nonspace_idx(s, open_pos-1);
+    if (prev < 0 || s[prev] != '=') return 0;
+    int next = next_nonspace_idx(s, close_pos+1);
+    return (s[next] == '{');
+}
+
+/* ---------------- 优先级与操作符 ---------------- */
+/* 数值越大优先级越高，仅用于比较强弱 */
+enum {
+    PREC_COMMA   = 5,
+    PREC_ASSIGN  = 10,  // =, :=
+    PREC_OR      = 30,  // ||
+    PREC_AND     = 40,  // &&
+    PREC_CMP     = 50,  // < > <= >= == !=
+    PREC_BW_OR   = 53,  // |
+    PREC_BW_XOR  = 54,  // ^
+    PREC_BW_AND  = 55,  // &
+    PREC_ADD     = 60,  // + -
+    PREC_MUL     = 70,  // * / %
+    PREC_POW     = 80,  // **
+    PREC_UNARY   = 90,  // ! 一元 + -
+    PREC_POSTFIX = 100  // .  .>  []  ()
+};
+
+typedef struct { int start,end,prec,is_unary,exists; } OpInfo;
+
+static OpInfo read_op_left(const char* s, int pos_before){
+    OpInfo op={-1,-1,0,0,0}; if(pos_before<0) return op;
+    int i=pos_before;
+
+    if (i>=1){
+        if(s[i-1]=='.'&&s[i]=='>'){ op.start=i-1; op.end=i; op.prec=PREC_POSTFIX; op.exists=1; return op; }
+        if(s[i-1]=='&'&&s[i]=='&'){ op.start=i-1; op.end=i; op.prec=PREC_AND; op.exists=1; return op; }
+        if(s[i-1]=='|'&&s[i]=='|'){ op.start=i-1; op.end=i; op.prec=PREC_OR;  op.exists=1; return op; }
+        if(s[i-1]=='='&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i-1]=='!'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i-1]=='<'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i-1]=='>'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i-1]=='*'&&s[i]=='*'){ op.start=i-1; op.end=i; op.prec=PREC_POW; op.exists=1; return op; }
+        if(s[i-1]==':'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_ASSIGN; op.exists=1; return op; }
+    }
+
+    switch (s[i]){
+        case '.': op.start=i; op.end=i; op.prec=PREC_POSTFIX; op.exists=1; return op;
+        case '+': case '-': {
+            int j=prev_nonspace_idx(s, i-1);
+            int prev_is_operand = (j>=0&&(is_ident_char((unsigned char)s[j])||s[j]==')'||s[j]==']'||s[j]=='}'));
+            if (prev_is_operand){ op.start=i; op.end=i; op.prec=PREC_ADD; op.exists=1; return op; }
+            else { op.start=i; op.end=i; op.prec=PREC_UNARY; op.is_unary=1; op.exists=1; return op; }
+        }
+        case '*': case '/': case '%': op.start=i; op.end=i; op.prec=PREC_MUL; op.exists=1; return op;
+        case '<': case '>': op.start=i; op.end=i; op.prec=PREC_CMP; op.exists=1; return op;
+        case '=':           op.start=i; op.end=i; op.prec=PREC_ASSIGN; op.exists=1; return op;
+        case '!':           op.start=i; op.end=i; op.prec=PREC_UNARY; op.is_unary=1; op.exists=1; return op;
+        case '&':           op.start=i; op.end=i; op.prec=PREC_BW_AND; op.exists=1; return op;
+        case '^':           op.start=i; op.end=i; op.prec=PREC_BW_XOR; op.exists=1; return op;
+        case '|':           op.start=i; op.end=i; op.prec=PREC_BW_OR;  op.exists=1; return op;
+        default: break;
+    }
+    return op;
+}
+
+static OpInfo read_op_right(const char* s, int pos_after){
+    OpInfo op={-1,-1,0,0,0}; int n=(int)strlen(s); if(pos_after>=n) return op;
+    int i=pos_after;
+
+    if (i+1<n){
+        if(s[i]=='.'&&s[i+1]=='>'){ op.start=i; op.end=i+1; op.prec=PREC_POSTFIX; op.exists=1; return op; }
+        if(s[i]=='&'&&s[i+1]=='&'){ op.start=i; op.end=i+1; op.prec=PREC_AND; op.exists=1; return op; }
+        if(s[i]=='|'&&s[i+1]=='|'){ op.start=i; op.end=i+1; op.prec=PREC_OR;  op.exists=1; return op; }
+        if(s[i]=='='&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i]=='!'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i]=='<'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i]=='>'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i]=='*'&&s[i+1]=='*'){ op.start=i; op.end=i+1; op.prec=PREC_POW; op.exists=1; return op; }
+        if(s[i]==':'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_ASSIGN; op.exists=1; return op; }
+    }
+
+    switch (s[i]){
+        case '.': op.start=i; op.end=i; op.prec=PREC_POSTFIX; op.exists=1; return op;
+        case ',': op.start=i; op.end=i; op.prec=PREC_COMMA;  op.exists=1; return op;
+        case '+': case '-': op.start=i; op.end=i; op.prec=PREC_ADD; op.exists=1; return op;
+        case '*': case '/': case '%': op.start=i; op.end=i; op.prec=PREC_MUL; op.exists=1; return op;
+        case '<': case '>': op.start=i; op.end=i; op.prec=PREC_CMP; op.exists=1; return op;
+        case '=':           op.start=i; op.end=i; op.prec=PREC_ASSIGN; op.exists=1; return op;
+        case '&':           op.start=i; op.end=i; op.prec=PREC_BW_AND; op.exists=1; return op;
+        case '^':           op.start=i; op.end=i; op.prec=PREC_BW_XOR; op.exists=1; return op;
+        case '|':           op.start=i; op.end=i; op.prec=PREC_BW_OR;  op.exists=1; return op;
+        default: break;
+    }
+    return op;
+}
+
+/* 计算字符串 s 的“顶层（二元）运算符”的最低优先级 */
+static int min_top_level_binary_prec(const char* s){
+    int n=(int)strlen(s), in_str=0, esc=0;
+    int pd=0, bd=0, cd=0;
+    int last_operand=0, minp=1000000;
+
+    for(int i=0;i<n;i++){
+        char c=s[i];
+
+        if(esc){esc=0;continue;}
+        if(c=='\\'){esc=1;continue;}
+
+        if((c=='"'||c=='\'')&&!in_str){in_str=1;continue;}
+        if((c=='"'||c=='\'')&& in_str){in_str=0;continue;}
+        if(in_str) continue;
+
+        if(c=='('){ pd++; last_operand=0; continue; }
+        if(c==')'){ pd--; last_operand=1; continue; }
+        if(c=='['){ bd++; last_operand=0; continue; }
+        if(c==']'){ bd--; last_operand=1; continue; }
+        if(c=='{'){ cd++; last_operand=0; continue; }
+        if(c=='}'){ cd--; last_operand=1; continue; }
+
+        if (pd||bd||cd) continue;
+
+        if (is_ident_char((unsigned char)c)){ last_operand=1; continue; }
+
+        int p=-1;
+        if(i+1<n){
+            if(s[i]=='.'&&s[i+1]=='>') p=PREC_POSTFIX;
+            else if(s[i]=='&'&&s[i+1]=='&') p=PREC_AND;
+            else if(s[i]=='|'&&s[i+1]=='|') p=PREC_OR;
+            else if(s[i]=='='&&s[i+1]=='=') p=PREC_CMP;
+            else if(s[i]=='!'&&s[i+1]=='=') p=PREC_CMP;
+            else if(s[i]=='<'&&s[i+1]=='=') p=PREC_CMP;
+            else if(s[i]=='>'&&s[i+1]=='=') p=PREC_CMP;
+            else if(s[i]=='*'&&s[i+1]=='*') p=PREC_POW;
+            else if(s[i]==':'&&s[i+1]=='=') p=PREC_ASSIGN;
+            if (p>=0){ if(p!=PREC_UNARY){ if(p<minp) minp=p; } i++; last_operand=0; continue; }
+        }
+
+        switch (c){
+            case '+': case '-': p = last_operand ? PREC_ADD : PREC_UNARY; break;
+            case '*': case '/': case '%': p=PREC_MUL; break;
+            case '<': case '>': p=PREC_CMP; break;
+            case '=':           p=PREC_ASSIGN; break;
+            case '&':           p=PREC_BW_AND; break;
+            case '^':           p=PREC_BW_XOR; break;
+            case '|':           p=PREC_BW_OR;  break;
+            case '!':           p=PREC_UNARY;  break;
+            case '.':           p=PREC_POSTFIX;break;
+            case ',':           p=PREC_COMMA;  break;
+            default:            p=-1;          break;
+        }
+        if (p>=0){ if(p!=PREC_UNARY){ if(p<minp) minp=p; } last_operand=0; } else { last_operand=0; }
+    }
+    return (minp==1000000) ? -1 : minp;
+}
+
+static int fully_enclosed_by_paren(const char* s){
+    int n=(int)strlen(s);
+    if (n<2||s[0]!='('||s[n-1]!=')') return 0;
+    int in_str=0,esc=0,pd=0,bd=0,cd=0;
+    for (int i=0;i<n;i++){
+        char c=s[i];
+        if(esc){esc=0;continue;}
+        if(c=='\\'){esc=1;continue;}
+        if((c=='"'||c=='\'')&&!in_str){in_str=1;continue;}
+        if((c=='"'||c=='\'')&& in_str){in_str=0;continue;}
+        if(in_str) continue;
+
+        if(c=='('){ pd++; }
+        else if(c==')'){ pd--; if (pd==0 && i!=n-1) return 0; }
+        else if(c=='['){ bd++; }
+        else if(c==']'){ bd--; }
+        else if(c=='{'){ cd++; }
+        else if(c=='}'){ cd--; }
+    }
+    return (pd==0);
+}
+
+static int is_primary_expr(const char* s){
+    int n=(int)strlen(s), l=0, r=n-1;
+    while(l<=r && is_space_c((unsigned char)s[l])) l++;
+    while(r>=l && is_space_c((unsigned char)s[r])) r--;
+    if(l>r) return 0;
+
+    if ((s[l]=='"'&&s[r]=='"') || (s[l]=='\''&&s[r]=='\'')) return 1;
+    if ((s[l]=='['&&s[r]==']') || (s[l]=='{'&&s[r]=='}')) return 1;
+
+    for (int i=l;i<=r;i++){ if (!is_ident_char((unsigned char)s[i])) return 0; }
+    return 1;
+}
+
+/* ---------------- 空白紧凑化 ---------------- */
+
+static char* normalize_whitespace(const char* stmt){
     if (!stmt) return NULL;
-    
-    size_t len = strlen(stmt);
-    char* result = malloc(len + 1);
-    if (!result) return NULL;
-    
-    int out_idx = 0;
-    
-    for (int i = 0; i < len; i++) {
-        char ch = stmt[i];
-        
-        // 如果是空白字符
-        if (isspace(ch)) {
-            // 跳过连续空白
-            while (i + 1 < len && isspace(stmt[i + 1])) {
-                i++;
+    size_t len=strlen(stmt);
+    char* result=(char*)malloc(len+1); if(!result) return NULL;
+    int out=0;
+    for (size_t i=0;i<len;i++){
+        unsigned char ch=(unsigned char)stmt[i];
+        if (is_space_c(ch)) continue;  // 全删，目标风格
+        result[out++]=(char)ch;
+    }
+    result[out]='\0';
+    return result;
+}
+
+/* ---------------- 括号化简核心 ---------------- */
+
+static char* simplify_parens(const char* expr){
+    if (!expr) return NULL;
+
+    int n=(int)strlen(expr);
+    char* out=(char*)malloc(n*2+32); if(!out) return NULL;
+
+    int out_idx=0;
+    int in_str=0,esc=0;
+    int bd=0, cd=0; // 追踪 [] 与 {}，但不用于禁止块内化简
+
+    for (int i=0;i<n;i++){
+        char c=expr[i];
+
+        if(esc){ out[out_idx++]=c; esc=0; continue; }
+        if(c=='\\'){ out[out_idx++]=c; esc=1; continue; }
+
+        if(c=='"'||c=='\''){ in_str=!in_str; out[out_idx++]=c; continue; }
+        if(in_str){ out[out_idx++]=c; continue; }
+
+        if(c=='['){ bd++; out[out_idx++]=c; continue; }
+        if(c==']'){ bd--; out[out_idx++]=c; continue; }
+        if(c=='{'){ cd++; out[out_idx++]=c; continue; }
+        if(c=='}'){ cd--; out[out_idx++]=c; continue; }
+
+        if (c=='('){
+            int close = find_matching_paren(expr, i);
+            if (close<0){ out[out_idx++]=c; continue; }
+
+            char* inner_raw = dup_range(expr, i+1, close-1);
+            if(!inner_raw){ out[out_idx++]=c; continue; }
+            char* inner = simplify_parens(inner_raw);  // 递归先简化内部
+            free(inner_raw);
+            if(!inner){ out[out_idx++]=c; continue; }
+
+            // 把内层连环外壳剥到“至多一层”
+            while (fully_enclosed_by_paren(inner)){
+                int L=(int)strlen(inner);
+                char* tmp=dup_range(inner, 1, L-2);
+                free(inner); inner=tmp;
+                if(!inner) break;
             }
-            // 不在开头、结尾且不在多个空白之后才保留一个空白
-            if (out_idx > 0 && i + 1 < len && !isspace(stmt[i + 1])) {
-                // 检查是否需要空白
-                char prev = result[out_idx - 1];
-                char next = stmt[i + 1];
-                
-                // 某些情况下需要保留空白，但我们要尽量删除
-                // 除非是标识符之间需要分隔
-                int prev_is_id_char = isalnum(prev) || prev == '_' || prev == ')' || prev == ']' || prev == '}';
-                int next_is_id_char = isalnum(next) || next == '_' || next == '(';
-                
-                if (prev_is_id_char && next_is_id_char) {
-                    // 需要空白来分隔标识符，但我们尽量避免
-                    // 除了特定关键字情况
-                    // 这里简化处理：删除所有空白
+            if(!inner){ out[out_idx++]='('; out[out_idx++]=')'; i=close; continue; }
+
+            int prev_i = prev_nonspace_idx(expr, i-1);
+            int next_i = next_nonspace_idx(expr, close+1);
+
+            int keep_whole = 0;
+
+            // 1) 函数定义参数列表：保留括号（包括空参数）
+            if (is_function_param_list(expr, i, close)) {
+                keep_whole = 1;
+            }
+            // 2) 调用括号：保留
+            else if (is_call_paren(expr, i)) {
+                keep_whole = 1;
+            }
+            // 3) 右侧紧跟 '||'：为可读性保留一层（但仍会把 inner 的外壳剥到单层）
+            else {
+                if (next_i < n && expr[next_i]=='|'){
+                    OpInfo Rpeek = read_op_right(expr, next_i);
+                    if (Rpeek.exists && Rpeek.prec==PREC_OR){
+                        keep_whole = 1;
+                    }
                 }
             }
+
+            int remove_last_layer = 0;
+            if (!keep_whole){
+                // primary 允许彻底去——满足 z:=(((x))) -> z:=x
+                if (is_primary_expr(inner)){
+                    remove_last_layer = 1;
+                }else{
+                    int Pin = min_top_level_binary_prec(inner);
+                    if (Pin < 0){
+                        // 无二元运算符，强绑定，也可去
+                        remove_last_layer = 1;
+                    }else{
+                        OpInfo L = read_op_left(expr, prev_i);
+                        OpInfo R = read_op_right(expr, next_i);
+                        int left_ok  = (!L.exists) || (L.prec < Pin);
+                        int right_ok = (!R.exists) || (R.prec < Pin);
+                        if (left_ok && right_ok) remove_last_layer = 1;
+                    }
+                }
+            }
+
+            if (remove_last_layer){
+                int L=(int)strlen(inner);
+                memcpy(out+out_idx, inner, (size_t)L);
+                out_idx += L;
+            }else{
+                out[out_idx++]='(';
+                int L=(int)strlen(inner);
+                memcpy(out+out_idx, inner, (size_t)L);
+                out_idx += L;
+                out[out_idx++]=')';
+            }
+
+            free(inner);
+            i = close;
             continue;
         }
-        
-        result[out_idx++] = ch;
+
+        out[out_idx++]=c;
     }
-    
-    result[out_idx] = '\0';
-    return result;
+
+    out[out_idx]='\0';
+    return out;
 }
 
-/**
- * 移除多余的括号嵌套
- * 例如: (((x))) -> (x)
- */
-static char* remove_redundant_parens(const char* expr) {
-    if (!expr || strlen(expr) == 0) return NULL;
-    
-    size_t len = strlen(expr);
-    char* result = malloc(len + 1);
-    if (!result) return NULL;
-    
-    // 重复删除多余括号，直到没有变化
-    int changed = 1;
-    char* current = malloc(len + 1);
-    strcpy(current, expr);
-    
-    while (changed) {
-        changed = 0;
-        strcpy(result, current);
-        
-        int out_idx = 0;
-        int i = 0;
-        
-        while (i < strlen(current)) {
-            // 如果是括号，检查是否可以简化
-            if (current[i] == '(' && !is_in_string_format(current, i)) {
-                // 找到匹配的 )
-                int paren = 1;
-                int j = i + 1;
-                
-                while (j < strlen(current) && paren > 0) {
-                    if (current[j] == '(' && !is_in_string_format(current, j)) {
-                        paren++;
-                    } else if (current[j] == ')' && !is_in_string_format(current, j)) {
-                        paren--;
-                    }
-                    j++;
-                }
-                
-                if (paren == 0) {
-                    j--;  // 指向 )
-                    
-                    // 检查内部是否整个都被包围了
-                    int inner_start = i + 1;
-                    int inner_end = j - 1;
-                    
-                    // 检查内部括号配对
-                    int inner_paren = 0;
-                    int can_remove = 1;
-                    
-                    for (int k = inner_start; k <= inner_end; k++) {
-                        if (current[k] == '(' && !is_in_string_format(current, k)) {
-                            inner_paren++;
-                        } else if (current[k] == ')' && !is_in_string_format(current, k)) {
-                            inner_paren--;
-                            if (inner_paren < 0) {
-                                can_remove = 0;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // 如果内部完全被单层括号包围且不是函数调用
-                    if (can_remove && inner_paren == 0) {
-                        // 检查是否是 (single_expr)
-                        // 这种情况下可以移除外层括号
-                        
-                        // 但是我们需要保留函数参数列表的括号
-                        // 简化：保留所有括号，只删除完全冗余的
-                    }
-                }
-                
-                result[out_idx++] = current[i];
-                i++;
-            } else {
-                result[out_idx++] = current[i];
-                i++;
-            }
-        }
-        
-        result[out_idx] = '\0';
-        
-        if (strlen(result) < strlen(current)) {
-            changed = 1;
-            strcpy(current, result);
-        }
-    }
-    
-    free(current);
-    return result;
-}
+/* ---------------- 公开入口：规范化单个语句 ---------------- */
 
-/**
- * 简化括号：(((expr))) -> (expr)
- * 处理任何被多层括号包围的表达式
- */
-static char* simplify_parens(const char* expr) {
-    if (!expr || strlen(expr) == 0) return NULL;
-    
-    size_t len = strlen(expr);
-    char* result = malloc(len + 1);
-    if (!result) return NULL;
-    strcpy(result, expr);
-    
-    // 循环扫描，每次寻找多余的外层括号并简化
-    int changed = 1;
-    while (changed) {
-        changed = 0;
-        len = strlen(result);
-        char* output = malloc(len + 1);
-        if (!output) break;
-        
-        int out_idx = 0;
-        int i = 0;
-        
-        while (i < len) {
-            // 寻找括号对
-            if (result[i] == '(' && !is_in_string_format(result, i)) {
-                int open_pos = i;
-                
-                // 找到匹配的 )
-                int paren_count = 1;
-                int j = i + 1;
-                int close_pos = -1;
-                
-                while (j < len && paren_count > 0) {
-                    if (result[j] == '(' && !is_in_string_format(result, j)) {
-                        paren_count++;
-                    } else if (result[j] == ')' && !is_in_string_format(result, j)) {
-                        paren_count--;
-                        if (paren_count == 0) {
-                            close_pos = j;
-                        }
-                    }
-                    j++;
-                }
-                
-                if (close_pos > 0) {
-                    // 检查内部是否有顶级逗号
-                    int has_toplevel_comma = 0;
-                    int check_paren = 0;
-                    
-                    for (int x = open_pos + 1; x < close_pos; x++) {
-                        if (result[x] == '(' && !is_in_string_format(result, x)) {
-                            check_paren++;
-                        } else if (result[x] == ')' && !is_in_string_format(result, x)) {
-                            check_paren--;
-                        } else if (result[x] == ',' && check_paren == 0 && !is_in_string_format(result, x)) {
-                            has_toplevel_comma = 1;
-                            break;
-                        }
-                    }
-                    
-                    int can_remove = 0;
-                    
-                    if (!has_toplevel_comma) {
-                        int is_necessary = 0;
-                        
-                        if (open_pos > 0) {
-                            int check_before = open_pos - 1;
-                            while (check_before >= 0 && result[check_before] == ' ') {
-                                check_before--;
-                            }
-                            
-                            if (check_before >= 0) {
-                                char c = result[check_before];
-                                
-                                // 类型标注：: (type) =
-                                if (c == ':') {
-                                    is_necessary = 1;
-                                }
-                                // 函数定义：:= (
-                                else {
-                                    int check_after = close_pos + 1;
-                                    while (check_after < len && result[check_after] == ' ') {
-                                        check_after++;
-                                    }
-                                    if (c == '=' && check_after < len && result[check_after] == '{') {
-                                        is_necessary = 1;
-                                    }
-                                    // 函数/方法调用：标识符、、]、>、) 后
-                                    else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
-                                             (c >= '0' && c <= '9') || c == '_' || c == '>' || 
-                                             c == ']' || c == ')' || (unsigned char)c >= 0x80) {
-                                        is_necessary = 1;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // 如果括号前面不是必要的字符，检查内容是否完全被包围
-                        if (!is_necessary) {
-                            // 跳过内部空白找到第一个非空字符和最后一个非空字符
-                            int inner_start = open_pos + 1;
-                            while (inner_start < close_pos && result[inner_start] == ' ') {
-                                inner_start++;
-                            }
-                            int inner_end = close_pos - 1;
-                            while (inner_end > inner_start && result[inner_end] == ' ') {
-                                inner_end--;
-                            }
-                            
-                            // 如果内部以 ( 开头，以 ) 结尾
-                            if (inner_start <= inner_end && result[inner_start] == '(' && result[inner_end] == ')') {
-                                // 检查这对 () 是否完全包围了内容
-                                int paren_count = 0;
-                                int is_enclosed = 1;
-                                
-                                for (int x = inner_start; x <= inner_end; x++) {
-                                    if (result[x] == '(' && !is_in_string_format(result, x)) {
-                                        paren_count++;
-                                    } else if (result[x] == ')' && !is_in_string_format(result, x)) {
-                                        paren_count--;
-                                    }
-                                    
-                                    // 如果在任何位置括号深度为 0（除了最后），说明有内容不在包围内
-                                    if (paren_count == 0 && x < inner_end) {
-                                        is_enclosed = 0;
-                                        break;
-                                    }
-                                }
-                                
-                                // 最后的 ) 应该让深度变为 0
-                                if (is_enclosed && paren_count == 0) {
-                                    can_remove = 1;
-                                }
-                            }
-                        }
-                    }
-                    
-                    if (can_remove) {
-                        for (int x = open_pos + 1; x < close_pos; x++) {
-                            output[out_idx++] = result[x];
-                        }
-                        i = close_pos + 1;
-                        changed = 1;
-                        continue;
-                    }
-                    
-                    // 没有删除，但继续处理内部的括号
-                    // 先输出左括号，然后从内部开始扫描
-                    output[out_idx++] = result[open_pos];
-                    i = open_pos + 1;
-                } else {
-                    // 括号不匹配，直接复制
-                    output[out_idx++] = result[i];
-                    i++;
-                }
-            } else {
-                output[out_idx++] = result[i];
-                i++;
-            }
-        }
-        
-        output[out_idx] = '\0';
-        
-        if (strcmp(output, result) == 0) {
-            free(output);
-            break;  // 没有变化
-        }
-        
-        free(result);
-        result = output;
-    }
-    
-    return result;
-}
-
-/**
- * 规范化单个语句内容
- */
-char* normalize_statement_content(const char* stmt) {
+char* normalize_statement_content(const char* stmt){
     if (!stmt) return NULL;
-    
-    // 第一步：规范化空白
-    char* temp = normalize_whitespace(stmt);
-    if (!temp) return NULL;
-    
-    // 第二步：简化多余括号（迭代多次确保彻底）
-    char* result = temp;
-    char* prev = NULL;
-    
-    for (int iter = 0; iter < 10; iter++) {  // 最多迭代10次
-        char* next = simplify_parens(result);
-        if (next == NULL) {
-            break;
-        }
-        
-        if (strcmp(next, result) == 0) {
-            // 没有变化，停止迭代
-            if (prev) free(prev);
-            free(next);
-            break;
-        }
-        
-        // 保存前一个结果以便释放
-        if (result != temp) {
-            if (prev) free(prev);
-            prev = result;
-        }
-        result = next;
+
+    // 1) 空白紧凑化
+    char* compact = normalize_whitespace(stmt);
+    if (!compact) return NULL;
+
+    // 2) 多轮括号化简直到稳定
+    char* cur = compact;
+    for (int iter=0; iter<16; iter++){
+        char* nxt = simplify_parens(cur);
+        if (!nxt) break;
+        if (strcmp(nxt, cur) == 0){ free(nxt); break; }
+        if (cur != compact) free(cur);
+        cur = nxt;
     }
-    
-    // 清理临时指针
-    if (prev && prev != temp) {
-        free(prev);
-    }
-    if (result != temp && temp) {
-        free(temp);
-    }
-    
-    return result;
+
+    if (cur != compact) free(compact);
+    return cur;
 }

@@ -59,128 +59,155 @@ static int is_closing_function_body(const char* text, int closing_brace_idx) {
 }
 
 /**
- * 规范化块内部的换行符为分号
- * 用于处理main函数内部没有显式分号的语句
+ * 规范化块内部的换行符为分号（重构版）
+ * 目标：
+ *  1) 在代码块(如 if/else/L>/函数体)闭合时，若块内最后一条语句未以 ';' 结束，则在 '}' 之前补 ';'
+ *  2) 保持原有：在块内（不在 () / []）的换行，若后续非 '}'，则将换行替换为 ';'
+ *  3) 严格区分“代码块 { ... }”与“对象字面量 { ... }”，对象字面量结尾不自动补 ';'
  */
 static char* normalize_internal_newlines(const char* stmt) {
     if (!stmt) return NULL;
-    
+
     size_t len = strlen(stmt);
-    char* result = malloc(len * 2 + 1);  // 为可能的分号预留空间
+    // 结果缓冲：保守放大一倍空间
+    char* result = (char*)malloc(len * 2 + 4);
     if (!result) return NULL;
-    
+
+    // brace 类型栈：1 表示代码块，0 表示对象字面量
+    unsigned char* brace_is_block = (unsigned char*)calloc(len + 2, 1);
+    if (!brace_is_block) {
+        free(result);
+        return NULL;
+    }
+
     int out_idx = 0;
     int in_str = 0;
     int escape = 0;
     int brace_depth = 0;
     int paren_depth = 0;
     int bracket_depth = 0;
-    
-    for (int i = 0; i < len; i++) {
+
+    for (int i = 0; i < (int)len; i++) {
         char ch = stmt[i];
-        
-        // 处理转义
+
+        /* 转义处理 */
         if (escape) {
             result[out_idx++] = ch;
             escape = 0;
             continue;
         }
-        
         if (ch == '\\') {
             result[out_idx++] = ch;
             escape = 1;
             continue;
         }
-        
-        // 处理字符串
+
+        /* 字符串处理（与原实现一致：简单切换，不区分单双引号配对） */
         if (ch == '"' || ch == '\'') {
             in_str = !in_str;
             result[out_idx++] = ch;
             continue;
         }
-        
         if (in_str) {
             result[out_idx++] = ch;
             continue;
         }
-        
-        // 处理左大括号
+
+        /* 左大括号：判定这是代码块还是对象字面量，并入栈 */
         if (ch == '{') {
+            // 回看输出缓冲中最后一个非空白字符
+            int last = out_idx - 1;
+            while (last >= 0 && (result[last] == ' ' || result[last] == '\t' || result[last] == '\n')) {
+                last--;
+            }
+            unsigned char is_block = 0;
+            if (last >= 0) {
+                char prev = result[last];
+                // 经验规则：出现在 ) / } / ] 之后的 { 是代码块；其他多为对象字面量场景（:=, =, (, [, , 等）
+                if (prev == ')' || prev == '}' || prev == ']') {
+                    is_block = 1;
+                } else {
+                    is_block = 0;
+                }
+            } else {
+                // 行首独立的 { ，保守视为对象字面量（几乎不会出现独立代码块从 { 开始的情况）
+                is_block = 0;
+            }
+
+            // 入栈（下一个深度）
+            brace_is_block[brace_depth + 1] = is_block;
             brace_depth++;
             result[out_idx++] = ch;
             continue;
         }
-        
-        // 处理右大括号
+
+        /* 右大括号：若当前层是代码块，必要时在 '}' 前补 ';' */
         if (ch == '}') {
-            // 如果这是函数体的最后一个 }（brace_depth == 1），检查是否需要分号
-            // 但首先要确认这个语句确实是函数体
-            if (brace_depth == 1 && is_closing_function_body(result, out_idx)) {
-                int last = out_idx - 1;
-                while (last >= 0 && (result[last] == ' ' || result[last] == '\t' || result[last] == '\n')) {
-                    last--;
-                }
-                // 在函数体末尾，任何非分号、非开括号的内容后面都需要分号
-                if (last >= 0 && result[last] != ';' && result[last] != '{') {
-                    // 需要添加分号
-                    for (int j = out_idx; j > last + 1; j--) {
-                        result[j] = result[j - 1];
+            if (brace_depth > 0) {
+                unsigned char is_block = brace_is_block[brace_depth];
+                if (is_block) {
+                    // 找到 '}' 之前最后一个非空白字符
+                    int last = out_idx - 1;
+                    while (last >= 0 && (result[last] == ' ' || result[last] == '\t' || result[last] == '\n')) {
+                        last--;
                     }
-                    result[last + 1] = ';';
-                    out_idx++;
+                    // 若块非空，且最后不是 ';' 且也不是 '{'（排除空块 {}），则在最后实字符之后插入 ';'
+                    if (last >= 0 && result[last] != ';' && result[last] != '{') {
+                        // 将 [last+1, out_idx) 右移一位，准备插入 ';'
+                        for (int j = out_idx; j > last + 1; j--) {
+                            result[j] = result[j - 1];
+                        }
+                        result[last + 1] = ';';
+                        out_idx++;
+                    }
                 }
+                // 退出当前层
+                brace_depth--;
             }
-            
-            if (brace_depth > 0) brace_depth--;
             result[out_idx++] = ch;
             continue;
         }
-        
-        // 跟踪圆括号
+
+        /* 圆/方括号深度追踪（用于判定换行→分号） */
         if (ch == '(') {
             paren_depth++;
         } else if (ch == ')') {
             paren_depth--;
-        }
-        
-        // 跟踪方括号
-        if (ch == '[') {
+        } else if (ch == '[') {
             bracket_depth++;
         } else if (ch == ']') {
             bracket_depth--;
         }
-        
-        // 在函数块内，把换行符替换为分号
+
+        /* 块内换行 → 分号（仅在不处于 () / [] 中；且换行后第一个非空不是 '}'） */
         if (ch == '\n' && brace_depth > 0 && paren_depth == 0 && bracket_depth == 0) {
-            // 检查后续是否是闭括号
             int j = i + 1;
-            while (j < len && (stmt[j] == ' ' || stmt[j] == '\t' || stmt[j] == '\n')) {
+            while (j < (int)len && (stmt[j] == ' ' || stmt[j] == '\t' || stmt[j] == '\n')) {
                 j++;
             }
-            
-            if (j < len && stmt[j] != '}') {
-                // 不是块的结尾，检查是否需要添加分号
-                if (out_idx > 0) {
-                    int last = out_idx - 1;
-                    // 去除末尾空白
-                    while (last >= 0 && (result[last] == ' ' || result[last] == '\t')) {
-                        last--;
-                    }
-                    if (last >= 0 && result[last] != ';' && result[last] != '{' && result[last] != '(') {
-                        result[out_idx++] = ';';
-                    }
+            if (j < (int)len && stmt[j] != '}') {
+                // 检查当前输出末尾是否已经有 ';' / '{' / '('
+                int last = out_idx - 1;
+                while (last >= 0 && (result[last] == ' ' || result[last] == '\t')) {
+                    last--;
                 }
-                continue;  // 跳过换行符
+                if (last >= 0 && result[last] != ';' && result[last] != '{' && result[last] != '(') {
+                    result[out_idx++] = ';';
+                }
+                // 跳过该换行
+                continue;
             } else {
-                // 块的结尾，跳过换行符
+                // 块的结尾（后续是 '}'），跳过该换行，交由 '}' 分支统一补 ';'
                 continue;
             }
         }
-        
+
+        // 其他字符，原样写入
         result[out_idx++] = ch;
     }
-    
+
     result[out_idx] = '\0';
+    free(brace_is_block);
     return result;
 }
 
