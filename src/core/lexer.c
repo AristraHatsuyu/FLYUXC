@@ -113,6 +113,7 @@ static const char* token_kind_name(TokenKind kind) {
         case TK_PLUS:           return "PLUS";
         case TK_MINUS:          return "MINUS";
         case TK_STAR:           return "STAR";
+        case TK_POWER:          return "POWER";
         case TK_SLASH:          return "SLASH";
         case TK_PERCENT:        return "PERCENT";
 
@@ -125,6 +126,10 @@ static const char* token_kind_name(TokenKind kind) {
         case TK_BANG_EQ:        return "BANG_EQ";
         case TK_AND_AND:        return "AND_AND";
         case TK_OR_OR:          return "OR_OR";
+
+        case TK_BIT_AND:        return "BIT_AND";
+        case TK_BIT_OR:         return "BIT_OR";
+        case TK_BIT_XOR:        return "BIT_XOR";
 
         case TK_KW_IF:          return "KW_IF";
         case TK_KW_LOOP:        return "KW_LOOP";
@@ -379,15 +384,47 @@ LexerResult lexer_tokenize(const char* source,
             continue;
         }
 
-        /* 数字常量（目前只支持整数） */
+        /* 数字常量（支持整数和浮点数） */
         if (isdigit((unsigned char)c)) {
             size_t start = i;
             i++;
             col++;
+            /* 整数部分 */
             while (i < len && isdigit((unsigned char)source[i])) {
                 i++;
                 col++;
             }
+            
+            /* 小数点和小数部分 */
+            if (i < len && source[i] == '.' && i + 1 < len && isdigit((unsigned char)source[i + 1])) {
+                i++; col++; /* 跳过 '.' */
+                while (i < len && isdigit((unsigned char)source[i])) {
+                    i++;
+                    col++;
+                }
+            }
+            
+            /* 科学计数法 (e/E) */
+            if (i < len && (source[i] == 'e' || source[i] == 'E')) {
+                i++; col++;
+                /* 可选的正负号 */
+                if (i < len && (source[i] == '+' || source[i] == '-')) {
+                    i++; col++;
+                }
+                /* 指数部分必须有数字 */
+                if (i < len && isdigit((unsigned char)source[i])) {
+                    while (i < len && isdigit((unsigned char)source[i])) {
+                        i++;
+                        col++;
+                    }
+                } else {
+                    /* 无效的科学计数法格式 */
+                    result.error_code = 1;
+                    result.error_msg = str_dup_n("Invalid number format: expected digit after exponent", strlen("Invalid number format: expected digit after exponent"));
+                    goto fail;
+                }
+            }
+            
             size_t num_len = i - start;
             if (!emit_token(&tokens, &result.count, &cap,
                             TK_NUM, source + start, num_len, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
@@ -509,10 +546,15 @@ LexerResult lexer_tokenize(const char* source,
                 i += 2;
                 col += 2;
             } else {
-                /* 单独 & 暂时当成错误或保留 */
-                result.error_code = 1;
-                result.error_msg = make_unexpected_char_msg(c);
-                goto fail;
+                /* 单独的 & ：位与 */
+                if (!emit_token(&tokens, &result.count, &cap,
+                                TK_BIT_AND, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+                i++;
+                col++;
             }
             continue;
         }
@@ -529,9 +571,15 @@ LexerResult lexer_tokenize(const char* source,
                 i += 2;
                 col += 2;
             } else {
-                result.error_code = 1;
-                result.error_msg = make_unexpected_char_msg(c);
-                goto fail;
+                /* 单独的 | ：位或 */
+                if (!emit_token(&tokens, &result.count, &cap,
+                                TK_BIT_OR, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+                i++;
+                col++;
             }
             continue;
         }
@@ -653,13 +701,24 @@ LexerResult lexer_tokenize(const char* source,
                 i++; col++;
                 continue;
             case '*':
-                if (!emit_token(&tokens, &result.count, &cap,
-                                TK_STAR, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    goto fail;
+                /* * / ** */
+                if (i + 1 < len && source[i + 1] == '*') {
+                    if (!emit_token(&tokens, &result.count, &cap,
+                                    TK_POWER, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                        result.error_code = -1;
+                        result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                        goto fail;
+                    }
+                    i += 2; col += 2;
+                } else {
+                    if (!emit_token(&tokens, &result.count, &cap,
+                                    TK_STAR, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                        result.error_code = -1;
+                        result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                        goto fail;
+                    }
+                    i++; col++;
                 }
-                i++; col++;
                 continue;
             case '/':
                 if (!emit_token(&tokens, &result.count, &cap,
@@ -673,6 +732,16 @@ LexerResult lexer_tokenize(const char* source,
             case '%':
                 if (!emit_token(&tokens, &result.count, &cap,
                                 TK_PERCENT, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+                i++; col++;
+                continue;
+            case '^':
+                /* 位异或 */
+                if (!emit_token(&tokens, &result.count, &cap,
+                                TK_BIT_XOR, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;

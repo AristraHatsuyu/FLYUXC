@@ -38,6 +38,7 @@ typedef enum TokenKind {
     TK_PLUS,    /* + */
     TK_MINUS,   /* - */
     TK_STAR,    /* * */
+    TK_POWER,   /* ** */
     TK_SLASH,   /* / */
     TK_PERCENT, /* % */
 
@@ -51,6 +52,11 @@ typedef enum TokenKind {
     TK_BANG_EQ,   /* != */
     TK_AND_AND,   /* && */
     TK_OR_OR,     /* || */
+
+    /* 位运算符 */
+    TK_BIT_AND,   /* & */
+    TK_BIT_OR,    /* | */
+    TK_BIT_XOR,   /* ^ */
 
     /* 关键字 */
     TK_KW_IF,      /* if */

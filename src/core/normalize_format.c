@@ -71,20 +71,23 @@ static int is_function_param_list(const char* s, int open_pos, int close_pos){
 
 /* ---------------- 优先级与操作符 ---------------- */
 /* 数值越大优先级越高，仅用于比较强弱 */
+/* C标准: ** > * / % > + - > < <= > >= > == != > & > ^ > | > && > || */
+/* 注意: 虽然C标准表中数字越大优先级越低，但在此enum中数值越大优先级越高 */
 enum {
     PREC_COMMA   = 5,
     PREC_ASSIGN  = 10,  // =, :=
-    PREC_OR      = 30,  // ||
-    PREC_AND     = 40,  // &&
-    PREC_CMP     = 50,  // < > <= >= == !=
-    PREC_BW_OR   = 53,  // |
-    PREC_BW_XOR  = 54,  // ^
-    PREC_BW_AND  = 55,  // &
+    PREC_OR      = 20,  // ||      (最低)
+    PREC_AND     = 30,  // &&
+    PREC_BW_OR   = 40,  // |       (高于 &&)
+    PREC_BW_XOR  = 42,  // ^       (高于 |)
+    PREC_BW_AND  = 44,  // &       (高于 ^)
+    PREC_EQ      = 48,  // == !=   (高于 &)
+    PREC_CMP     = 50,  // < > <= >=
     PREC_ADD     = 60,  // + -
     PREC_MUL     = 70,  // * / %
     PREC_POW     = 80,  // **
     PREC_UNARY   = 90,  // ! 一元 + -
-    PREC_POSTFIX = 100  // .  .>  []  ()
+    PREC_POSTFIX = 100  // .  .>  []  ()  (最高)
 };
 
 typedef struct { int start,end,prec,is_unary,exists; } OpInfo;
@@ -97,8 +100,8 @@ static OpInfo read_op_left(const char* s, int pos_before){
         if(s[i-1]=='.'&&s[i]=='>'){ op.start=i-1; op.end=i; op.prec=PREC_POSTFIX; op.exists=1; return op; }
         if(s[i-1]=='&'&&s[i]=='&'){ op.start=i-1; op.end=i; op.prec=PREC_AND; op.exists=1; return op; }
         if(s[i-1]=='|'&&s[i]=='|'){ op.start=i-1; op.end=i; op.prec=PREC_OR;  op.exists=1; return op; }
-        if(s[i-1]=='='&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
-        if(s[i-1]=='!'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i-1]=='='&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_EQ; op.exists=1; return op; }
+        if(s[i-1]=='!'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_EQ; op.exists=1; return op; }
         if(s[i-1]=='<'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
         if(s[i-1]=='>'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
         if(s[i-1]=='*'&&s[i]=='*'){ op.start=i-1; op.end=i; op.prec=PREC_POW; op.exists=1; return op; }
@@ -133,8 +136,8 @@ static OpInfo read_op_right(const char* s, int pos_after){
         if(s[i]=='.'&&s[i+1]=='>'){ op.start=i; op.end=i+1; op.prec=PREC_POSTFIX; op.exists=1; return op; }
         if(s[i]=='&'&&s[i+1]=='&'){ op.start=i; op.end=i+1; op.prec=PREC_AND; op.exists=1; return op; }
         if(s[i]=='|'&&s[i+1]=='|'){ op.start=i; op.end=i+1; op.prec=PREC_OR;  op.exists=1; return op; }
-        if(s[i]=='='&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
-        if(s[i]=='!'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
+        if(s[i]=='='&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_EQ; op.exists=1; return op; }
+        if(s[i]=='!'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_EQ; op.exists=1; return op; }
         if(s[i]=='<'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
         if(s[i]=='>'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
         if(s[i]=='*'&&s[i+1]=='*'){ op.start=i; op.end=i+1; op.prec=PREC_POW; op.exists=1; return op; }
