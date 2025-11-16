@@ -354,15 +354,24 @@ NormalizeResult flyux_normalize(const char* source_code) {
                         if (source_code[src_idx] == '\n') {
                             orig_line++;
                             orig_col = 1;
+                            src_idx++;
                         } else {
-                            orig_col++;
+                            // 按UTF-8字符计数列号
+                            unsigned char byte = (unsigned char)source_code[src_idx];
+                            int bytes_to_skip = 1;
+                            if (byte >= 0xF0) bytes_to_skip = 4;
+                            else if (byte >= 0xE0) bytes_to_skip = 3;
+                            else if (byte >= 0xC0) bytes_to_skip = 2;
+                            
+                            src_idx += bytes_to_skip;
+                            orig_col++;  // 一个UTF-8字符只加1列
                         }
-                        if (source_code[src_idx] == '*' && source_code[src_idx + 1] == '/') {
+                        
+                        if (src_idx + 1 < src_len && source_code[src_idx] == '*' && source_code[src_idx + 1] == '/') {
                             src_idx += 2;
                             orig_col += 2;
                             break;
                         }
-                        src_idx++;
                     }
                     continue;
                 }
@@ -370,8 +379,17 @@ NormalizeResult flyux_normalize(const char* source_code) {
                 // 跳过行注释 //...
                 if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '/') {
                     src_idx += 2;
+                    orig_col += 2;  // 跳过 //
                     while (src_idx < src_len && source_code[src_idx] != '\n') {
-                        src_idx++;
+                        // 按UTF-8字符计数列号
+                        unsigned char byte = (unsigned char)source_code[src_idx];
+                        int bytes_to_skip = 1;
+                        if (byte >= 0xF0) bytes_to_skip = 4;
+                        else if (byte >= 0xE0) bytes_to_skip = 3;
+                        else if (byte >= 0xC0) bytes_to_skip = 2;
+                        
+                        src_idx += bytes_to_skip;
+                        orig_col++;  // 一个UTF-8字符只加1列
                     }
                     if (src_idx < src_len && source_code[src_idx] == '\n') {
                         src_idx++;

@@ -257,9 +257,40 @@ static char* normalize_whitespace(const char* stmt){
     size_t len=strlen(stmt);
     char* result=(char*)malloc(len+1); if(!result) return NULL;
     int out=0;
+    int in_string=0;   // 跟踪是否在字符串内
+    int escape=0;      // 跟踪转义状态
+    
     for (size_t i=0;i<len;i++){
         unsigned char ch=(unsigned char)stmt[i];
-        if (is_space_c(ch)) continue;  // 全删，目标风格
+        
+        // 处理转义
+        if (escape) {
+            result[out++]=(char)ch;
+            escape=0;
+            continue;
+        }
+        if (ch=='\\') {
+            result[out++]=(char)ch;
+            escape=1;
+            continue;
+        }
+        
+        // 处理字符串边界
+        if (ch=='"' || ch=='\'') {
+            in_string=!in_string;
+            result[out++]=(char)ch;
+            continue;
+        }
+        
+        // 在字符串内：保留所有字符（包括空格）
+        if (in_string) {
+            result[out++]=(char)ch;
+            continue;
+        }
+        
+        // 在字符串外：删除空格
+        if (is_space_c(ch)) continue;
+        
         result[out++]=(char)ch;
     }
     result[out]='\0';
