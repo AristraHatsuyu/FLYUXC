@@ -316,6 +316,8 @@ NormalizeResult flyux_normalize(const char* source_code) {
     int orig_line = 1, orig_col = 1;
     size_t src_idx = 0, norm_idx = 0;
     size_t src_len = strlen(source_code);
+    int src_in_string = 0;  // 跟踪原始源码是否在字符串内
+    char src_string_quote = '\0';  // 字符串的引号类型
     
     // 主循环：扫描normalized的每个字符，找到其在原始源码中的位置
     while (norm_idx < norm_len) {
@@ -323,54 +325,79 @@ NormalizeResult flyux_normalize(const char* source_code) {
         while (src_idx < src_len) {
             char src_ch = source_code[src_idx];
             
-            // 跳过块注释 /* ... */
-            if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '*') {
-                src_idx += 2;
-                orig_col += 2;
-                while (src_idx + 1 < src_len) {
-                    if (source_code[src_idx] == '\n') {
+            // 处理字符串状态
+            if (src_ch == '"' || src_ch == '\'') {
+                if (!src_in_string) {
+                    src_in_string = 1;
+                    src_string_quote = src_ch;
+                } else if (src_ch == src_string_quote) {
+                    // 检查是否是转义的引号
+                    int is_escaped = 0;
+                    if (src_idx > 0 && source_code[src_idx - 1] == '\\') {
+                        // 简单检测：前一个是反斜杠（可能需要更复杂的转义检测）
+                        is_escaped = 1;
+                    }
+                    if (!is_escaped) {
+                        src_in_string = 0;
+                        src_string_quote = '\0';
+                    }
+                }
+            }
+            
+            // 只在字符串外跳过注释
+            if (!src_in_string) {
+                // 跳过块注释 /* ... */
+                if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '*') {
+                    src_idx += 2;
+                    orig_col += 2;
+                    while (src_idx + 1 < src_len) {
+                        if (source_code[src_idx] == '\n') {
+                            orig_line++;
+                            orig_col = 1;
+                        } else {
+                            orig_col++;
+                        }
+                        if (source_code[src_idx] == '*' && source_code[src_idx + 1] == '/') {
+                            src_idx += 2;
+                            orig_col += 2;
+                            break;
+                        }
+                        src_idx++;
+                    }
+                    continue;
+                }
+                
+                // 跳过行注释 //...
+                if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '/') {
+                    src_idx += 2;
+                    while (src_idx < src_len && source_code[src_idx] != '\n') {
+                        src_idx++;
+                    }
+                    if (src_idx < src_len && source_code[src_idx] == '\n') {
+                        src_idx++;
                         orig_line++;
                         orig_col = 1;
-                    } else {
-                        orig_col++;
                     }
-                    if (source_code[src_idx] == '*' && source_code[src_idx + 1] == '/') {
-                        src_idx += 2;
-                        orig_col += 2;
-                        break;
-                    }
-                    src_idx++;
+                    continue;
                 }
-                continue;
-            }
-            
-            // 跳过行注释 //...
-            if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '/') {
-                src_idx += 2;
-                while (src_idx < src_len && source_code[src_idx] != '\n') {
-                    src_idx++;
-                }
-                if (src_idx < src_len && source_code[src_idx] == '\n') {
-                    src_idx++;
+                
+                // 跳过换行
+                if (src_ch == '\n') {
                     orig_line++;
                     orig_col = 1;
+                    src_idx++;
+                    continue;
                 }
-                continue;
-            }
-            
-            // 跳过换行
-            if (src_ch == '\n') {
-                orig_line++;
-                orig_col = 1;
-                src_idx++;
-                continue;
-            }
-            
-            // 跳过空白
-            if (src_ch == ' ' || src_ch == '\t' || src_ch == '\r') {
-                orig_col++;
-                src_idx++;
-                continue;
+                
+                // 跳过空白
+                if (src_ch == ' ' || src_ch == '\t' || src_ch == '\r') {
+                    orig_col++;
+                    src_idx++;
+                    continue;
+                }
+            } else {
+                // 在字符串内，不跳过注释和空白，只跳过字符串外的换行（不应该有）
+                // 字符串内的所有字符都需要匹配
             }
             
             // 找到有效字符，跳出内循环

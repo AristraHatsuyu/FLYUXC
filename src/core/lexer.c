@@ -195,26 +195,63 @@ static int emit_token(Token** tokens,
                 t->orig_column = loc->orig_column;
                 
                 // 计算整个token的原始长度
-                // 对于标识符token：如果所有字符映射到同一个位置，说明是被varmap替换的，用第一个字符的长度
-                // 对于其他token：累加所有字符的长度
+                // 策略1：检查是否所有字符映射到同一位置（varmap替换的标识符）
+                // 策略2：计算从第一个到最后一个非synthetic字符的跨度
                 int total_orig_len = 0;
-                int all_same_pos = 1;  // 检查是否所有字符映射到同一位置
+                int all_same_pos = 1;
                 size_t first_norm_off = norm_offset;
+                const SourceLocation* first_loc = loc;
+                const SourceLocation* last_loc = NULL;
+                int found_valid = 0;
                 
+                // 遍历所有字符，找到最后一个有效字符
                 for (size_t k = 0; k < lexeme_len; k++) {
                     size_t map_off = mapped_offset + k;
                     if (map_off < offset_map_size) {
                         size_t norm_off = offset_map[map_off];
                         if (norm_off < norm_source_map_size) {
-                            if (k == 0) {
-                                total_orig_len = norm_source_map[norm_off].orig_length;
-                            } else {
+                            const SourceLocation* cur_loc = &norm_source_map[norm_off];
+                            if (!cur_loc->is_synthetic && cur_loc->orig_line > 0) {
+                                last_loc = cur_loc;
+                                found_valid = 1;
                                 if (norm_off != first_norm_off) {
                                     all_same_pos = 0;
-                                    total_orig_len += norm_source_map[norm_off].orig_length;
                                 }
                             }
                         }
+                    }
+                }
+                
+                // 如果没找到有效字符，使用第一个字符
+                if (!found_valid || !last_loc) {
+                    last_loc = first_loc;
+                }
+                
+                // 计算长度
+                if (all_same_pos || first_loc == last_loc) {
+                    // 所有字符映射到同一位置，或只有一个字符
+                    total_orig_len = first_loc->orig_length;
+                } else if (first_loc->orig_line == last_loc->orig_line) {
+                    // 同一行：用跨度计算
+                    total_orig_len = (last_loc->orig_column - first_loc->orig_column) + last_loc->orig_length;
+                } else {
+                    // 跨行或其他情况：累加所有字符长度
+                    total_orig_len = 0;
+                    for (size_t k = 0; k < lexeme_len; k++) {
+                        size_t map_off = mapped_offset + k;
+                        if (map_off < offset_map_size) {
+                            size_t norm_off = offset_map[map_off];
+                            if (norm_off < norm_source_map_size) {
+                                const SourceLocation* cur_loc = &norm_source_map[norm_off];
+                                if (!cur_loc->is_synthetic && cur_loc->orig_line > 0) {
+                                    total_orig_len += cur_loc->orig_length;
+                                }
+                            }
+                        }
+                    }
+                    // 如果累加结果为0，至少用第一个字符的长度
+                    if (total_orig_len == 0) {
+                        total_orig_len = first_loc->orig_length;
                     }
                 }
                 
