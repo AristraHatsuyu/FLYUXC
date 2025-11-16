@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include "normalize.h"  /* 获取 SourceLocation 定义 */
 
 /* 词法 Token 类型 */
 typedef enum TokenKind {
@@ -76,9 +77,12 @@ typedef enum TokenKind {
 /* 单个 Token */
 typedef struct Token {
     TokenKind kind;
-    char*     lexeme;   /* 原始文本片段（拷贝出来的） */
-    int       line;     /* 当前是规范化+varmap 后的行号 */
-    int       column;   /* 列号 */
+    char* lexeme;
+    int line;              /* 规范化代码中的行号 */
+    int column;            /* 规范化代码中的列号 */
+    int orig_line;         /* 原始源码行号（0表示合成token） */
+    int orig_column;       /* 原始源码列号 */
+    int orig_length;       /* 原始源码长度（字节数） */
 } Token;
 
 /* 词法分析结果 */
@@ -94,10 +98,12 @@ typedef struct LexerResult {
 extern "C" {
 #endif
 
-/* 对映射后的源码做词法分析 */
-LexerResult lexer_tokenize(const char* source);
-
-/* 释放 LexerResult 里所有动态内存 */
+/* 对映射后的源码做词法分析，带源码位置映射 */
+LexerResult lexer_tokenize(const char* source,
+                          const SourceLocation* norm_source_map,
+                          size_t norm_source_map_size,
+                          const size_t* offset_map,
+                          size_t offset_map_size);/* 释放 LexerResult 里所有动态内存 */
 void lexer_result_free(LexerResult* result);
 
 /* 调试输出 Token 列表 */

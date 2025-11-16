@@ -162,11 +162,9 @@ static int emit_token(Token** tokens,
                       size_t lexeme_len,
                       int line,
                       int column,
-                      const SourceLocation* norm_source_map,
-                      size_t norm_source_map_size,
-                      const size_t* offset_map,
-                      size_t offset_map_size,
-                      size_t mapped_offset) {
+                      const SourceLocation* source_map,
+                      size_t start_offset,
+                      size_t end_offset) {
     if (!ensure_token_capacity(tokens, cap, *count + 1)) {
         return 0;
     }
@@ -177,62 +175,19 @@ static int emit_token(Token** tokens,
     t->line = line;
     t->column = column;
     
-    // 查询原始源码位置（两级映射）
-    if (offset_map && offset_map_size > 0 && mapped_offset < offset_map_size &&
-        norm_source_map && norm_source_map_size > 0) {
-        // 第1级：mapped_offset → normalized_offset
-        size_t norm_offset = offset_map[mapped_offset];
-        // 第2级：normalized_offset → original position
-        if (norm_offset < norm_source_map_size) {
-            const SourceLocation* loc = &norm_source_map[norm_offset];
-            if (loc->is_synthetic) {
-                // 合成字符，标记为0
-                t->orig_line = 0;
-                t->orig_column = 0;
-                t->orig_length = 0;
-            } else {
-                t->orig_line = loc->orig_line;
-                t->orig_column = loc->orig_column;
-                
-                // 计算整个token的原始长度
-                // 对于标识符token：如果所有字符映射到同一个位置，说明是被varmap替换的，用第一个字符的长度
-                // 对于其他token：累加所有字符的长度
-                int total_orig_len = 0;
-                int all_same_pos = 1;  // 检查是否所有字符映射到同一位置
-                size_t first_norm_off = norm_offset;
-                
-                for (size_t k = 0; k < lexeme_len; k++) {
-                    size_t map_off = mapped_offset + k;
-                    if (map_off < offset_map_size) {
-                        size_t norm_off = offset_map[map_off];
-                        if (norm_off < norm_source_map_size) {
-                            if (k == 0) {
-                                total_orig_len = norm_source_map[norm_off].orig_length;
-                            } else {
-                                if (norm_off != first_norm_off) {
-                                    all_same_pos = 0;
-                                    total_orig_len += norm_source_map[norm_off].orig_length;
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 如果所有字符映射到同一位置（变量被替换），只用第一个字符的长度
-                // 否则使用累加的总长度
-                t->orig_length = total_orig_len > 0 ? total_orig_len : (int)lexeme_len;
-            }
-        } else {
-            // 越界，使用规范化位置
-            t->orig_line = line;
-            t->orig_column = column;
-            t->orig_length = (int)lexeme_len;
-        }
+    // 设置原始源码位置
+    if (source_map && start_offset < end_offset) {
+        t->orig_line_start = source_map[start_offset].orig_line;
+        t->orig_column_start = source_map[start_offset].orig_column;
+        t->orig_line_end = source_map[end_offset - 1].orig_line;
+        t->orig_column_end = source_map[end_offset - 1].orig_column + 
+                             source_map[end_offset - 1].orig_length - 1;
     } else {
-        // 无映射，使用规范化位置
-        t->orig_line = line;
-        t->orig_column = column;
-        t->orig_length = (int)lexeme_len;
+        // 默认值
+        t->orig_line_start = line;
+        t->orig_column_start = column;
+        t->orig_line_end = line;
+        t->orig_column_end = column + (int)lexeme_len - 1;
     }
     
     (*count)++;
@@ -242,10 +197,8 @@ static int emit_token(Token** tokens,
 /* ========== 主词法分析 ========== */
 
 LexerResult lexer_tokenize(const char* source,
-                          const SourceLocation* norm_source_map,
-                          size_t norm_source_map_size,
-                          const size_t* offset_map,
-                          size_t offset_map_size) {
+                          const SourceLocation* source_map,
+                          size_t source_map_size) {
     LexerResult result;
     result.tokens = NULL;
     result.count = 0;
@@ -289,7 +242,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == 'L' && i + 1 < len && source[i + 1] == '>') {
             if (!emit_token(&tokens, &result.count, &cap,
                             TK_KW_LOOP, source + i, 2, start_line, start_col,
-                            norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                            source_map, start_offset, i + 2)) {
                 result.error_code = -1;
                 result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                 goto fail;
@@ -302,7 +255,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == 'R' && i + 1 < len && source[i + 1] == '>') {
             if (!emit_token(&tokens, &result.count, &cap,
                             TK_KW_RETURN, source + i, 2, start_line, start_col,
-                            norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                            source_map, start_offset, i + 2)) {
                 result.error_code = -1;
                 result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                 goto fail;
@@ -334,7 +287,7 @@ LexerResult lexer_tokenize(const char* source,
             /* emit_token 会自己再复制一份 lexeme，这里这份临时的要先 free 掉 */
             free(lexeme);
             if (!emit_token(&tokens, &result.count, &cap,
-                            kind, source + start, ident_len, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                            kind, source + start, ident_len, start_line, start_col)) {
                 result.error_code = -1;
                 result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                 goto fail;
@@ -353,7 +306,7 @@ LexerResult lexer_tokenize(const char* source,
             }
             size_t num_len = i - start;
             if (!emit_token(&tokens, &result.count, &cap,
-                            TK_NUM, source + start, num_len, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                            TK_NUM, source + start, num_len, start_line, start_col)) {
                 result.error_code = -1;
                 result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                 goto fail;
@@ -393,7 +346,7 @@ LexerResult lexer_tokenize(const char* source,
 
             size_t str_len = i - start;
             if (!emit_token(&tokens, &result.count, &cap,
-                            TK_STRING, source + start, str_len, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                            TK_STRING, source + start, str_len, start_line, start_col)) {
                 result.error_code = -1;
                 result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                 goto fail;
@@ -407,7 +360,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '.') {
             if (i + 1 < len && source[i + 1] == '>') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_DOT_CHAIN, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_DOT_CHAIN, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -416,7 +369,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_DOT, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_DOT, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -431,7 +384,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == ':') {
             if (i + 1 < len && source[i + 1] == '=') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_DEFINE, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_DEFINE, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -440,7 +393,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else if (i + 1 < len && source[i + 1] == '<') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_FUNC_TYPE_START, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_FUNC_TYPE_START, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -449,7 +402,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_COLON, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_COLON, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -464,7 +417,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '&') {
             if (i + 1 < len && source[i + 1] == '&') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_AND_AND, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_AND_AND, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -484,7 +437,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '|') {
             if (i + 1 < len && source[i + 1] == '|') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_OR_OR, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_OR_OR, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -503,7 +456,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '!') {
             if (i + 1 < len && source[i + 1] == '=') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_BANG_EQ, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_BANG_EQ, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -512,7 +465,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_BANG, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_BANG, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -527,7 +480,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '=') {
             if (i + 1 < len && source[i + 1] == '=') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_EQ_EQ, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_EQ_EQ, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -536,7 +489,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_ASSIGN, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_ASSIGN, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -551,7 +504,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '<') {
             if (i + 1 < len && source[i + 1] == '=') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_LE, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_LE, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -560,7 +513,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_LT, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_LT, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -575,7 +528,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '>') {
             if (i + 1 < len && source[i + 1] == '=') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_FUNC_TYPE_END, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_FUNC_TYPE_END, source + i, 2, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -584,7 +537,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_GT, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_GT, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -599,7 +552,7 @@ LexerResult lexer_tokenize(const char* source,
         switch (c) {
             case '+':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_PLUS, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_PLUS, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -608,7 +561,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '-':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_MINUS, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_MINUS, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -617,7 +570,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '*':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_STAR, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_STAR, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -626,7 +579,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '/':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_SLASH, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_SLASH, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -635,7 +588,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '%':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_PERCENT, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_PERCENT, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -644,7 +597,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case ';':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_SEMI, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_SEMI, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -653,7 +606,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case ',':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_COMMA, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_COMMA, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -662,7 +615,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '(':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_L_PAREN, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_L_PAREN, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -671,7 +624,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case ')':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_R_PAREN, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_R_PAREN, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -680,7 +633,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '{':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_L_BRACE, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_L_BRACE, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -689,7 +642,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '}':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_R_BRACE, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_R_BRACE, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -698,7 +651,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case '[':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_L_BRACKET, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_L_BRACKET, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -707,7 +660,7 @@ LexerResult lexer_tokenize(const char* source,
                 continue;
             case ']':
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_R_BRACKET, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_R_BRACKET, source + i, 1, start_line, start_col)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -771,19 +724,11 @@ void lexer_print_tokens(const LexerResult* result, FILE* out) {
             continue;
         }
 
-        if (t->orig_line == 0) {
-            // 合成token
-            fprintf(out, "%s\t\"%s\"\t(synthetic)\n",
-                    token_kind_name(t->kind),
-                    t->lexeme ? t->lexeme : "");
-        } else {
-            // 原始位置格式：行:列+长度
-            fprintf(out, "%s\t\"%s\"\t%d:%d+%d\n",
-                    token_kind_name(t->kind),
-                    t->lexeme ? t->lexeme : "",
-                    t->orig_line,
-                    t->orig_column,
-                    t->orig_length);
-        }
+        fprintf(out,
+                "(%s) \"%s\" at %d:%d\n",
+                token_kind_name(t->kind),
+                t->lexeme ? t->lexeme : "",
+                t->line,
+                t->column);
     }
 }

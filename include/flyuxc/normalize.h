@@ -9,6 +9,16 @@
  */
 
 /**
+ * 源码位置映射：记录规范化后每个字符对应的原始源码位置
+ */
+typedef struct {
+    int orig_line;       /* 原始行号（1-based），0表示合成字符 */
+    int orig_column;     /* 原始列号（1-based） */
+    int orig_length;     /* 原始字符长度（字节数） */
+    int is_synthetic;    /* 1=合成字符（如添加的分号），0=来自原始代码 */
+} SourceLocation;
+
+/**
  * 语句类型
  */
 typedef enum {
@@ -37,6 +47,8 @@ typedef struct {
  */
 typedef struct {
     char* normalized;       // 规范化后的代码
+    SourceLocation* source_map;  // 源码位置映射数组
+    size_t source_map_size;      // 映射数组长度
     char* error_msg;        // 错误信息（如有）
     int error_code;         // 错误代码
 } NormalizeResult;

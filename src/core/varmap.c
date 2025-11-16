@@ -159,11 +159,15 @@ static int looks_like_typed_definition(const char* src, size_t len, size_t ident
 
 /* ========== 主映射逻辑 ========== */
 
-VarMapResult flyux_varmap_process(const char* normalized_source) {
+VarMapResult flyux_varmap_process(const char* normalized_source,
+                                  const SourceLocation* source_map,
+                                  size_t source_map_size) {
     VarMapResult result;
     result.mapped_source = NULL;
     result.entries = NULL;
-    result.count = 0;
+    result.entry_count = 0;
+    result.offset_map = NULL;
+    result.offset_map_size = 0;
     result.error_msg = NULL;
     result.error_code = 0;
 
@@ -428,9 +432,103 @@ VarMapResult flyux_varmap_process(const char* normalized_source) {
 
     out[out_idx] = '\0';
 
+    // 构建 offset_map：映射输出偏移到输入偏移
+    // offset_map[i] = j 表示输出字符i对应输入字符j
+    size_t* offset_map = malloc(out_idx * sizeof(size_t));
+    if (!offset_map) {
+        free(out);
+        for (size_t k = 0; k < entry_count; k++) {
+            free(entries[k].original);
+            free(entries[k].mapped);
+        }
+        free(entries);
+        result.error_code = -1;
+        result.error_msg = str_dup_n("Memory allocation failed for offset_map", 41);
+        return result;
+    }
+    
+    // 重新扫描normalized_source和out，建立偏移映射
+    size_t norm_i = 0, map_i = 0;
+    int in_string = 0, in_escape = 0;
+    
+    while (norm_i < len && map_i < out_idx) {
+        // 处理转义和字符串（与上面逻辑一致）
+        if (in_escape) {
+            offset_map[map_i++] = norm_i++;
+            in_escape = 0;
+            continue;
+        }
+        
+        if (normalized_source[norm_i] == '\\') {
+            in_escape = 1;
+            offset_map[map_i++] = norm_i++;
+            continue;
+        }
+        
+        if (normalized_source[norm_i] == '"' || normalized_source[norm_i] == '\'') {
+            in_string = !in_string;
+            offset_map[map_i++] = norm_i++;
+            continue;
+        }
+        
+        if (in_string) {
+            offset_map[map_i++] = norm_i++;
+            continue;
+        }
+        
+        // 检查是否是标识符开头
+        if (is_ident_start(normalized_source[norm_i])) {
+            size_t ident_start = norm_i;
+            size_t ident_len = 0;
+            while (norm_i < len && is_ident_char(normalized_source[norm_i])) {
+                ident_len++;
+                norm_i++;
+            }
+            
+            // 检查是否是对象key（标识符后面是 : 且不是类型定义）
+            int is_object_key = 0;
+            if (norm_i < len && normalized_source[norm_i] == ':') {
+                if (!looks_like_typed_definition(normalized_source, len, norm_i)) {
+                    is_object_key = 1;
+                }
+            }
+            
+            // 检查是否被映射（对象key不参与映射）
+            int was_mapped = 0;
+            if (!is_object_key) {
+                for (size_t e = 0; e < entry_count; e++) {
+                    size_t orig_len = strlen(entries[e].original);
+                    if (orig_len == ident_len && 
+                        strncmp(normalized_source + ident_start, entries[e].original, ident_len) == 0) {
+                        // 这个标识符被映射了
+                        size_t mapped_len = strlen(entries[e].mapped);
+                        // 映射后的所有字符都指向原标识符的起始位置
+                        for (size_t k = 0; k < mapped_len; k++) {
+                            offset_map[map_i++] = ident_start;
+                        }
+                        was_mapped = 1;
+                        break;
+                    }
+                }
+            }
+            
+            if (!was_mapped) {
+                // 未映射，1:1对应
+                for (size_t k = 0; k < ident_len; k++) {
+                    offset_map[map_i++] = ident_start + k;
+                }
+            }
+        } else {
+            // 非标识符，1:1映射
+            offset_map[map_i++] = norm_i++;
+        }
+    }
+
     result.mapped_source = out;
     result.entries = entries;
-    result.count = entry_count;
+    result.entry_count = entry_count;
+    result.offset_map = offset_map;
+    result.offset_map_size = out_idx;
     result.error_code = 0;
     result.error_msg = NULL;
 
@@ -445,8 +543,12 @@ void varmap_result_free(VarMapResult* result) {
         free(result->mapped_source);
         result->mapped_source = NULL;
     }
+    if (result->offset_map) {
+        free(result->offset_map);
+        result->offset_map = NULL;
+    }
     if (result->entries) {
-        for (size_t i = 0; i < result->count; i++) {
+        for (size_t i = 0; i < result->entry_count; i++) {
             free(result->entries[i].original);
             free(result->entries[i].mapped);
         }
@@ -457,13 +559,13 @@ void varmap_result_free(VarMapResult* result) {
         free(result->error_msg);
         result->error_msg = NULL;
     }
-    result->count = 0;
+    result->entry_count = 0;
     result->error_code = 0;
 }
 
 void varmap_print_table(const VarMapResult* result, FILE* out) {
     if (!result || !out) return;
-    for (size_t i = 0; i < result->count; i++) {
+    for (size_t i = 0; i < result->entry_count; i++) {
         const VarMapEntry* e = &result->entries[i];
         const char* kind_str = "UNKNOWN";
         switch (e->kind) {

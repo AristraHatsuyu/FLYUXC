@@ -45,7 +45,9 @@ int main(int argc, char *argv[])
         printf("%s\n", norm_result.normalized);
 
         /* Step 2: 变量名映射 */
-        VarMapResult vm_result = flyux_varmap_process(norm_result.normalized);
+        VarMapResult vm_result = flyux_varmap_process(norm_result.normalized,
+                                                      norm_result.source_map,
+                                                      norm_result.source_map_size);
         if (vm_result.error_code != 0) {
             fprintf(stderr, "VarMap error: %s\n",
                     vm_result.error_msg ? vm_result.error_msg : "(unknown)");
@@ -61,7 +63,11 @@ int main(int argc, char *argv[])
         printf("%s\n", vm_result.mapped_source);
 
         /* Step 3: Lexer 处理映射后的源码 */
-        LexerResult lex_result = lexer_tokenize(vm_result.mapped_source);
+        LexerResult lex_result = lexer_tokenize(vm_result.mapped_source,
+                                                norm_result.source_map,
+                                                norm_result.source_map_size,
+                                                vm_result.offset_map,
+                                                vm_result.offset_map_size);
         if (lex_result.error_code != 0) {
             fprintf(stderr, "Lexer error: %s\n",
                     lex_result.error_msg ? lex_result.error_msg : "(unknown)");

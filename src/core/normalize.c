@@ -216,7 +216,7 @@ static char* normalize_internal_newlines(const char* stmt) {
  * 主规范化函数
  */
 NormalizeResult flyux_normalize(const char* source_code) {
-    NormalizeResult result = {NULL, NULL, 0};
+    NormalizeResult result = {NULL, NULL, 0, NULL, 0};
     
     if (!source_code) {
         result.error_msg = "Source code is null";
@@ -302,7 +302,168 @@ NormalizeResult flyux_normalize(const char* source_code) {
     free(normalized_stmts);
     free_statements(statements, stmt_count);
     
+    // 构建源码位置映射：记录每个规范化字符对应的原始位置
+    size_t norm_len = strlen(normalized);
+    SourceLocation* source_map = malloc(norm_len * sizeof(SourceLocation));
+    if (!source_map) {
+        free(normalized);
+        result.error_msg = "Memory allocation failed for source_map";
+        result.error_code = -1;
+        return result;
+    }
+    
+    // 构建字符级映射
+    int orig_line = 1, orig_col = 1;
+    size_t src_idx = 0, norm_idx = 0;
+    size_t src_len = strlen(source_code);
+    
+    // 主循环：扫描normalized的每个字符，找到其在原始源码中的位置
+    while (norm_idx < norm_len) {
+        // 内循环：跳过原始源码中的注释、换行、空白，找到下一个有效字符
+        while (src_idx < src_len) {
+            char src_ch = source_code[src_idx];
+            
+            // 跳过块注释 /* ... */
+            if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '*') {
+                src_idx += 2;
+                orig_col += 2;
+                while (src_idx + 1 < src_len) {
+                    if (source_code[src_idx] == '\n') {
+                        orig_line++;
+                        orig_col = 1;
+                    } else {
+                        orig_col++;
+                    }
+                    if (source_code[src_idx] == '*' && source_code[src_idx + 1] == '/') {
+                        src_idx += 2;
+                        orig_col += 2;
+                        break;
+                    }
+                    src_idx++;
+                }
+                continue;
+            }
+            
+            // 跳过行注释 //...
+            if (src_ch == '/' && src_idx + 1 < src_len && source_code[src_idx + 1] == '/') {
+                src_idx += 2;
+                while (src_idx < src_len && source_code[src_idx] != '\n') {
+                    src_idx++;
+                }
+                if (src_idx < src_len && source_code[src_idx] == '\n') {
+                    src_idx++;
+                    orig_line++;
+                    orig_col = 1;
+                }
+                continue;
+            }
+            
+            // 跳过换行
+            if (src_ch == '\n') {
+                orig_line++;
+                orig_col = 1;
+                src_idx++;
+                continue;
+            }
+            
+            // 跳过空白
+            if (src_ch == ' ' || src_ch == '\t' || src_ch == '\r') {
+                orig_col++;
+                src_idx++;
+                continue;
+            }
+            
+            // 找到有效字符，跳出内循环
+            break;
+        }
+        
+        // 现在src_idx指向下一个有效字符（或已到文件末尾）
+        // 尝试匹配normalized[norm_idx]
+        
+        if (src_idx >= src_len) {
+            // 原始源码已结束，normalized还有字符 → 必定是synthetic
+            if (normalized[norm_idx] == ';') {
+                source_map[norm_idx].orig_line = 0;
+                source_map[norm_idx].orig_column = 0;
+                source_map[norm_idx].orig_length = 0;
+                source_map[norm_idx].is_synthetic = 1;
+                norm_idx++;
+                continue;
+            }
+            // 其他情况（不应该发生）
+            norm_idx++;
+            continue;
+        }
+        
+        char src_ch = source_code[src_idx];
+        
+        // 尝试匹配
+        if (src_ch == normalized[norm_idx]) {
+            // 匹配成功！
+            source_map[norm_idx].orig_line = orig_line;
+            source_map[norm_idx].orig_column = orig_col;
+            source_map[norm_idx].is_synthetic = 0;
+            
+            // 判断UTF-8字符长度
+            int char_bytes = 1;
+            if ((unsigned char)src_ch >= 0x80) {
+                if ((unsigned char)src_ch >= 0xF0) char_bytes = 4;
+                else if ((unsigned char)src_ch >= 0xE0) char_bytes = 3;
+                else if ((unsigned char)src_ch >= 0xC0) char_bytes = 2;
+                else char_bytes = 0;  // UTF-8后续字节
+            }
+            
+            if (char_bytes > 0) {
+                // 字符首字节
+                source_map[norm_idx].orig_length = char_bytes;
+                
+                // 处理多字节字符的后续字节
+                for (int b = 1; b < char_bytes && (norm_idx + b) < norm_len && (src_idx + b) < src_len; b++) {
+                    if (source_code[src_idx + b] == normalized[norm_idx + b]) {
+                        source_map[norm_idx + b].orig_line = orig_line;
+                        source_map[norm_idx + b].orig_column = orig_col;
+                        source_map[norm_idx + b].orig_length = 0;
+                        source_map[norm_idx + b].is_synthetic = 0;
+                    }
+                }
+                
+                // 前进
+                norm_idx += char_bytes;
+                src_idx += char_bytes;
+                orig_col++;
+            } else {
+                // UTF-8后续字节，已处理
+                src_idx++;
+            }
+        } else {
+            // 不匹配：可能是synthetic分号
+            if (normalized[norm_idx] == ';') {
+                source_map[norm_idx].orig_line = 0;
+                source_map[norm_idx].orig_column = 0;
+                source_map[norm_idx].orig_length = 0;
+                source_map[norm_idx].is_synthetic = 1;
+                norm_idx++;
+                // 不前进src_idx，继续用当前原始位置
+            } else {
+                // 其他不匹配：跳过原始字符（不应该发生）
+                src_idx++;
+                orig_col++;
+            }
+        }
+    }
+    
+    // 标记合成字符（normalize添加的分号等）
+    while (norm_idx < norm_len) {
+        source_map[norm_idx].orig_line = 0;  // 0表示合成
+        source_map[norm_idx].orig_column = 0;
+        source_map[norm_idx].orig_length = 0;
+        source_map[norm_idx].is_synthetic = 1;
+        norm_idx++;
+    }
+    
     result.normalized = normalized;
+    result.source_map = source_map;
+    result.source_map_size = norm_len;
     result.error_code = 0;
     return result;
 }
@@ -315,6 +476,10 @@ void normalize_result_free(NormalizeResult* result) {
     if (result->normalized) {
         free(result->normalized);
         result->normalized = NULL;
+    }
+    if (result->source_map) {
+        free(result->source_map);
+        result->source_map = NULL;
     }
     if (result->error_msg) {
         free(result->error_msg);
