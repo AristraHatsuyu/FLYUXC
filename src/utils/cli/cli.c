@@ -1,4 +1,4 @@
-#include "flyuxc/cli.h"
+#include "flyuxc/utils/cli.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

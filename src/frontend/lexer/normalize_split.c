@@ -4,7 +4,7 @@
  * 需要处理括号、大括号、字符串内的分隔符
  */
 
-#include "flyuxc/normalize.h"
+#include "flyuxc/frontend/normalize.h"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
