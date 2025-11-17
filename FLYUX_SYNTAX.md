@@ -1,6 +1,6 @@
-# FLYUX 语言语法规范 - 变量与函数定义
+# FLYUX 语言语法规范 - 完整参考
 
-**更新日期**: 2025-11-11
+**更新日期**: 2025-11-17
 
 ## 📌 语法快速参考
 
@@ -365,5 +365,531 @@ main := () {
 
 ---
 
-**文档版本**: 1.0  
-**最后更新**: 2025-11-11
+## 🔧 内置函数参考
+
+FLYUX 提供了丰富的内置函数，覆盖常见的编程需求。
+
+### 📤 输入输出
+
+#### print(...args)
+打印任意数量的参数到标准输出。
+```flyux
+print("Hello")              // Hello
+print("x =", x, "y =", y)   // x = 10 y = 20
+print()                     // 空行
+```
+
+#### input(prompt)
+从标准输入读取一行文本。
+```flyux
+name := input("请输入姓名: ")
+age := input("请输入年龄: ")
+```
+
+#### readFile(path)
+读取文件内容为字符串。
+```flyux
+content := readFile("data.txt")
+```
+
+#### writeFile(path, content)
+写入内容到文件。
+```flyux
+writeFile("output.txt", "Hello, FLYUX!")
+```
+
+---
+
+### 🔤 字符串操作
+
+#### length(str)
+返回字符串长度或数组长度。
+```flyux
+len := length("Hello")      // 5
+len := length([1, 2, 3])    // 3
+```
+
+#### substr(str, start, length?)
+提取子字符串。
+```flyux
+s := substr("Hello", 1, 3)  // "ell"
+s := substr("Hello", 2)     // "llo"
+```
+
+#### indexOf(str, search, start?)
+查找子字符串位置，未找到返回-1。
+```flyux
+pos := indexOf("Hello", "l")      // 2
+pos := indexOf("Hello", "l", 3)   // 3
+pos := indexOf("Hello", "x")      // -1
+```
+
+#### replace(str, old, new)
+替换字符串中的内容。
+```flyux
+s := replace("Hello World", "World", "FLYUX")  // "Hello FLYUX"
+```
+
+#### split(str, delimiter)
+分割字符串为数组。
+```flyux
+arr := split("a,b,c", ",")  // ["a", "b", "c"]
+```
+
+#### join(array, delimiter)
+连接数组元素为字符串。
+```flyux
+s := join([1, 2, 3], ",")   // "1,2,3"
+```
+
+#### toUpper(str)
+转换为大写。
+```flyux
+s := toUpper("hello")       // "HELLO"
+```
+
+#### toLower(str)
+转换为小写。
+```flyux
+s := toLower("HELLO")       // "hello"
+```
+
+#### trim(str)
+移除首尾空白字符。
+```flyux
+s := trim("  hello  ")      // "hello"
+```
+
+#### startsWith(str, prefix)
+检查字符串是否以指定前缀开始。
+```flyux
+result := startsWith("Hello", "He")  // true
+```
+
+#### endsWith(str, suffix)
+检查字符串是否以指定后缀结束。
+```flyux
+result := endsWith("Hello", "lo")    // true
+```
+
+---
+
+### 🔢 数学函数
+
+#### abs(x)
+返回绝对值。
+```flyux
+val := abs(-5)              // 5
+```
+
+#### floor(x)
+向下取整。
+```flyux
+val := floor(3.7)           // 3
+```
+
+#### ceil(x)
+向上取整。
+```flyux
+val := ceil(3.2)            // 4
+```
+
+#### round(x, digits?)
+四舍五入，可指定小数位数。
+```flyux
+val := round(3.14159)       // 3
+val := round(3.14159, 2)    // 3.14
+```
+
+#### sqrt(x)
+平方根。
+```flyux
+val := sqrt(16)             // 4
+```
+
+#### pow(base, exp)
+幂运算（与 ** 运算符等价）。
+```flyux
+val := pow(2, 3)            // 8
+```
+
+#### min(...args)
+返回最小值。
+```flyux
+val := min(1, 5, 3, 2)      // 1
+```
+
+#### max(...args)
+返回最大值。
+```flyux
+val := max(1, 5, 3, 2)      // 5
+```
+
+#### random()
+返回 [0, 1) 范围的随机数。
+```flyux
+r := random()               // 0.8472...
+```
+
+#### randomInt(min, max)
+返回 [min, max] 范围的随机整数。
+```flyux
+r := randomInt(1, 10)       // 7
+```
+
+---
+
+### 📋 数组操作
+
+#### push(array, ...items)
+在数组末尾添加元素。
+```flyux
+arr := [1, 2, 3]
+push(arr, 4, 5)             // arr = [1, 2, 3, 4, 5]
+```
+
+#### pop(array)
+移除并返回数组最后一个元素。
+```flyux
+arr := [1, 2, 3]
+last := pop(arr)            // last = 3, arr = [1, 2]
+```
+
+#### shift(array)
+移除并返回数组第一个元素。
+```flyux
+arr := [1, 2, 3]
+first := shift(arr)         // first = 1, arr = [2, 3]
+```
+
+#### unshift(array, ...items)
+在数组开头添加元素。
+```flyux
+arr := [1, 2, 3]
+unshift(arr, 0)             // arr = [0, 1, 2, 3]
+```
+
+#### slice(array, start, end?)
+提取数组片段。
+```flyux
+arr := [1, 2, 3, 4, 5]
+sub := slice(arr, 1, 3)     // [2, 3]
+```
+
+#### concat(array1, array2, ...)
+连接多个数组。
+```flyux
+arr := concat([1, 2], [3, 4], [5])  // [1, 2, 3, 4, 5]
+```
+
+#### reverse(array)
+反转数组（原地修改）。
+```flyux
+arr := [1, 2, 3]
+reverse(arr)                // arr = [3, 2, 1]
+```
+
+#### sort(array, compareFn?)
+排序数组（原地修改）。
+```flyux
+arr := [3, 1, 2]
+sort(arr)                   // arr = [1, 2, 3]
+
+// 自定义排序
+sort(arr, (a, b) { R> b - a })  // 降序
+```
+
+#### filter(array, predicate)
+过滤数组元素。
+```flyux
+arr := [1, 2, 3, 4, 5]
+even := filter(arr, (x) { R> x % 2 == 0 })  // [2, 4]
+```
+
+#### map(array, transform)
+映射数组元素。
+```flyux
+arr := [1, 2, 3]
+doubled := map(arr, (x) { R> x * 2 })  // [2, 4, 6]
+```
+
+#### reduce(array, reducer, initial?)
+归约数组。
+```flyux
+arr := [1, 2, 3, 4]
+sum := reduce(arr, (acc, x) { R> acc + x }, 0)  // 10
+```
+
+#### find(array, predicate)
+查找第一个满足条件的元素。
+```flyux
+arr := [1, 2, 3, 4, 5]
+found := find(arr, (x) { R> x > 3 })  // 4
+```
+
+#### indexOf(array, item)
+查找元素索引，未找到返回-1。
+```flyux
+arr := [10, 20, 30]
+idx := indexOf(arr, 20)     // 1
+```
+
+#### includes(array, item)
+检查数组是否包含元素。
+```flyux
+arr := [1, 2, 3]
+has := includes(arr, 2)     // true
+```
+
+---
+
+### 🗂️ 对象操作
+
+#### keys(object)
+返回对象所有键的数组。
+```flyux
+obj := {a: 1, b: 2, c: 3}
+k := keys(obj)              // ["a", "b", "c"]
+```
+
+#### values(object)
+返回对象所有值的数组。
+```flyux
+obj := {a: 1, b: 2, c: 3}
+v := values(obj)            // [1, 2, 3]
+```
+
+#### entries(object)
+返回对象键值对数组。
+```flyux
+obj := {a: 1, b: 2}
+e := entries(obj)           // [["a", 1], ["b", 2]]
+```
+
+#### hasKey(object, key)
+检查对象是否有指定键。
+```flyux
+obj := {a: 1, b: 2}
+has := hasKey(obj, "a")     // true
+```
+
+#### merge(obj1, obj2, ...)
+合并多个对象（后面的覆盖前面的）。
+```flyux
+obj := merge({a: 1}, {b: 2}, {a: 3})  // {a: 3, b: 2}
+```
+
+#### clone(object)
+浅拷贝对象。
+```flyux
+obj1 := {a: 1, b: 2}
+obj2 := clone(obj1)
+```
+
+#### deepClone(object)
+深拷贝对象。
+```flyux
+obj1 := {a: {b: 1}}
+obj2 := deepClone(obj1)
+```
+
+---
+
+### 🔀 类型转换
+
+#### toNum(value)
+转换为数字。
+```flyux
+n := toNum("123")           // 123
+n := toNum("3.14")          // 3.14
+n := toNum(true)            // 1
+n := toNum(false)           // 0
+```
+
+#### toStr(value)
+转换为字符串。
+```flyux
+s := toStr(123)             // "123"
+s := toStr(true)            // "true"
+s := toStr([1, 2])          // "[1, 2]"
+```
+
+#### toBl(value)
+转换为布尔值。
+```flyux
+b := toBl(1)              // true
+b := toBl(0)              // false
+b := toBl("")             // false
+b := toBl("hello")        // true
+```
+
+#### typeOf(value)
+返回值的类型字符串。
+```flyux
+t := typeOf(123)            // "num"
+t := typeOf("hello")        // "str"
+t := typeOf(true)           // "bl"
+t := typeOf([1, 2])         // "obj" (数组也是对象)
+t := typeOf({a: 1})         // "obj"
+t := typeOf(null)           // "null"
+t := typeOf(undef)          // "undef"
+```
+
+#### isNum(value)
+检查是否为数字。
+```flyux
+result := isNum(123)        // true
+```
+
+#### isStr(value)
+检查是否为字符串。
+```flyux
+result := isStr("hello")    // true
+```
+
+#### isBl(value)
+检查是否为布尔值。
+```flyux
+result := isBl(true)      // true
+```
+
+#### isArr(value)
+检查是否为数组。
+```flyux
+result := isArr([1, 2])   // true
+```
+
+#### isObj(value)
+检查是否为对象。
+```flyux
+result := isObj({a: 1})  // true
+```
+
+#### isNull(value)
+检查是否为null。
+```flyux
+result := isNull(null)      // true
+```
+
+#### isUndef(value)
+检查是否为undef。
+```flyux
+result := isUndef(undef)    // true
+```
+
+---
+
+### ⏱️ 时间函数
+
+#### now()
+返回当前时间戳（毫秒）。
+```flyux
+timestamp := now()          // 1700000000000
+```
+
+#### sleep(milliseconds)
+暂停执行指定毫秒数。
+```flyux
+sleep(1000)                 // 暂停1秒
+```
+
+#### dateStr()
+返回当前日期时间字符串。
+```flyux
+dt := dateStr()             // "2025-11-17 15:30:45"
+```
+
+---
+
+### 🔍 实用工具
+
+#### assert(condition, message?)
+断言条件为真，否则报错。
+```flyux
+assert(x > 0, "x must be positive")
+```
+
+#### exit(code?)
+退出程序，可选退出码。
+```flyux
+exit(0)                     // 正常退出
+exit(1)                     // 错误退出
+```
+
+#### range(start, end, step?)
+生成数字范围数组。
+```flyux
+arr := range(0, 5)          // [0, 1, 2, 3, 4]
+arr := range(0, 10, 2)      // [0, 2, 4, 6, 8]
+```
+
+---
+
+### 📊 内置函数总结
+
+| 分类 | 函数数量 | 主要功能 |
+|------|----------|----------|
+| 输入输出 | 4 | print, input, readFile, writeFile |
+| 字符串 | 11 | 操作、查找、转换 |
+| 数学 | 9 | 运算、随机、取整 |
+| 数组 | 16 | 增删改查、高阶函数 |
+| 对象 | 7 | 键值操作、合并克隆 |
+| 类型 | 10 | 转换、类型检查 |
+| 时间 | 3 | 时间戳、延迟、格式化 |
+| 工具 | 3 | 断言、退出、范围 |
+| **总计** | **63** | 覆盖常见编程需求 |
+
+---
+
+### 💡 使用示例
+
+```flyux
+// 字符串处理
+text := "  Hello, FLYUX!  "
+text = trim(text)
+text = toUpper(text)
+print(text)  // "HELLO, FLYUX!"
+
+// 数组操作
+nums := [3, 1, 4, 1, 5, 9]
+sort(nums)
+doubled := map(nums, (x) { R> x * 2 })
+sum := reduce(doubled, (a, b) { R> a + b }, 0)
+print("Sum:", sum)
+
+// 对象处理
+user := {name: "Alice", age: 30, city: "NYC"}
+print("Keys:", keys(user))
+print("Values:", values(user))
+
+if (hasKey(user, "email")) {
+    print("Email:", user.email)
+} {
+    print("No email")
+}
+
+// 类型检查和转换
+value := "123"
+if (isStr(value)) {
+    num := toNum(value)
+    print("Number:", num)
+}
+
+// 文件操作
+content := readFile("data.txt")
+lines := split(content, "\n")
+L> (lines : line) {
+    print(line)
+}
+
+// 数学计算
+x := random()
+y := randomInt(1, 100)
+result := round(sqrt(pow(x, 2) + pow(y, 2)), 2)
+print("Result:", result)
+```
+
+---
+
+**文档版本**: 2.0  
+**最后更新**: 2025-11-17

@@ -44,11 +44,91 @@ static int ensure_token_capacity(Token** arr, size_t* cap, size_t needed) {
 }
 
 /* ===== 内置函数表 ===== */
-/* 后续可以随便往这里加内置函数名 */
+/* 
+ * FLYUX 内置函数完整列表 (64个)
+ * 分类: 输入输出、字符串、数学、数组、对象、类型、时间、工具
+ * 最后更新: 2025-11-17
+ */
 static const char* BUILTIN_FUNC_TABLE[] = {
+    /* 输入输出 (4) */
     "print",
+    "input",
+    "readFile",
+    "writeFile",
+    
+    /* 字符串操作 (11) */
     "length",
-    NULL
+    "substr",
+    "indexOf",
+    "replace",
+    "split",
+    "join",
+    "toUpper",
+    "toLower",
+    "trim",
+    "startsWith",
+    "endsWith",
+    
+    /* 数学函数 (9) */
+    "abs",
+    "floor",
+    "ceil",
+    "round",
+    "sqrt",
+    "pow",
+    "min",
+    "max",
+    "random",
+    "randomInt",
+    
+    /* 数组操作 (16) */
+    "push",
+    "pop",
+    "shift",
+    "unshift",
+    "slice",
+    "concat",
+    "reverse",
+    "sort",
+    "filter",
+    "map",
+    "reduce",
+    "find",
+    "includes",
+    
+    /* 对象操作 (7) */
+    "keys",
+    "values",
+    "entries",
+    "hasKey",
+    "merge",
+    "clone",
+    "deepClone",
+    
+    /* 类型转换和检查 (11) */
+    "toNum",
+    "toStr",
+    "toBl",
+    "typeOf",
+    "isNum",
+    "isStr",
+    "isBl",
+    "isArr",
+    "isObj",
+    "isNull",
+    "isUndef",
+    
+    /* 时间函数 (3) */
+    "now",
+    "sleep",
+    "dateStr",
+    
+    /* 实用工具 (3) */
+    "assert",
+    "exit",
+    "range",
+    
+    NULL  /* 结束标记 */
 };
 
 static int is_builtin_func_name(const char* name) {

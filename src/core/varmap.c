@@ -69,15 +69,50 @@ static int is_reserved_identifier(const char* name, size_t len) {
 }
 
 /* 内置标识符（如内置函数）——不会被加入映射表，也不会替换 */
+/* 
+ * FLYUX 内置函数完整列表 (64个)
+ * 与 lexer.c 中的 BUILTIN_FUNC_TABLE 保持一致
+ * 最后更新: 2025-11-17
+ */
+static const char* BUILTIN_IDENTIFIERS[] = {
+    /* 输入输出 (4) */
+    "print", "input", "readFile", "writeFile",
+    
+    /* 字符串操作 (11) */
+    "length", "substr", "indexOf", "replace", "split", "join",
+    "toUpper", "toLower", "trim", "startsWith", "endsWith",
+    
+    /* 数学函数 (10) */
+    "abs", "floor", "ceil", "round", "sqrt", "pow",
+    "min", "max", "random", "randomInt",
+    
+    /* 数组操作 (13) */
+    "push", "pop", "shift", "unshift", "slice", "concat",
+    "reverse", "sort", "filter", "map", "reduce", "find", "includes",
+    
+    /* 对象操作 (7) */
+    "keys", "values", "entries", "hasKey", "merge", "clone", "deepClone",
+    
+    /* 类型转换和检查 (11) */
+    "toNum", "toStr", "toBl", "typeOf",
+    "isNum", "isStr", "isBl", "isArr", "isObj", "isNull", "isUndef",
+    
+    /* 时间函数 (3) */
+    "now", "sleep", "dateStr",
+    
+    /* 实用工具 (3) */
+    "assert", "exit", "range",
+    
+    NULL  /* 结束标记 */
+};
+
 static int is_builtin_identifier(const char* name, size_t len) {
-    /* 内置函数 print */
-    if (len == 5 &&
-        name[0]=='p' && name[1]=='r' && name[2]=='i' && name[3]=='n' && name[4]=='t') {
-        return 1;
+    for (int i = 0; BUILTIN_IDENTIFIERS[i] != NULL; i++) {
+        size_t builtin_len = strlen(BUILTIN_IDENTIFIERS[i]);
+        if (len == builtin_len && memcmp(name, BUILTIN_IDENTIFIERS[i], len) == 0) {
+            return 1;
+        }
     }
-
-    /* 如需扩展更多内置，在这里追加即可 */
-
     return 0;
 }
 
