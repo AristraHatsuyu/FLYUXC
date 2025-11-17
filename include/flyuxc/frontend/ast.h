@@ -168,8 +168,9 @@ typedef struct ASTBinaryExpr {
 
 /* 一元表达式: !a, -b, +c */
 typedef struct ASTUnaryExpr {
-    TokenKind op;            /* 运算符类型（TK_BANG, TK_MINUS, TK_PLUS） */
+    TokenKind op;            /* 运算符类型（TK_BANG, TK_MINUS, TK_PLUS, TK_PLUS_PLUS, TK_MINUS_MINUS） */
     ASTNode *operand;
+    bool is_postfix;         /* true: i++, false: ++i */
 } ASTUnaryExpr;
 
 /* 函数调用: f(a, b, c) */
@@ -355,5 +356,22 @@ ASTNode *ast_identifier_create(char *name, SourceLocation loc);
 /* 创建类型标注节点 */
 ASTNode *ast_type_annotation_create(TokenKind type_token, bool is_const, 
                                      SourceLocation loc);
+
+/* 创建一元表达式节点 */
+ASTNode *ast_unary_expr_create(TokenKind op, ASTNode *operand, SourceLocation loc);
+
+/* 创建成员访问表达式节点 */
+ASTNode *ast_member_expr_create(ASTNode *object, char *property, bool is_computed,
+                                 SourceLocation loc);
+
+/* 创建索引访问表达式节点 */
+ASTNode *ast_index_expr_create(ASTNode *object, ASTNode *index, SourceLocation loc);
+
+/* 创建循环语句节点 */
+ASTNode *ast_loop_stmt_create(LoopType type, ASTNode *body, SourceLocation loc);
+
+/* 创建for循环节点 */
+ASTNode *ast_for_loop_create(ASTNode *init, ASTNode *cond, ASTNode *update, 
+                              ASTNode *body, SourceLocation loc);
 
 #endif /* FLYUXC_AST_H */

@@ -35,12 +35,14 @@ typedef enum TokenKind {
     TK_FUNC_TYPE_END,   /* >=  （当前只用于函数类型结尾） */
 
     /* 算术运算符 */
-    TK_PLUS,    /* + */
-    TK_MINUS,   /* - */
-    TK_STAR,    /* * */
-    TK_POWER,   /* ** */
-    TK_SLASH,   /* / */
-    TK_PERCENT, /* % */
+    TK_PLUS,      /* + */
+    TK_MINUS,     /* - */
+    TK_PLUS_PLUS, /* ++ */
+    TK_MINUS_MINUS, /* -- */
+    TK_STAR,      /* * */
+    TK_POWER,     /* ** */
+    TK_SLASH,     /* / */
+    TK_PERCENT,   /* % */
 
     /* 比较、布尔运算符 */
     TK_LT,        /* < */

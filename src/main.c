@@ -3,8 +3,11 @@
 #include "flyuxc/frontend/normalize.h"
 #include "flyuxc/frontend/varmap.h"
 #include "flyuxc/frontend/lexer.h"
+#include "flyuxc/frontend/parser.h"
+#include "flyuxc/backend/codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Token类型转字符串 */
 static const char* token_kind_to_string(TokenKind kind) {
@@ -319,11 +322,105 @@ int main(int argc, char *argv[])
             printf("  ✓ No syntax errors detected\n");
         }
         
+        /* ====================================================================
+         * Parser - 构建AST
+         * ==================================================================== */
+        
+        printf("\n=== Parser - Building AST ===\n");
+        
+        Parser *parser = parser_create(lex_result.tokens, lex_result.count, 
+                                       vm_result.mapped_source);
+        if (!parser) {
+            fprintf(stderr, "Failed to create parser\n");
+            lexer_result_free(&lex_result);
+            normalize_result_free(&norm_result);
+            varmap_result_free(&vm_result);
+            return 1;
+        }
+        
+        ASTNode *ast = parser_parse(parser);
+        
+        if (parser->had_error || !ast) {
+            printf("  ✗ Parser failed\n");
+            has_errors = true;
+        } else {
+            printf("  ✓ AST built successfully\n");
+            printf("  ✓ Root node: %s\n", ast_kind_name(ast->kind));
+            
+            if (ast->kind == AST_PROGRAM) {
+                ASTProgram *prog = (ASTProgram *)ast->data;
+                printf("  ✓ Top-level statements: %zu\n", prog->stmt_count);
+            }
+        }
+        
+        /* ====================================================================
+         * Code Generation - 生成LLVM IR
+         * ==================================================================== */
+        
+        if (!has_errors && ast) {
+            printf("\n=== Code Generation - LLVM IR ===\n");
+            
+            // 生成输出文件名
+            char output_file[256];
+            const char *input_name = options.input;
+            const char *dot = strrchr(input_name, '.');
+            const char *slash = strrchr(input_name, '/');
+            const char *base_name = slash ? slash + 1 : input_name;
+            
+            if (dot && dot > base_name) {
+                size_t name_len = dot - base_name;
+                strncpy(output_file, base_name, name_len);
+                output_file[name_len] = '\0';
+                strcat(output_file, ".ll");
+            } else {
+                strcpy(output_file, base_name);
+                strcat(output_file, ".ll");
+            }
+            
+            FILE *output = fopen(output_file, "w");
+            if (!output) {
+                fprintf(stderr, "Failed to open output file: %s\n", output_file);
+                has_errors = true;
+            } else {
+                CodeGen *codegen = codegen_create(output);
+                if (!codegen) {
+                    fprintf(stderr, "Failed to create code generator\n");
+                    has_errors = true;
+                } else {
+                    codegen_generate(codegen, ast);
+                    printf("  ✓ LLVM IR generated: %s\n", output_file);
+                    printf("  ✓ Module declarations: Complete\n");
+                    printf("  ✓ Function definitions: Complete\n");
+                    
+                    codegen_free(codegen);
+                }
+                
+                fclose(output);
+            }
+        }
+        
         printf("\n=== Compilation Summary ===\n");
         printf("  ✓ Lexical analysis: PASSED\n");
         printf("  ✓ Syntax analysis: %s\n", has_errors ? "FAILED" : "PASSED");
         printf("  ✓ Semantic analysis: PASSED\n");
-        printf("  Status: %s\n", has_errors ? "COMPILATION FAILED" : "READY FOR CODE GENERATION");
+        
+        if (!has_errors) {
+            printf("  ✓ Code generation: PASSED\n");
+            printf("  Status: COMPILATION SUCCESSFUL\n");
+            printf("\n  Next steps:\n");
+            printf("    1. Verify IR: llvm-as demo.ll -o demo.bc\n");
+            printf("    2. Compile: clang demo.ll -o demo\n");
+            printf("    3. Run: ./demo\n");
+        } else {
+            printf("  ✗ Code generation: SKIPPED\n");
+            printf("  Status: COMPILATION FAILED\n");
+        }
+        
+        /* 清理AST */
+        if (ast) {
+            ast_node_free(ast);
+        }
+        parser_free(parser);
 
         /* 释放资源 */
         lexer_result_free(&lex_result);

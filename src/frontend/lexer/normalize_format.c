@@ -106,6 +106,8 @@ static OpInfo read_op_left(const char* s, int pos_before){
         if(s[i-1]=='>'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_CMP; op.exists=1; return op; }
         if(s[i-1]=='*'&&s[i]=='*'){ op.start=i-1; op.end=i; op.prec=PREC_POW; op.exists=1; return op; }
         if(s[i-1]==':'&&s[i]=='='){ op.start=i-1; op.end=i; op.prec=PREC_ASSIGN; op.exists=1; return op; }
+        if(s[i-1]=='+'&&s[i]=='+'){ op.start=i-1; op.end=i; op.prec=PREC_POSTFIX; op.exists=1; return op; }
+        if(s[i-1]=='-'&&s[i]=='-'){ op.start=i-1; op.end=i; op.prec=PREC_POSTFIX; op.exists=1; return op; }
     }
 
     switch (s[i]){
@@ -142,6 +144,8 @@ static OpInfo read_op_right(const char* s, int pos_after){
         if(s[i]=='>'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_CMP; op.exists=1; return op; }
         if(s[i]=='*'&&s[i+1]=='*'){ op.start=i; op.end=i+1; op.prec=PREC_POW; op.exists=1; return op; }
         if(s[i]==':'&&s[i+1]=='='){ op.start=i; op.end=i+1; op.prec=PREC_ASSIGN; op.exists=1; return op; }
+        if(s[i]=='+'&&s[i+1]=='+'){ op.start=i; op.end=i+1; op.prec=PREC_POSTFIX; op.exists=1; return op; }
+        if(s[i]=='-'&&s[i+1]=='-'){ op.start=i; op.end=i+1; op.prec=PREC_POSTFIX; op.exists=1; return op; }
     }
 
     switch (s[i]){
@@ -197,6 +201,8 @@ static int min_top_level_binary_prec(const char* s){
             else if(s[i]=='>'&&s[i+1]=='=') p=PREC_CMP;
             else if(s[i]=='*'&&s[i+1]=='*') p=PREC_POW;
             else if(s[i]==':'&&s[i+1]=='=') p=PREC_ASSIGN;
+            else if(s[i]=='+'&&s[i+1]=='+') p=PREC_POSTFIX;
+            else if(s[i]=='-'&&s[i+1]=='-') p=PREC_POSTFIX;
             if (p>=0){ if(p!=PREC_UNARY){ if(p<minp) minp=p; } i++; last_operand=0; continue; }
         }
 

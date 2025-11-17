@@ -1,5 +1,5 @@
-#include "flyuxc/frontend/lexer.h"
-#include "flyuxc/frontend/normalize.h"
+#include "flyuxc/lexer.h"
+#include "flyuxc/normalize.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -191,8 +191,8 @@ static const char* token_kind_name(TokenKind kind) {
         case TK_FUNC_TYPE_END:  return "FUNC_TYPE_END";
 
         case TK_PLUS:           return "PLUS";
-        case TK_MINUS:          return "MINUS";
         case TK_PLUS_PLUS:      return "PLUS_PLUS";
+        case TK_MINUS:          return "MINUS";
         case TK_MINUS_MINUS:    return "MINUS_MINUS";
         case TK_STAR:           return "STAR";
         case TK_POWER:          return "POWER";
@@ -386,12 +386,22 @@ LexerResult lexer_tokenize(const char* source,
     size_t cap = 0;
     Token* tokens = NULL;
 
+    fprintf(stderr, "LEXER_START: source='%s', len=%zu\n", source, len);
+
     size_t i = 0;
     int line = 1;
     int col  = 1;
 
     while (i < len) {
         char c = source[i];
+        
+        if (i < 20) {  /* 只打印前20个字符 */
+            fprintf(stderr, "  i=%zu c='%c' (0x%02x)\n", i, c, (unsigned char)c);
+        }
+        
+        if (c == '+') {
+            fprintf(stderr, "DEBUG: In main loop, found '+' at i=%d\n", i);
+        }
 
         /* 跳过空白 */
         if (is_space_c((unsigned char)c)) {
@@ -764,10 +774,12 @@ LexerResult lexer_tokenize(const char* source,
 
         /* + / ++ */
         if (c == '+') {
+            fprintf(stderr, "DEBUG: Found '+' at i=%d, next char='%c' (0x%02x)\n", 
+                    i, (i+1<len) ? source[i+1] : '?', (i+1<len) ? (unsigned char)source[i+1] : 0);
             if (i + 1 < len && source[i + 1] == '+') {
+                fprintf(stderr, "DEBUG: Emitting PLUS_PLUS\n");
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_PLUS_PLUS, source + i, 2, start_line, start_col,
-                                norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_PLUS_PLUS, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -775,9 +787,9 @@ LexerResult lexer_tokenize(const char* source,
                 i += 2;
                 col += 2;
             } else {
+                fprintf(stderr, "DEBUG: Emitting PLUS\n");
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_PLUS, source + i, 1, start_line, start_col,
-                                norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_PLUS, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -792,8 +804,7 @@ LexerResult lexer_tokenize(const char* source,
         if (c == '-') {
             if (i + 1 < len && source[i + 1] == '-') {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_MINUS_MINUS, source + i, 2, start_line, start_col,
-                                norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_MINUS_MINUS, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -802,8 +813,7 @@ LexerResult lexer_tokenize(const char* source,
                 col += 2;
             } else {
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_MINUS, source + i, 1, start_line, start_col,
-                                norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_MINUS, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;
@@ -814,7 +824,7 @@ LexerResult lexer_tokenize(const char* source,
             continue;
         }
 
-        /* + - * / % ; , () {} [] */
+        /* * / % ; , () {} [] */
         switch (c) {
             case '*':
                 /* * / ** */
