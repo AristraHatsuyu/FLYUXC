@@ -284,7 +284,7 @@ static ASTNode *parse_postfix(Parser *p) {
             }
             expr = ast_member_expr_create(expr, strdup(prop_token->lexeme), false, expr->loc);
         }
-        // 链式调用: obj.>method(args)
+                // 链式调用: obj.>method(args) 或 obj.>property
         else if (match(p, TK_DOT_CHAIN)) {
             Token *method_token = current_token(p);
             if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC)) {
@@ -293,12 +293,13 @@ static ASTNode *parse_postfix(Parser *p) {
             }
             char *method_name = strdup(method_token->lexeme);
             
-            // 检查是否有参数
-            ASTNode **args = NULL;
-            size_t arg_count = 0;
-            
+            // 检查是否有参数（有括号才是方法调用）
             if (match(p, TK_L_PAREN)) {
+                // 有括号 - 方法调用: obj.>method(args)
+                ASTNode **args = NULL;
+                size_t arg_count = 0;
                 size_t arg_capacity = 0;
+                
                 if (!check(p, TK_R_PAREN)) {
                     do {
                         if (arg_count >= arg_capacity) {
@@ -312,20 +313,22 @@ static ASTNode *parse_postfix(Parser *p) {
                 if (!match(p, TK_R_PAREN)) {
                     error_at(p, current_token(p), "Expected ')' after arguments");
                 }
+                
+                // 创建方法调用: method(obj, args...)
+                size_t total_args = arg_count + 1;
+                ASTNode **all_args = (ASTNode **)malloc(total_args * sizeof(ASTNode *));
+                all_args[0] = expr;  // 第一个参数是对象本身
+                for (size_t i = 0; i < arg_count; i++) {
+                    all_args[i + 1] = args[i];
+                }
+                if (args) free(args);
+                
+                ASTNode *callee = ast_identifier_create(method_name, expr->loc);
+                expr = ast_call_expr_create(callee, all_args, total_args, expr->loc);
+            } else {
+                // 无括号 - 属性访问: obj.>property (等同于 obj.property)
+                expr = ast_member_expr_create(expr, method_name, false, expr->loc);
             }
-            
-            // 创建链式调用节点 - 简化为方法调用
-            // obj.>method(args) => method(obj, args...)
-            size_t total_args = arg_count + 1;
-            ASTNode **all_args = (ASTNode **)malloc(total_args * sizeof(ASTNode *));
-            all_args[0] = expr;  // 第一个参数是对象本身
-            for (size_t i = 0; i < arg_count; i++) {
-                all_args[i + 1] = args[i];
-            }
-            if (args) free(args);
-            
-            ASTNode *callee = ast_identifier_create(method_name, expr->loc);
-            expr = ast_call_expr_create(callee, all_args, total_args, expr->loc);
         }
         // 后缀 ++ 和 --
         else if (match(p, TK_PLUS_PLUS) || match(p, TK_MINUS_MINUS)) {
@@ -719,13 +722,32 @@ static ASTNode *parse_statement(Parser *p) {
             return parse_var_declaration(p);
         }
         
-        // 赋值: name = expr
+        // 赋值: name = expr 或 arr[i] = expr
         if (next->kind == TK_ASSIGN) {
             advance(p); // 跳过标识符
             advance(p); // 跳过 =
             ASTNode *target = ast_identifier_create((char *)name_token->lexeme, token_to_loc(name_token));
             ASTNode *value = parse_expression(p);
             return ast_assign_stmt_create(target, value, token_to_loc(name_token));
+        }
+        
+        // 检查是否是索引赋值: arr[i] = expr 或成员赋值: obj.prop = expr
+        if (next->kind == TK_L_BRACKET || next->kind == TK_DOT) {
+            // 解析可能的后缀表达式（arr[i] 或 obj.prop 等）
+            ASTNode *target = parse_postfix(p);
+            
+            // 检查后面是否跟着 =
+            if (match(p, TK_ASSIGN)) {
+                ASTNode *value = parse_expression(p);
+                return ast_assign_stmt_create(target, value, target->loc);
+            }
+            
+            // 如果不是赋值，则作为表达式语句
+            ASTNode *node = ast_node_create(AST_EXPR_STMT, target->loc);
+            ASTExprStmt *stmt = (ASTExprStmt *)malloc(sizeof(ASTExprStmt));
+            stmt->expr = target;
+            node->data = stmt;
+            return node;
         }
         
         // 可能是函数调用等表达式语句

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 
 /**
  * 格式规范化模块
@@ -35,7 +36,7 @@ static char* dup_range(const char* s, int l, int r_incl){
 /* ---------------- 括号/字符串步进 ---------------- */
 
 static int find_matching_paren(const char* s, int i){
-    int n=(int)strlen(s), in_str=0, esc=0, pd=0;
+    int n=(int)strlen(s), in_str=0, esc=0, pd=0, bd=0, cd=0;
     for (int k=i; k<n; k++){
         char c=s[k];
         if (esc){ esc=0; continue; }
@@ -44,8 +45,13 @@ static int find_matching_paren(const char* s, int i){
         if ((c=='"'||c=='\'') &&  in_str){ in_str=0; continue; }
         if (in_str) continue;
 
+        // 追踪所有类型的括号深度
         if (c=='(') pd++;
-        else if (c==')'){ pd--; if (pd==0) return k; }
+        else if (c==')'){ pd--; if (pd==0 && bd==0 && cd==0) return k; }
+        else if (c=='[') bd++;
+        else if (c==']') bd--;
+        else if (c=='{') cd++;
+        else if (c=='}') cd--;
     }
     return -1;
 }
