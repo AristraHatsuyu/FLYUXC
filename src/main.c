@@ -5,6 +5,7 @@
 #include "flyuxc/frontend/lexer.h"
 #include "flyuxc/frontend/parser.h"
 #include "flyuxc/backend/codegen.h"
+#include "flyuxc/llvm_compiler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -396,6 +397,36 @@ int main(int argc, char *argv[])
                 }
                 
                 fclose(output);
+                
+                /* LLVM compilation to executable */
+                if (!has_errors) {
+                    printf("\n=== LLVM Compilation ===\n");
+                    printf("  Compiling to executable...\n");
+                    
+                    /* Determine output executable name */
+                    char executable_name[256];
+                    if (dot && dot > base_name) {
+                        size_t name_len = dot - base_name;
+                        strncpy(executable_name, base_name, name_len);
+                        executable_name[name_len] = '\0';
+                    } else {
+                        strcpy(executable_name, base_name);
+                    }
+                    
+                    /* Call LLVM compiler with embedded runtime (pass NULL for runtime_obj) */
+                    int opt_level = 1;
+                    printf("  ✓ Using embedded runtime library\n");
+                    
+                    if (llvm_compile_to_executable(output_file, NULL, executable_name, opt_level) != 0) {
+                        fprintf(stderr, "LLVM compilation failed: %s\n", llvm_get_last_error());
+                        has_errors = true;
+                    } else {
+                        printf("  ✓ Optimization: O%d\n", opt_level);
+                        printf("  ✓ Object file generated\n");
+                        printf("  ✓ Linking completed\n");
+                        printf("  ✓ Executable generated: %s\n", executable_name);
+                    }
+                }
             }
         }
         
@@ -406,14 +437,11 @@ int main(int argc, char *argv[])
         
         if (!has_errors) {
             printf("  ✓ Code generation: PASSED\n");
-            printf("  Status: COMPILATION SUCCESSFUL\n");
-            printf("\n  Next steps:\n");
-            printf("    1. Verify IR: llvm-as demo.ll -o demo.bc\n");
-            printf("    2. Compile: clang demo.ll -o demo\n");
-            printf("    3. Run: ./demo\n");
+            printf("  ✓ LLVM compilation: PASSED\n");
+            printf("  Status: BUILD SUCCESSFUL\n");
         } else {
-            printf("  ✗ Code generation: SKIPPED\n");
-            printf("  Status: COMPILATION FAILED\n");
+            printf("  ✗ Build: FAILED\n");
+            printf("  Status: BUILD FAILED\n");
         }
         
         /* 清理AST */
