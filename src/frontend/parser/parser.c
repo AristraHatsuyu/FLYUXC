@@ -1212,6 +1212,13 @@ static ASTNode *parse_statement(Parser *p) {
         // 可能是函数调用等表达式语句
         ASTNode *expr = parse_expression(p);
         if (expr) {
+            // 检查是否有 := 跟随（无效的左值赋值）
+            if (check(p, TK_DEFINE)) {
+                error_at(p, current_token(p), "Invalid left-hand side in variable declaration");
+                advance(p); // 跳过 :=
+                return NULL;
+            }
+            
             ASTNode *node = ast_node_create(AST_EXPR_STMT, expr->loc);
             ASTExprStmt *stmt = (ASTExprStmt *)malloc(sizeof(ASTExprStmt));
             stmt->expr = expr;

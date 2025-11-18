@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 /**
  * 外部模块声明
@@ -11,6 +12,170 @@ extern char* normalize_remove_comments(const char* input);
 extern Statement* normalize_split_statements(const char* input, int* stmt_count);
 extern void normalize_filter_expressions(Statement* statements, int* count);
 extern char* normalize_statement_content(const char* stmt);
+
+/**
+ * 检查字符是否可以作为标识符的开始
+ * 允许：字母、下划线、中文、emoji等非ASCII字符
+ */
+static int is_valid_identifier_start(const char* str, int* bytes_consumed) {
+    unsigned char c = (unsigned char)str[0];
+    
+    // ASCII字母或下划线
+    if (isalpha(c) || c == '_') {
+        *bytes_consumed = 1;
+        return 1;
+    }
+    
+    // 数字不能作为开始
+    if (isdigit(c)) {
+        *bytes_consumed = 1;
+        return 0;
+    }
+    
+    // UTF-8多字节字符（中文、emoji等）
+    if (c >= 0x80) {
+        // 简单检查：所有非ASCII字符都允许
+        // 计算UTF-8字符的字节数
+        if ((c & 0xE0) == 0xC0) {
+            *bytes_consumed = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            *bytes_consumed = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            *bytes_consumed = 4;
+        } else {
+            *bytes_consumed = 1;
+        }
+        return 1;
+    }
+    
+    // 其他字符不允许
+    *bytes_consumed = 1;
+    return 0;
+}
+
+/**
+ * 验证变量声明：检查 := 左侧是否为有效标识符
+ * 如果发现无效标识符（如数字、字符串字面量等），返回错误信息
+ */
+static char* validate_variable_declarations(const char* source) {
+    if (!source) return NULL;
+    
+    const char* p = source;
+    int line = 1;
+    int column = 1;
+    
+    while (*p) {
+        // 跳过空白
+        while (*p && isspace(*p)) {
+            if (*p == '\n') {
+                line++;
+                column = 1;
+            } else {
+                column++;
+            }
+            p++;
+        }
+        
+        if (!*p) break;
+        
+        // 检查是否遇到 :=
+        if (p[0] == ':' && p[1] == '=') {
+            // 回溯找到 := 左侧的token
+            const char* left_end = p - 1;
+            
+            // 跳过 := 左侧的空白
+            while (left_end >= source && isspace(*left_end)) {
+                left_end--;
+            }
+            
+            if (left_end < source) {
+                // := 前面什么都没有
+                static char error_buf[256];
+                snprintf(error_buf, sizeof(error_buf), 
+                         "Line %d: Missing identifier before ':='", line);
+                return strdup(error_buf);
+            }
+            
+            // 找到左侧token的开始
+            const char* left_start = left_end;
+            
+            // 检查最后一个字符，判断token类型
+            if (*left_end == ')' || *left_end == ']' || *left_end == '}') {
+                // 可能是 arr[i] := x 或 obj.prop := x，这是合法的
+                // 暂时跳过，让parser处理更复杂的情况
+                p += 2;
+                column += 2;
+                continue;
+            }
+            
+            if (*left_end == '"' || *left_end == '\'') {
+                // 字符串字面量
+                static char error_buf[256];
+                snprintf(error_buf, sizeof(error_buf), 
+                         "Line %d: String literal cannot be used as variable name", line);
+                return strdup(error_buf);
+            }
+            
+            // 向前扫描找到token开始
+            while (left_start > source) {
+                unsigned char c = (unsigned char)*(left_start - 1);
+                if (isalnum(c) || c == '_' || c >= 0x80 || c == '.') {
+                    left_start--;
+                } else {
+                    break;
+                }
+            }
+            
+            // 检查token开始字符
+            int bytes_consumed = 0;
+            if (!is_valid_identifier_start(left_start, &bytes_consumed)) {
+                // 无效的标识符开始
+                static char error_buf[256];
+                
+                // 判断是什么类型的无效token
+                if (isdigit((unsigned char)*left_start)) {
+                    snprintf(error_buf, sizeof(error_buf), 
+                             "Line %d: Number literal cannot be used as variable name", line);
+                } else if (*left_start == '"' || *left_start == '\'') {
+                    snprintf(error_buf, sizeof(error_buf), 
+                             "Line %d: String literal cannot be used as variable name", line);
+                } else if (strncmp(left_start, "true", 4) == 0 || strncmp(left_start, "false", 5) == 0) {
+                    snprintf(error_buf, sizeof(error_buf), 
+                             "Line %d: Boolean literal cannot be used as variable name", line);
+                } else {
+                    snprintf(error_buf, sizeof(error_buf), 
+                             "Line %d: Invalid character '%c' at start of identifier", line, *left_start);
+                }
+                return strdup(error_buf);
+            }
+            
+            // 检查是否是布尔字面量
+            int token_len = left_end - left_start + 1;
+            if ((token_len == 4 && strncmp(left_start, "true", 4) == 0) ||
+                (token_len == 5 && strncmp(left_start, "false", 5) == 0)) {
+                static char error_buf[256];
+                snprintf(error_buf, sizeof(error_buf), 
+                         "Line %d: Boolean literal cannot be used as variable name", line);
+                return strdup(error_buf);
+            }
+            
+            p += 2;
+            column += 2;
+            continue;
+        }
+        
+        // 跳过其他字符
+        if (*p == '\n') {
+            line++;
+            column = 1;
+        } else {
+            column++;
+        }
+        p++;
+    }
+    
+    return NULL;  // 验证通过
+}
 
 /**
  * 释放语句数组
@@ -229,6 +394,15 @@ NormalizeResult flyux_normalize(const char* source_code) {
     if (!no_comments) {
         result.error_msg = "Failed to remove comments";
         result.error_code = -1;
+        return result;
+    }
+    
+    // Step 1.3: 验证变量声明（检查 := 左侧是否为有效标识符）
+    char* validation_error = validate_variable_declarations(no_comments);
+    if (validation_error) {
+        result.error_msg = validation_error;
+        result.error_code = -1;
+        free(no_comments);
         return result;
     }
     
