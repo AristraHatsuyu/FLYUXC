@@ -269,9 +269,21 @@ static int emit_token(Token** tokens,
         norm_source_map && norm_source_map_size > 0) {
         // 第1级：mapped_offset → normalized_offset
         size_t norm_offset = offset_map[mapped_offset];
+        
         // 第2级：normalized_offset → original position
         if (norm_offset < norm_source_map_size) {
             const SourceLocation* loc = &norm_source_map[norm_offset];
+            
+            // 如果映射到合成字符，向前搜索最近的非合成字符
+            if (loc->is_synthetic && norm_offset > 0) {
+                for (size_t i = norm_offset; i > 0; i--) {
+                    if (!norm_source_map[i - 1].is_synthetic) {
+                        loc = &norm_source_map[i - 1];
+                        break;
+                    }
+                }
+            }
+            
             if (loc->is_synthetic) {
                 // 合成字符，标记为0
                 t->orig_line = 0;

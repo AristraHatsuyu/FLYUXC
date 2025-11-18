@@ -7,6 +7,7 @@
 typedef struct {
     bool help;           // -h, --help
     bool version;        // -v, --version
+    bool emit_ir;        // -IR, emit LLVM IR file
     const char* output;  // -o, --output
     const char* input;   // 输入文件
 } CliOptions;

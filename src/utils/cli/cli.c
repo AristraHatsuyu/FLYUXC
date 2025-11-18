@@ -10,6 +10,7 @@ void print_help(void) {
     printf("  -h, --help            Display this help message\n");
     printf("  -v, --version         Display compiler version\n");
     printf("  -o, --output <file>   Specify output file\n");
+    printf("  -IR                   Emit LLVM IR (.ll) file\n");
 }
 
 void print_version(void) {
@@ -20,6 +21,7 @@ CliOptions parse_arguments(int argc, char *argv[]) {
     CliOptions options = {
         .help = false,
         .version = false,
+        .emit_ir = false,
         .output = NULL,
         .input = NULL
     };
@@ -30,6 +32,9 @@ CliOptions parse_arguments(int argc, char *argv[]) {
         }
         else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
             options.version = true;
+        }
+        else if (strcmp(argv[i], "-IR") == 0) {
+            options.emit_ir = true;
         }
         else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) {
             if (i + 1 < argc) {

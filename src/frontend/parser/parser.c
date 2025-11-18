@@ -46,10 +46,302 @@ static Token *advance(Parser *p) {
     return &p->tokens[p->current - 1];
 }
 
+static Token *previous(Parser *p) {
+    if (p->current > 0) {
+        return &p->tokens[p->current - 1];
+    }
+    return &p->tokens[0];
+}
+
 static void error_at(Parser *p, Token *token, const char *message) {
-    fprintf(stderr, "Error at line %d, column %d: %s\n", 
-            token->line, token->column, message);
+    // 只使用原始源码位置
+    int display_line = token->orig_line;
+    int display_column = token->orig_column;
+    
+    // 如果没有原始位置信息（合成token），使用映射后位置
+    if (display_line == 0) {
+        display_line = token->line;
+        display_column = token->column;
+    }
+    
+    // 如果长度为1，只显示单个位置；否则显示范围
+    if (token->orig_length <= 1) {
+        fprintf(stderr, "\033[31mError\033[0m at line %d, column %d: %s\n", 
+                display_line, display_column, message);
+    } else {
+        fprintf(stderr, "\033[31mError\033[0m at line %d, column %d-%d: %s\n", 
+                display_line, display_column, display_column + token->orig_length - 1, message);
+    }
+    
+    // 如果有原始源码，显示错误上下文
+    if (p->original_source && display_line > 0) {
+        const char *src = p->original_source;
+        int current_line = 1;
+        const char *line_start = src;
+        const char *line_end = NULL;
+        
+        // 找到错误所在行
+        while (*src && current_line < display_line) {
+            if (*src == '\n') {
+                current_line++;
+                line_start = src + 1;
+            }
+            src++;
+        }
+        
+        // 找到行尾
+        line_end = line_start;
+        while (*line_end && *line_end != '\n' && *line_end != '\r') {
+            line_end++;
+        }
+        
+        // 显示行号和源代码行，但用红色高亮错误区间
+        fprintf(stderr, "\033[36m%5d |\033[0m ", display_line);
+        
+        // 输出源代码，高亮错误区间
+        const char *ptr = line_start;
+        int byte_pos = 1;
+        int error_start_byte = display_column;
+        int error_end_byte = display_column + token->orig_length - 1;
+        
+        while (ptr < line_end) {
+            // 判断当前位置是否在错误区间内
+            if (byte_pos >= error_start_byte && byte_pos <= error_end_byte) {
+                if (byte_pos == error_start_byte) {
+                    fprintf(stderr, "\033[31m");  // 开始红色高亮
+                }
+            }
+            
+            fputc(*ptr, stderr);
+            ptr++;
+            byte_pos++;
+            
+            // 判断是否需要结束红色高亮
+            if (byte_pos > error_end_byte && byte_pos - 1 <= error_end_byte) {
+                fprintf(stderr, "\033[0m");  // 结束红色高亮
+            }
+        }
+        
+        // 如果高亮区间在行尾，确保关闭颜色
+        if (error_end_byte >= byte_pos - 1) {
+            fprintf(stderr, "\033[0m");
+        }
+        fprintf(stderr, "\n");
+        
+        // 显示箭头指示器
+        fprintf(stderr, "      \033[36m|\033[0m ");
+        
+        // 计算箭头位置和长度（考虑 UTF-8 多字节字符）
+        ptr = line_start;
+        int visual_column = 1;
+        byte_pos = 1;
+        
+        // 找到错误起始的视觉列
+        while (ptr < line_end && byte_pos < display_column) {
+            unsigned char c = *ptr;
+            if (c < 0x80) {
+                visual_column++;
+                ptr++;
+                byte_pos++;
+            } else if ((c & 0xE0) == 0xC0) {
+                visual_column++;
+                ptr += 2;
+                byte_pos++;
+            } else if ((c & 0xF0) == 0xE0) {
+                visual_column++;
+                ptr += 3;
+                byte_pos++;
+            } else if ((c & 0xF8) == 0xF0) {
+                visual_column += 2; // Emoji 通常占两个显示宽度
+                ptr += 4;
+                byte_pos++;
+            } else {
+                ptr++;
+                byte_pos++;
+            }
+        }
+        
+        // 输出空格到错误起始位置
+        for (int i = 1; i < visual_column; i++) {
+            fprintf(stderr, " ");
+        }
+        
+        // 计算错误区间的视觉长度
+        int error_visual_length = 0;
+        int remaining_bytes = token->orig_length;
+        while (ptr < line_end && remaining_bytes > 0) {
+            unsigned char c = *ptr;
+            if (c < 0x80) {
+                error_visual_length++;
+                ptr++;
+                remaining_bytes--;
+            } else if ((c & 0xE0) == 0xC0) {
+                error_visual_length++;
+                ptr += 2;
+                remaining_bytes--;
+            } else if ((c & 0xF0) == 0xE0) {
+                error_visual_length++;
+                ptr += 3;
+                remaining_bytes--;
+            } else if ((c & 0xF8) == 0xF0) {
+                error_visual_length += 2; // Emoji 占两个显示宽度
+                ptr += 4;
+                remaining_bytes--;
+            } else {
+                ptr++;
+                remaining_bytes--;
+            }
+        }
+        
+        // 显示红色波浪线
+        fprintf(stderr, "\033[31m");
+        if (error_visual_length > 0) {
+            for (int i = 0; i < error_visual_length && i < 50; i++) {
+                fprintf(stderr, "^");
+            }
+        } else {
+            fprintf(stderr, "^");
+        }
+        fprintf(stderr, "\033[0m\n");
+    }
+    
     p->had_error = true;
+    p->error_count++;
+}
+
+// 警告函数：类似 error_at 但用黄色显示
+static void warning_at(Parser *p, Token *token, const char *message) {
+    // 只使用原始源码位置
+    int display_line = token->orig_line;
+    int display_column = token->orig_column;
+    
+    // 如果没有原始位置信息（合成token），使用映射后位置
+    if (display_line == 0) {
+        display_line = token->line;
+        display_column = token->column;
+    }
+    
+    // 如果长度为1，只显示单个位置；否则显示范围
+    if (token->orig_length <= 1) {
+        fprintf(stderr, "\033[33mWarning\033[0m at line %d, column %d: %s\n", 
+                display_line, display_column, message);
+    } else {
+        fprintf(stderr, "\033[33mWarning\033[0m at line %d, column %d-%d: %s\n", 
+                display_line, display_column, display_column + token->orig_length - 1, message);
+    }
+    
+    // 如果有原始源码，显示警告上下文
+    if (p->original_source && display_line > 0) {
+        const char *src = p->original_source;
+        int current_line = 1;
+        const char *line_start = src;
+        const char *line_end = NULL;
+        
+        // 找到警告所在行
+        while (*src && current_line < display_line) {
+            if (*src == '\n') {
+                current_line++;
+                line_start = src + 1;
+            }
+            src++;
+        }
+        
+        // 找到行尾
+        line_end = line_start;
+        while (*line_end && *line_end != '\n' && *line_end != '\r') {
+            line_end++;
+        }
+        
+        // 显示行号和源代码行，用黄色高亮警告区间
+        fprintf(stderr, "\033[36m%5d |\033[0m ", display_line);
+        
+        // 输出源代码，高亮警告区间
+        const char *ptr = line_start;
+        int byte_pos = 1;
+        int error_start_byte = display_column;
+        int error_end_byte = display_column + token->orig_length - 1;
+        
+        while (ptr < line_end) {
+            if (byte_pos >= error_start_byte && byte_pos <= error_end_byte) {
+                if (byte_pos == error_start_byte) {
+                    fprintf(stderr, "\033[33m");  // 开始黄色高亮
+                }
+            }
+            fputc(*ptr, stderr);
+            ptr++;
+            byte_pos++;
+            
+            if (byte_pos > error_end_byte && byte_pos - 1 == error_end_byte) {
+                fprintf(stderr, "\033[0m");  // 结束高亮
+            }
+        }
+        fprintf(stderr, "\n");
+        
+        // 显示指示器
+        fprintf(stderr, "\033[36m      |\033[0m ");
+        
+        // 计算到达错误位置的视觉列数
+        ptr = line_start;
+        int visual_column = 1;
+        while (ptr < line_end && visual_column < display_column) {
+            unsigned char c = *ptr;
+            if (c < 0x80) {
+                visual_column++;
+                ptr++;
+            } else if ((c & 0xE0) == 0xC0) {
+                visual_column++;
+                ptr += 2;
+            } else if ((c & 0xF0) == 0xE0) {
+                visual_column++;
+                ptr += 3;
+            } else if ((c & 0xF8) == 0xF0) {
+                visual_column += 2;
+                ptr += 4;
+            } else {
+                ptr++;
+            }
+        }
+        
+        for (int i = 1; i < visual_column; i++) {
+            fputc(' ', stderr);
+        }
+        
+        // 计算警告区间的视觉长度
+        int error_visual_length = 0;
+        int remaining_bytes = token->orig_length;
+        while (ptr < line_end && remaining_bytes > 0) {
+            unsigned char c = *ptr;
+            if (c < 0x80) {
+                error_visual_length++;
+                ptr++;
+                remaining_bytes--;
+            } else if ((c & 0xE0) == 0xC0) {
+                error_visual_length++;
+                ptr += 2;
+                remaining_bytes -= 2;
+            } else if ((c & 0xF0) == 0xE0) {
+                error_visual_length++;
+                ptr += 3;
+                remaining_bytes -= 3;
+            } else if ((c & 0xF8) == 0xF0) {
+                error_visual_length += 2;
+                ptr += 4;
+                remaining_bytes -= 4;
+            } else {
+                ptr++;
+                remaining_bytes--;
+            }
+        }
+        
+        if (error_visual_length < 1) error_visual_length = 1;
+        
+        for (int i = 0; i < error_visual_length; i++) {
+            fputc('^', stderr);
+        }
+        fprintf(stderr, "\n");
+    }
+    
+    p->warning_count++;
 }
 
 static SourceLocation token_to_loc(Token *token) {
@@ -89,10 +381,18 @@ Parser *parser_create(Token *tokens, size_t count, char *source) {
     p->token_count = count;
     p->current = 0;
     p->had_error = false;
+    p->error_count = 0;
     p->panic_mode = false;
     p->source = source;
+    p->original_source = NULL;
     
     return p;
+}
+
+void parser_set_original_source(Parser *p, const char *original_source) {
+    if (p) {
+        p->original_source = (char *)original_source;
+    }
 }
 
 void parser_free(Parser *p) {
@@ -115,6 +415,13 @@ static ASTNode *parse_primary(Parser *p) {
         match(p, TK_PLUS_PLUS) || match(p, TK_MINUS_MINUS)) {
         Token *op_token = &p->tokens[p->current - 1];
         ASTNode *operand = parse_primary(p);
+        
+        // 如果操作数解析失败，返回 NULL 避免创建无效节点
+        if (operand == NULL) {
+            error_at(p, current_token(p), "Expected operand after unary operator");
+            return NULL;
+        }
+        
         ASTNode *node = ast_node_create(AST_UNARY_EXPR, token_to_loc(op_token));
         ASTUnaryExpr *unary = (ASTUnaryExpr *)malloc(sizeof(ASTUnaryExpr));
         unary->op = op_token->kind;
@@ -163,7 +470,12 @@ static ASTNode *parse_primary(Parser *p) {
                         args = (ASTNode **)realloc(args, arg_capacity * sizeof(ASTNode *));
                     }
                     args[arg_count++] = parse_expression(p);
-                } while (match(p, TK_COMMA));
+                } while (match(p, TK_COMMA) && !check(p, TK_R_PAREN));
+                
+                // 检查是否在逗号后直接遇到右括号（尾随逗号）
+                if (p->current > 0 && p->tokens[p->current - 1].kind == TK_COMMA && check(p, TK_R_PAREN)) {
+                    warning_at(p, previous(p), "Trailing comma in function call");
+                }
             }
             
             if (!match(p, TK_R_PAREN)) {
@@ -198,7 +510,12 @@ static ASTNode *parse_primary(Parser *p) {
                     elements = (ASTNode **)realloc(elements, elem_capacity * sizeof(ASTNode *));
                 }
                 elements[elem_count++] = parse_expression(p);
-            } while (match(p, TK_COMMA));
+            } while (match(p, TK_COMMA) && !check(p, TK_R_BRACKET));
+            
+            // 检查是否在逗号后直接遇到右括号（尾随逗号）
+            if (p->current > 0 && p->tokens[p->current - 1].kind == TK_COMMA && check(p, TK_R_BRACKET)) {
+                warning_at(p, previous(p), "Trailing comma in array literal");
+            }
         }
         
         if (!match(p, TK_R_BRACKET)) {
@@ -213,6 +530,7 @@ static ASTNode *parse_primary(Parser *p) {
         ASTObjectProperty *properties = NULL;
         size_t prop_count = 0;
         size_t prop_capacity = 0;
+        bool had_error_in_object = false;
         
         if (!check(p, TK_R_BRACE)) {
             do {
@@ -228,16 +546,36 @@ static ASTNode *parse_primary(Parser *p) {
                     key[len - 2] = '\0';
                 } else {
                     error_at(p, key_token, "Expected property key");
+                    had_error_in_object = true;
+                    // 错误恢复：跳到右花括号结束对象解析
+                    while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                        advance(p);
+                    }
                     break;
                 }
                 
                 if (!match(p, TK_COLON)) {
                     error_at(p, current_token(p), "Expected ':' after property key");
                     free(key);
+                    had_error_in_object = true;
+                    // 错误恢复：跳到右花括号结束对象解析
+                    while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                        advance(p);
+                    }
                     break;
                 }
                 
                 ASTNode *value = parse_expression(p);
+                
+                // 如果解析值失败，跳到右花括号结束对象解析
+                if (value == NULL) {
+                    free(key);
+                    had_error_in_object = true;
+                    while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                        advance(p);
+                    }
+                    break;
+                }
                 
                 if (prop_count >= prop_capacity) {
                     prop_capacity = prop_capacity == 0 ? 4 : prop_capacity * 2;
@@ -248,11 +586,27 @@ static ASTNode *parse_primary(Parser *p) {
                 properties[prop_count].value = value;
                 prop_count++;
                 
-            } while (match(p, TK_COMMA));
+            } while (match(p, TK_COMMA) && !check(p, TK_R_BRACE));
+            
+            // 检查是否在逗号后直接遇到右花括号（尾随逗号）
+            if (p->current > 0 && p->tokens[p->current - 1].kind == TK_COMMA && check(p, TK_R_BRACE)) {
+                warning_at(p, previous(p), "Trailing comma in object literal");
+            }
         }
         
         if (!match(p, TK_R_BRACE)) {
             error_at(p, current_token(p), "Expected '}' after object properties");
+            had_error_in_object = true;
+        }
+        
+        // 如果对象解析过程中有错误，返回 NULL 而不是部分对象
+        if (had_error_in_object) {
+            // 释放已分配的属性
+            for (size_t i = 0; i < prop_count; i++) {
+                if (properties[i].key) free(properties[i].key);
+            }
+            if (properties) free(properties);
+            return NULL;
         }
         
         return ast_object_literal_create(properties, prop_count, token_to_loc(token));
@@ -265,6 +619,11 @@ static ASTNode *parse_primary(Parser *p) {
 // 解析后缀表达式: obj.prop, obj[index], obj.>method()
 static ASTNode *parse_postfix(Parser *p) {
     ASTNode *expr = parse_primary(p);
+    
+    // 如果 parse_primary 失败，立即返回 NULL 避免死循环
+    if (expr == NULL) {
+        return NULL;
+    }
     
     while (true) {
         // 数组索引: arr[index]
@@ -307,7 +666,12 @@ static ASTNode *parse_postfix(Parser *p) {
                             args = (ASTNode **)realloc(args, arg_capacity * sizeof(ASTNode *));
                         }
                         args[arg_count++] = parse_expression(p);
-                    } while (match(p, TK_COMMA));
+                    } while (match(p, TK_COMMA) && !check(p, TK_R_PAREN));
+                    
+                    // 检查是否在逗号后直接遇到右括号（尾随逗号）
+                    if (p->current > 0 && p->tokens[p->current - 1].kind == TK_COMMA && check(p, TK_R_PAREN)) {
+                        warning_at(p, previous(p), "Trailing comma in function call");
+                    }
                 }
                 
                 if (!match(p, TK_R_PAREN)) {
@@ -452,9 +816,20 @@ static ASTNode *parse_block(Parser *p) {
             statements = (ASTNode **)realloc(statements, stmt_capacity * sizeof(ASTNode *));
         }
         
+        size_t old_pos = p->current;
         ASTNode *stmt = parse_statement(p);
         if (stmt) {
             statements[stmt_count++] = stmt;
+        }
+        
+        // 如果位置没有前进，强制前进避免死循环
+        if (p->current == old_pos) {
+            if (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                error_at(p, current_token(p), "Unexpected token in block");
+                advance(p);
+            } else {
+                break;
+            }
         }
         
         // 跳过可选的分号
@@ -602,6 +977,14 @@ static ASTNode *parse_loop_statement(Parser *p) {
 static ASTNode *parse_var_declaration(Parser *p) {
     Token *name_token = current_token(p);
     
+    // 检测类型关键字
+    if (check(p, TK_TYPE_NUM) || check(p, TK_TYPE_STR) || 
+        check(p, TK_TYPE_BL) || check(p, TK_TYPE_OBJ) || check(p, TK_TYPE_FUNC)) {
+        error_at(p, current_token(p), "Type keywords (num, str, bl, obj, func) cannot be used as variable names");
+        advance(p);
+        return NULL;
+    }
+    
     if (!match(p, TK_IDENT)) {
         return NULL;
     }
@@ -677,7 +1060,75 @@ static ASTNode *parse_var_declaration(Parser *p) {
         return NULL;
     }
     
+    // 检查是否是无类型声明的函数: name := (params){body}
+    if (check(p, TK_L_PAREN)) {
+        Token *peek_tok = peek(p, 1);
+        // 如果 ( 后面是 ) 或 标识符，很可能是函数定义
+        if (peek_tok && (peek_tok->kind == TK_R_PAREN || peek_tok->kind == TK_IDENT)) {
+            // 解析为函数定义
+            if (!match(p, TK_L_PAREN)) {
+                error_at(p, current_token(p), "Expected '('");
+                free(name);
+                return NULL;
+            }
+            
+            // 解析参数列表
+            char **params = NULL;
+            size_t param_count = 0;
+            size_t param_capacity = 0;
+            
+            while (!check(p, TK_R_PAREN) && !check(p, TK_EOF)) {
+                if (!check(p, TK_IDENT)) {
+                    error_at(p, current_token(p), "Expected parameter name");
+                    break;
+                }
+                
+                if (param_count >= param_capacity) {
+                    param_capacity = param_capacity == 0 ? 4 : param_capacity * 2;
+                    params = (char **)realloc(params, param_capacity * sizeof(char *));
+                }
+                
+                params[param_count++] = strdup(current_token(p)->lexeme);
+                advance(p);
+                
+                if (!match(p, TK_COMMA)) {
+                    break;
+                }
+            }
+            
+            if (!match(p, TK_R_PAREN)) {
+                error_at(p, current_token(p), "Expected ')' after parameters");
+                free(name);
+                for (size_t i = 0; i < param_count; i++) free(params[i]);
+                free(params);
+                return NULL;
+            }
+            
+            // 解析函数体
+            ASTNode *body = parse_block(p);
+            
+            // 创建函数声明节点
+            ASTNode *func_node = ast_node_create(AST_FUNC_DECL, token_to_loc(name_token));
+            ASTFuncDecl *func = (ASTFuncDecl *)malloc(sizeof(ASTFuncDecl));
+            func->name = name;
+            func->params = params;
+            func->param_count = param_count;
+            func->return_type = NULL;
+            func->body = body;
+            func_node->data = func;
+            
+            return func_node;
+        }
+    }
+    
+    // 普通变量赋值
     ASTNode *init = parse_expression(p);
+    
+    // 如果表达式解析失败，返回 NULL
+    if (init == NULL) {
+        free(name);
+        return NULL;
+    }
     
     return ast_var_decl_create(name, NULL, false, init, token_to_loc(name_token));
 }
@@ -710,6 +1161,14 @@ static ASTNode *parse_statement(Parser *p) {
     // 代码块
     if (check(p, TK_L_BRACE)) {
         return parse_block(p);
+    }
+    
+    // 检测类型关键字被误用作变量名
+    if (check(p, TK_TYPE_NUM) || check(p, TK_TYPE_STR) || 
+        check(p, TK_TYPE_BL) || check(p, TK_TYPE_OBJ) || check(p, TK_TYPE_FUNC)) {
+        error_at(p, current_token(p), "Type keywords (num, str, bl, obj, func) cannot be used as variable names");
+        advance(p);
+        return NULL;
     }
     
     // 变量声明或赋值或函数调用
@@ -800,6 +1259,7 @@ ASTNode *parser_parse(Parser *p) {
         if (p->had_error && stmt == NULL) {
             break;
         }
+        // 重置 per-statement error flag，但保留 error_count
         p->had_error = false;
     }
     

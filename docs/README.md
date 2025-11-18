@@ -19,10 +19,10 @@
 
 ### 🎨 Unicode/Emoji 变量名
 
-FLYUX
+FLYUX 是**世界上第一个完全支持 Emoji 变量名的编译型语言**！
 
 ```flyux
-// 用 Emoji 与Unicode编程！
+// 用 Emoji 编程！
 🚀 := "rocket";
 🎯 := 100;
 
@@ -99,16 +99,13 @@ main := () {
 
 ## 📚 文档
 
-### 📖 主要文档
-
 | 文档 | 说明 |
 |------|------|
-| **[docs/INDEX.md](docs/INDEX.md)** | 📑 **完整文档索引** - 所有文档的导航入口 |
-| **[docs/QUICKSTART.md](docs/QUICKSTART.md)** | 快速上手指南，5分钟入门 |
-| **[docs/FLYUX_SYNTAX.md](docs/FLYUX_SYNTAX.md)** | 完整语法规范 |
-| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 编译器架构设计详解 |
-
-> 💡 更多文档（词法分析、语法分析、类型系统等）请查看 **[docs/INDEX.md](docs/INDEX.md)**
+| **[QUICKSTART.md](QUICKSTART.md)** | 快速上手指南，5分钟入门 |
+| **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** | 项目结构和模块说明 |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | 编译器架构设计详解 |
+| **[REFACTORING.md](REFACTORING.md)** | 代码重构过程记录 |
+| **[FLYUX_SYNTAX.md](FLYUX_SYNTAX.md)** | 完整语法规范 |
 
 ## ✨ 特性
 
@@ -353,8 +350,9 @@ FLYUX 编译器的设计受到以下项目启发：
 ## 📞 联系
 
 - **文档**: 项目根目录的 `*.md` 文件
-- **Bug 报告**: [GitHub Issues](https://github.com/AristraHatsuyu/FLYUXC/issues)
-- **讨论**: [GitHub Discussions](https://github.com/AristraHatsuyu/FLYUXC/discussions)
+- **Bug 报告**: [GitHub Issues](https://github.com/your-org/flyuxc/issues)
+- **讨论**: [GitHub Discussions](https://github.com/your-org/flyuxc/discussions)
+- **邮件**: flyux-dev@example.com
 
 ---
 
