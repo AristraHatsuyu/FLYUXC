@@ -424,7 +424,7 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
         }
         
         case AST_ARRAY_LITERAL: {
-            // 实现：分配 Value* 数组并初始化
+            // 实现：分配 Value* 数组并包装成 Value
             ASTArrayLiteral *arr_lit = (ASTArrayLiteral *)node->data;
             size_t count = arr_lit->elem_count;
             
@@ -457,13 +457,18 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 register_array(gen, gen->current_var_name, array_ptr, count);
             }
             
-            // 返回数组指针转换为 Value*（简化：返回第一个元素）
+            // 创建一个 Value 包装数组指针
+            // 将数组指针转换为 i8* 存储在 Value 中
+            char *array_i8 = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = bitcast [%zu x %%struct.Value*]* %s to i8*\n",
+                    array_i8, count, array_ptr);
+            
+            // 调用运行时函数创建数组 Value (需要实现 box_array)
             char *result = new_temp(gen);
-            char *first_elem_ptr = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 0\n",
-                    first_elem_ptr, count, count, array_ptr);
-            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s  ; array returns first element\n", 
-                    result, first_elem_ptr);
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_array(i8* %s, i64 %zu)\n",
+                    result, array_i8, count);
+            
+            free(array_i8);
             return result;
         }
         
@@ -674,47 +679,54 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 实现数组索引访问：arr[index]
             ASTIndexExpr *idx_expr = (ASTIndexExpr *)node->data;
             
-            // 获取对象（应该是标识符）
-            if (idx_expr->object->kind != AST_IDENTIFIER) {
-                char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; index expr object not identifier\n", temp);
-                return temp;
+            // 先尝试作为简单标识符处理（优化路径）
+            if (idx_expr->object->kind == AST_IDENTIFIER) {
+                ASTIdentifier *arr_ident = (ASTIdentifier *)idx_expr->object->data;
+                const char *arr_name = arr_ident->name;
+                
+                // 查找数组元数据
+                ArrayMetadata *meta = find_array(gen, arr_name);
+                if (meta) {
+                    // 是已知的静态数组，使用快速路径
+                    // 计算索引值
+                    char *index_val = codegen_expr(gen, idx_expr->index);
+                    
+                    // 将 Value* 索引转换为 i64（先 unbox 为 double）
+                    char *index_double = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", 
+                            index_double, index_val);
+                    char *index_i64 = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = fptosi double %s to i64\n", index_i64, index_double);
+                    
+                    // 使用 getelementptr 获取元素地址（现在是 %struct.Value*）
+                    char *elem_ptr = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %s\n",
+                            elem_ptr, meta->elem_count, meta->elem_count, meta->array_ptr, index_i64);
+                    
+                    // 加载并返回元素
+                    char *elem = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s\n", elem, elem_ptr);
+                    
+                    free(index_val);
+                    free(index_double);
+                    free(index_i64);
+                    free(elem_ptr);
+                    
+                    return elem;
+                }
             }
             
-            ASTIdentifier *arr_ident = (ASTIdentifier *)idx_expr->object->data;
-            const char *arr_name = arr_ident->name;
-            
-            // 查找数组元数据
-            ArrayMetadata *meta = find_array(gen, arr_name);
-            if (!meta) {
-                // 不是已知的数组
-                char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; array '%s' not found\n", temp, arr_name);
-                return temp;
-            }
-            
-            // 计算索引值
+            // 通用路径：对象是任意表达式，使用运行时函数
+            char *obj_val = codegen_expr(gen, idx_expr->object);
             char *index_val = codegen_expr(gen, idx_expr->index);
             
-            // 将 Value* 索引转换为 i64（先 unbox 为 double）
-            char *index_double = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", 
-                    index_double, index_val);
-            char *index_i64 = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = fptosi double %s to i64\n", index_i64, index_double);
-            
-            // 使用 getelementptr 获取元素地址（现在是 %struct.Value*）
-            char *elem_ptr = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %s\n",
-                    elem_ptr, meta->elem_count, meta->elem_count, meta->array_ptr, index_i64);
-            
-            // 加载元素值
             char *result = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s  ; arr[%s]\n", 
-                    result, elem_ptr, index_i64);
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_index(%%struct.Value* %s, %%struct.Value* %s)\n",
+                    result, obj_val, index_val);
             
+            free(obj_val);
             free(index_val);
-            free(index_double);
+            
             return result;
         }
         
@@ -1116,7 +1128,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_number(double)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_string(i8*)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_bool(i32)\n");
-    fprintf(gen->output, "declare %%struct.Value* @box_null()\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_null()\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");
     fprintf(gen->output, "declare double @unbox_number(%%struct.Value*)\n");
@@ -1129,9 +1142,10 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_subtract(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_multiply(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_divide(%%struct.Value*, %%struct.Value*)\n");
-    fprintf(gen->output, "declare i32 @value_equals(%%struct.Value*, %%struct.Value*)\n");
-    fprintf(gen->output, "declare i32 @value_less_than(%%struct.Value*, %%struct.Value*)\n");
-    fprintf(gen->output, "declare i32 @value_greater_than(%%struct.Value*, %%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_equals(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_less_than(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_greater_than(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_index(%%struct.Value*, %%struct.Value*)\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

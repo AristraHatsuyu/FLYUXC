@@ -54,6 +54,14 @@ Value* box_null() {
     return v;
 }
 
+/* Box an array */
+Value* box_array(void *array_ptr, long size) {
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_ARRAY;
+    v->data.pointer = array_ptr;
+    return v;
+}
+
 /* Unbox to number (with type coercion) */
 double unbox_number(Value *v) {
     if (!v) return 0.0;
@@ -189,32 +197,47 @@ Value* value_divide(Value *a, Value *b) {
 }
 
 /* Value comparison */
-int value_equals(Value *a, Value *b) {
-    if (!a || !b) return a == b;
+Value* value_equals(Value *a, Value *b) {
+    if (!a || !b) return box_bool(a == b);
     if (a->type != b->type) {
         // Type coercion comparison
-        return unbox_number(a) == unbox_number(b);
+        return box_bool(unbox_number(a) == unbox_number(b));
     }
     
     switch (a->type) {
         case VALUE_NUMBER:
         case VALUE_BOOL:
-            return a->data.number == b->data.number;
+            return box_bool(a->data.number == b->data.number);
         case VALUE_STRING:
             if (!a->data.string || !b->data.string)
-                return a->data.string == b->data.string;
-            return strcmp(a->data.string, b->data.string) == 0;
+                return box_bool(a->data.string == b->data.string);
+            return box_bool(strcmp(a->data.string, b->data.string) == 0);
         default:
-            return a == b;  // reference equality
+            return box_bool(a == b);  // reference equality
     }
 }
 
-int value_less_than(Value *a, Value *b) {
-    return unbox_number(a) < unbox_number(b);
+Value* value_less_than(Value *a, Value *b) {
+    return box_bool(unbox_number(a) < unbox_number(b));
 }
 
-int value_greater_than(Value *a, Value *b) {
-    return unbox_number(a) > unbox_number(b);
+Value* value_greater_than(Value *a, Value *b) {
+    return box_bool(unbox_number(a) > unbox_number(b));
+}
+
+/* Array/Object index access - runtime version */
+Value* value_index(Value *obj, Value *index) {
+    if (!obj) return box_null();
+    
+    // For arrays stored as pointers
+    if (obj->type == VALUE_ARRAY && obj->data.pointer) {
+        int idx = (int)unbox_number(index);
+        Value **array = (Value **)obj->data.pointer;
+        // Note: no bounds checking for now
+        return array[idx];
+    }
+    
+    return box_null();
 }
 
 /* Free a value */
