@@ -220,6 +220,7 @@ typedef struct ASTNumLiteral {
 /* 字符串字面量: "hello" */
 typedef struct ASTStringLiteral {
     char *value;
+    size_t length;  /* 字符串实际长度（支持包含\0的字符串） */
 } ASTStringLiteral;
 
 /* 布尔字面量: true, false */
@@ -332,7 +333,7 @@ ASTNode *ast_chain_expr_create(ASTNode *object, ChainElement *chain, size_t chai
 ASTNode *ast_num_literal_create(double value, char *raw, SourceLocation loc);
 
 /* 创建字符串字面量节点 */
-ASTNode *ast_string_literal_create(char *value, SourceLocation loc);
+ASTNode *ast_string_literal_create(char *value, size_t length, SourceLocation loc);
 
 /* 创建布尔字面量节点 */
 ASTNode *ast_bool_literal_create(bool value, SourceLocation loc);

@@ -70,13 +70,13 @@ static int is_reserved_identifier(const char* name, size_t len) {
 
 /* 内置标识符（如内置函数）——不会被加入映射表，也不会替换 */
 /* 
- * FLYUX 内置函数完整列表 (64个)
+ * FLYUX 内置函数完整列表 (66个)
  * 与 lexer.c 中的 BUILTIN_FUNC_TABLE 保持一致
  * 最后更新: 2025-11-17
  */
 static const char* BUILTIN_IDENTIFIERS[] = {
-    /* 输入输出 (4) */
-    "print", "input", "readFile", "writeFile",
+    /* 输入输出 (6) */
+    "print", "println", "printf", "input", "readFile", "writeFile",
     
     /* 字符串操作 (11) */
     "length", "substr", "indexOf", "replace", "split", "join",
@@ -228,6 +228,7 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
     size_t next_index = 1;  /* 用于生成 _00001, _00002, ... */
 
     int in_str = 0;
+    char str_quote = 0;  /* 记录开启字符串的引号类型 */
     int escape = 0;
     size_t i = 0;
     size_t out_idx = 0;
@@ -274,8 +275,8 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
             continue;
         }
 
-        if (c == '"' || c == '\'') {
-            /* 进入或退出字符串 */
+        if (!in_str && (c == '"' || c == 39)) {  /* 39 is '\'' */
+            /* 进入字符串 */
             if (out_idx + 1 >= out_cap) {
                 out_cap *= 2;
                 char* new_out = (char*)realloc(out, out_cap);
@@ -289,7 +290,29 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
                 out = new_out;
             }
             out[out_idx++] = c;
-            in_str = !in_str;
+            in_str = 1;
+            str_quote = c;
+            i++;
+            continue;
+        }
+
+        if (in_str && c == str_quote) {
+            /* 退出字符串 */
+            if (out_idx + 1 >= out_cap) {
+                out_cap *= 2;
+                char* new_out = (char*)realloc(out, out_cap);
+                if (!new_out) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    free(out);
+                    varmap_result_free(&result);
+                    return result;
+                }
+                out = new_out;
+            }
+            out[out_idx++] = c;
+            in_str = 0;
+            str_quote = 0;
             i++;
             continue;
         }

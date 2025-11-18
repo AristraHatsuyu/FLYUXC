@@ -438,16 +438,36 @@ static ASTNode *parse_primary(Parser *p) {
         return ast_num_literal_create(value, (char *)t->lexeme, token_to_loc(t));
     }
     
-    // 字符串字面量
+    // 字符串字面量（lexer已处理转义并去除引号）
     if (match(p, TK_STRING)) {
         Token *t = &p->tokens[p->current - 1];
-        // 去掉引号
-        size_t len = strlen(t->lexeme);
-        char *value = (char *)malloc(len - 1);
-        strncpy(value, t->lexeme + 1, len - 2);
-        value[len - 2] = '\0';
-        ASTNode *node = ast_string_literal_create(value, token_to_loc(t));
-        free(value);
+        // lexer已经去除引号并处理转义，直接传递lexeme（ast_string_literal_create会复制）
+        ASTNode *node = ast_string_literal_create(t->lexeme, t->lexeme_length, token_to_loc(t));
+        return node;
+    }
+    
+    // 布尔字面量: true, false
+    if (match(p, TK_TRUE)) {
+        Token *t = &p->tokens[p->current - 1];
+        return ast_bool_literal_create(true, token_to_loc(t));
+    }
+    
+    if (match(p, TK_FALSE)) {
+        Token *t = &p->tokens[p->current - 1];
+        return ast_bool_literal_create(false, token_to_loc(t));
+    }
+    
+    // null字面量
+    if (match(p, TK_NULL)) {
+        Token *t = &p->tokens[p->current - 1];
+        ASTNode *node = ast_node_create(AST_NULL_LITERAL, token_to_loc(t));
+        return node;
+    }
+    
+    // undef字面量
+    if (match(p, TK_UNDEF)) {
+        Token *t = &p->tokens[p->current - 1];
+        ASTNode *node = ast_node_create(AST_UNDEF_LITERAL, token_to_loc(t));
         return node;
     }
     
@@ -540,10 +560,8 @@ static ASTNode *parse_primary(Parser *p) {
                 if (match(p, TK_IDENT) || match(p, TK_BUILTIN_FUNC)) {
                     key = strdup(key_token->lexeme);
                 } else if (match(p, TK_STRING)) {
-                    size_t len = strlen(key_token->lexeme);
-                    key = (char *)malloc(len - 1);
-                    strncpy(key, key_token->lexeme + 1, len - 2);
-                    key[len - 2] = '\0';
+                    // lexer已经去除引号并处理转义
+                    key = strdup(key_token->lexeme);
                 } else {
                     error_at(p, key_token, "Expected property key");
                     had_error_in_object = true;
@@ -714,13 +732,26 @@ static ASTNode *parse_postfix(Parser *p) {
     return expr;
 }
 
-static ASTNode *parse_multiplicative(Parser *p) {
+// 幂运算 (右结合: 2**3**2 = 2**(3**2) = 512)
+static ASTNode *parse_power(Parser *p) {
     ASTNode *left = parse_postfix(p);
+    
+    if (match(p, TK_POWER)) {
+        Token *op_token = &p->tokens[p->current - 1];
+        ASTNode *right = parse_power(p);  // 右结合：递归调用自身
+        return ast_binary_expr_create(op_token->kind, left, right, token_to_loc(op_token));
+    }
+    
+    return left;
+}
+
+static ASTNode *parse_multiplicative(Parser *p) {
+    ASTNode *left = parse_power(p);  // 修改为调用 parse_power
     
     while (match(p, TK_STAR) || match(p, TK_SLASH) || match(p, TK_PERCENT)) {
         Token *op_token = &p->tokens[p->current - 1];
         TokenKind op = op_token->kind;
-        ASTNode *right = parse_postfix(p);
+        ASTNode *right = parse_power(p);  // 修改为调用 parse_power
         left = ast_binary_expr_create(op, left, right, token_to_loc(op_token));
     }
     
@@ -977,13 +1008,8 @@ static ASTNode *parse_loop_statement(Parser *p) {
 static ASTNode *parse_var_declaration(Parser *p) {
     Token *name_token = current_token(p);
     
-    // 检测类型关键字
-    if (check(p, TK_TYPE_NUM) || check(p, TK_TYPE_STR) || 
-        check(p, TK_TYPE_BL) || check(p, TK_TYPE_OBJ) || check(p, TK_TYPE_FUNC)) {
-        error_at(p, current_token(p), "Type keywords (num, str, bl, obj, func) cannot be used as variable names");
-        advance(p);
-        return NULL;
-    }
+    // Note: 变量名不应该是类型关键字，但这由normalize阶段保证
+    // 这里不再检查，因为类型注解内部可以使用类型关键字
     
     if (!match(p, TK_IDENT)) {
         return NULL;
@@ -991,10 +1017,64 @@ static ASTNode *parse_var_declaration(Parser *p) {
     
     char *name = strdup(name_token->lexeme);
     
-    // 函数声明: name:<type>=(params){body}
+    // 跳过可选的类型注解: :[type]= 或 :<type>=
+    // TypeScript 风格：类型注解用于辅助检查但不控制实际类型
+    ASTNode *type_annotation = NULL;
+    if (check(p, TK_COLON)) {
+        advance(p); // 跳过 :
+        
+        // 检查是否是 [ 或 < 开头的类型注解
+        if (match(p, TK_L_BRACKET)) {
+            // :[type]= 格式
+            Token *type_tok = current_token(p);
+            TokenKind type_kind = type_tok->kind;
+            
+            // 记录类型token（可能是 TK_TYPE_NUM, TK_TYPE_STR 等）
+            if (!match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) && !match(p, TK_TYPE_BL) && 
+                !match(p, TK_TYPE_OBJ) && !match(p, TK_TYPE_FUNC)) {
+                // 可能是自定义类型，跳过
+                advance(p);
+            }
+            
+            if (!match(p, TK_R_BRACKET)) {
+                error_at(p, current_token(p), "Expected ']' after type annotation");
+            }
+            
+            // 创建类型注解AST节点
+            type_annotation = ast_node_create(AST_TYPE_ANNOTATION, token_to_loc(type_tok));
+            ASTTypeAnnotation *type_ann = (ASTTypeAnnotation *)malloc(sizeof(ASTTypeAnnotation));
+            type_ann->type_token = type_kind;
+            type_annotation->data = type_ann;
+            
+        } else if (match(p, TK_LT)) {
+            // :<type>= 格式
+            Token *type_tok = current_token(p);
+            TokenKind type_kind = type_tok->kind;
+            
+            // 跳过类型 token
+            if (!match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) && !match(p, TK_TYPE_BL) && 
+                !match(p, TK_TYPE_OBJ) && !match(p, TK_TYPE_FUNC)) {
+                advance(p);
+            }
+            
+            if (!match(p, TK_GT)) {
+                error_at(p, current_token(p), "Expected '>' after type annotation");
+            }
+            
+            // 创建类型注解AST节点
+            type_annotation = ast_node_create(AST_TYPE_ANNOTATION, token_to_loc(type_tok));
+            ASTTypeAnnotation *type_ann = (ASTTypeAnnotation *)malloc(sizeof(ASTTypeAnnotation));
+            type_ann->type_token = type_kind;
+            type_annotation->data = type_ann;
+        }
+        // 如果不是 [ 或 <，可能是对象字面量的冒号，回退
+        // 但在变量声明上下文中，这不应该发生
+    }
+    
+    // 函数声明: name:<type>=(params){body} 或已经跳过类型注解
     if (match(p, TK_FUNC_TYPE_START)) {
-        // 跳过返回类型
-        while (!match(p, TK_FUNC_TYPE_END) && !check(p, TK_EOF)) {
+        // 跳过返回类型，直到遇到 >= (TK_GE) 或 >= (TK_FUNC_TYPE_END)
+        while (!match(p, TK_GE) && !match(p, TK_FUNC_TYPE_END) && !check(p, TK_EOF)) {
             advance(p);
         }
         
@@ -1053,9 +1133,15 @@ static ASTNode *parse_var_declaration(Parser *p) {
         return func_node;
     }
     
-    // 普通变量声明: name := expr
-    if (!match(p, TK_DEFINE)) {
-        error_at(p, current_token(p), "Expected ':=' in variable declaration");
+    // 普通变量声明: name := expr 或 name :[type]= expr
+    // 如果有类型注解，期待 = 而不是 :=
+    TokenKind expected_assign = type_annotation ? TK_ASSIGN : TK_DEFINE;
+    if (!match(p, expected_assign)) {
+        if (type_annotation) {
+            error_at(p, current_token(p), "Expected '=' after type annotation in variable declaration");
+        } else {
+            error_at(p, current_token(p), "Expected ':=' in variable declaration");
+        }
         free(name);
         return NULL;
     }
@@ -1130,7 +1216,14 @@ static ASTNode *parse_var_declaration(Parser *p) {
         return NULL;
     }
     
-    return ast_var_decl_create(name, NULL, false, init, token_to_loc(name_token));
+    // 检查：如果是 := null 则报错（null需要显式类型注解）
+    if (!type_annotation && init->kind == AST_NULL_LITERAL) {
+        error_at(p, name_token, "Cannot infer type from null value. Use explicit type annotation like 'name:[type]=null'");
+        free(name);
+        return NULL;
+    }
+    
+    return ast_var_decl_create(name, type_annotation, false, init, token_to_loc(name_token));
 }
 
 static ASTNode *parse_statement(Parser *p) {
@@ -1163,22 +1256,32 @@ static ASTNode *parse_statement(Parser *p) {
         return parse_block(p);
     }
     
-    // 检测类型关键字被误用作变量名
-    if (check(p, TK_TYPE_NUM) || check(p, TK_TYPE_STR) || 
-        check(p, TK_TYPE_BL) || check(p, TK_TYPE_OBJ) || check(p, TK_TYPE_FUNC)) {
-        error_at(p, current_token(p), "Type keywords (num, str, bl, obj, func) cannot be used as variable names");
-        advance(p);
-        return NULL;
-    }
+    // Note: 类型关键字(num, str, bl, obj, func)不能作为变量名
+    // 但这个检查应该在词法分析或normalize阶段完成，而不是在这里
+    // 因为在这个位置，我们无法区分是类型关键字还是恰好同名的标识符
+    // 已移除此检查，类型关键字会在classify_identifier中被识别为TYPE tokens
+    // 如果它们出现在变量名位置，parse_var_declaration会处理
     
     // 变量声明或赋值或函数调用
     if (check(p, TK_IDENT) || check(p, TK_BUILTIN_FUNC)) {
         Token *name_token = current_token(p);
         Token *next = peek(p, 1);
         
-        // 变量声明: name := expr
+        // 变量声明: name := expr 或 name :[type]= expr 或 name :<type>=(params){}
+        // 需要检查第二个token是否是 := 或 : (后面跟类型注解)
         if (next->kind == TK_DEFINE || next->kind == TK_FUNC_TYPE_START) {
             return parse_var_declaration(p);
+        }
+        
+        // 检查是否是带类型注解的声明: name :[type]= 或 name :<type>=
+        // 即 next是 : 且不是对象字面量的开始
+        if (next->kind == TK_COLON) {
+            // 需要lookahead更多token判断是否是类型注解
+            Token *third = peek(p, 2);
+            if (third->kind == TK_L_BRACKET || third->kind == TK_LT) {
+                // 这是类型注解: :[...] 或 :<...>
+                return parse_var_declaration(p);
+            }
         }
         
         // 赋值: name = expr 或 arr[i] = expr

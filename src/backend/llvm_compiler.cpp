@@ -72,7 +72,7 @@ static std::string write_embedded_runtime_object() {
         return "";
     }
     
-    fwrite(embedded_runtime_object, 1, embedded_runtime_object_size, f);
+    fwrite(runtime_object_o, 1, runtime_object_o_len, f);
     fclose(f);
     
     return std::string(runtime_o_path);

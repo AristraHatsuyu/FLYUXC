@@ -91,6 +91,7 @@ typedef struct Token {
     int orig_line;         /* 原始源码行号（0表示合成token） */
     int orig_column;       /* 原始源码列号 */
     int orig_length;       /* 原始源码长度（字节数） */
+    size_t lexeme_length;  /* lexeme实际长度（支持包含\0的字符串） */
 } Token;
 
 /* 词法分析结果 */

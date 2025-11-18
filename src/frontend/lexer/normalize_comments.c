@@ -17,6 +17,7 @@
  */
 static int is_in_string(const char* text, int pos) {
     int in_str = 0;
+    char str_quote = 0;  /* 记录开启字符串的引号类型 */
     int escape = 0;
     
     for (int i = 0; i < pos && text[i] != '\0'; i++) {
@@ -30,8 +31,12 @@ static int is_in_string(const char* text, int pos) {
             continue;
         }
         
-        if (text[i] == '"' || text[i] == '\'') {
-            in_str = !in_str;
+        if (!in_str && (text[i] == '"' || text[i] == 39)) {  /* 39 is '\'' */
+            in_str = 1;
+            str_quote = text[i];
+        } else if (in_str && text[i] == str_quote) {
+            in_str = 0;
+            str_quote = 0;
         }
     }
     

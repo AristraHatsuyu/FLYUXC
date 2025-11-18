@@ -31,6 +31,107 @@ static char* str_dup_n(const char* s, size_t len) {
     return out;
 }
 
+/* 处理字符串转义序列，返回实际长度支持\0字符串 */
+static char* unescape_string(const char* str, size_t len, size_t* out_len) {
+    /* 分配最大可能的空间（原长度） */
+    char* result = (char*)malloc(len + 1);
+    if (!result) return NULL;
+    
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (str[i] == '\\' && i + 1 < len) {
+            i++; /* 跳过反斜杠 */
+            switch (str[i]) {
+                case 'n':  result[j++] = '\n';  break;  /* 换行 */
+                case 't':  result[j++] = '\t';  break;  /* 制表符 */
+                case 'r':  result[j++] = '\r';  break;  /* 回车 */
+                case 'b':  result[j++] = '\b';  break;  /* 退格 */
+                case 'f':  result[j++] = '\f';  break;  /* 换页 */
+                case 'v':  result[j++] = '\v';  break;  /* 垂直制表符 */
+                /* case '0' 移除，由八进制处理统一处理\0-\7 */
+                case 'a':  result[j++] = '\a';  break;  /* 响铃 */
+                case '\\': result[j++] = '\\'; break;  /* 反斜杠 */
+                case '\'': result[j++] = '\''; break;  /* 单引号 */
+                case '"':  result[j++] = '"';  break;  /* 双引号 */
+                case 'e':  result[j++] = '\x1B'; break; /* ESC转义字符 */
+                
+                /* 十六进制转义: \xHH */
+                case 'x': {
+                    if (i + 2 < len && isxdigit(str[i+1]) && isxdigit(str[i+2])) {
+                        char hex[3] = {str[i+1], str[i+2], '\0'};
+                        result[j++] = (char)strtol(hex, NULL, 16);
+                        i += 2;
+                    } else {
+                        result[j++] = 'x'; /* 无效的十六进制，保留原样 */
+                    }
+                    break;
+                }
+                
+                /* Unicode转义: \uHHHH */
+                case 'u': {
+                    if (i + 4 < len) {
+                        int valid = 1;
+                        for (int k = 1; k <= 4; k++) {
+                            if (!isxdigit(str[i+k])) {
+                                valid = 0;
+                                break;
+                            }
+                        }
+                        if (valid) {
+                            char hex[5] = {str[i+1], str[i+2], str[i+3], str[i+4], '\0'};
+                            unsigned int codepoint = (unsigned int)strtol(hex, NULL, 16);
+                            /* 简化：只处理ASCII范围的Unicode */
+                            if (codepoint < 0x80) {
+                                result[j++] = (char)codepoint;
+                            } else if (codepoint < 0x800) {
+                                /* UTF-8 双字节 */
+                                result[j++] = (char)(0xC0 | (codepoint >> 6));
+                                result[j++] = (char)(0x80 | (codepoint & 0x3F));
+                            } else {
+                                /* UTF-8 三字节 */
+                                result[j++] = (char)(0xE0 | (codepoint >> 12));
+                                result[j++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                                result[j++] = (char)(0x80 | (codepoint & 0x3F));
+                            }
+                            i += 4;
+                        } else {
+                            result[j++] = 'u'; /* 无效的Unicode，保留原样 */
+                        }
+                    } else {
+                        result[j++] = 'u';
+                    }
+                    break;
+                }
+                
+                /* 八进制转义: \OOO (最多3位) */
+                default:
+                    if (str[i] >= '0' && str[i] <= '7') {
+                        int octal = str[i] - '0';
+                        if (i + 1 < len && str[i+1] >= '0' && str[i+1] <= '7') {
+                            i++;
+                            octal = octal * 8 + (str[i] - '0');
+                            if (i + 1 < len && str[i+1] >= '0' && str[i+1] <= '7') {
+                                i++;
+                                octal = octal * 8 + (str[i] - '0');
+                            }
+                        }
+                        result[j++] = (char)octal;
+                    } else {
+                        /* 未知转义，保留反斜杠和字符 */
+                        result[j++] = '\\';
+                        result[j++] = str[i];
+                    }
+                    break;
+            }
+        } else {
+            result[j++] = str[i];
+        }
+    }
+    result[j] = '\0';  /* 仍然添加null terminator供 strlen使用 */
+    if (out_len) *out_len = j;  /* 返回实际长度，支持\0字符串 */
+    return result;
+}
+
 /* 动态数组扩容 */
 static int ensure_token_capacity(Token** arr, size_t* cap, size_t needed) {
     if (*cap >= needed) return 1;
@@ -50,11 +151,16 @@ static int ensure_token_capacity(Token** arr, size_t* cap, size_t needed) {
  * 最后更新: 2025-11-17
  */
 static const char* BUILTIN_FUNC_TABLE[] = {
-    /* 输入输出 (4) */
+    /* 输入输出 (6) */
     "print",
+    "println",
+    "printf",
     "input",
     "readFile",
     "writeFile",
+    
+    /* 类型检查 (1) */
+    "typeOf",
     
     /* 字符串操作 (11) */
     "length",
@@ -529,10 +635,12 @@ LexerResult lexer_tokenize(const char* source,
             continue;
         }
 
-        /* 字符串字面量：支持 "..." 或 '...'，简单跳过，内部不做转义 */
+        /* 字符串字面量：支持 "..." 或 '...'，处理转义序列 */
         if (c == '"' || c == '\'') {
             char quote = c;
             size_t start = i;
+            int start_line_str = line;
+            int start_col_str = col;
             i++;
             col++;
             while (i < len && source[i] != quote) {
@@ -541,7 +649,7 @@ LexerResult lexer_tokenize(const char* source,
                     col = 1;
                     i++;
                 } else if (source[i] == '\\' && (i + 1) < len) {
-                    /* 简单跳过转义对 */
+                    /* 跳过转义对 */
                     i += 2;
                     col += 2;
                 } else {
@@ -559,13 +667,72 @@ LexerResult lexer_tokenize(const char* source,
                 goto fail;
             }
 
-            size_t str_len = i - start;
-            if (!emit_token(&tokens, &result.count, &cap,
-                            TK_STRING, source + start, str_len, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+            /* 提取字符串内容（去除引号）并处理转义 */
+            size_t content_len = (i - start) - 2;  /* 减去两个引号 */
+            char* unescaped = NULL;
+            size_t unescaped_len = 0;
+            if (content_len > 0) {
+                unescaped = unescape_string(source + start + 1, content_len, &unescaped_len);
+                if (!unescaped) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+            } else {
+                /* 空字符串 */
+                unescaped = str_dup_n("", 0);
+            }
+            
+            /* 创建token，使用处理后的字符串 */
+            if (!ensure_token_capacity(&tokens, &cap, result.count + 1)) {
+                free(unescaped);
                 result.error_code = -1;
                 result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                 goto fail;
             }
+            
+            Token* t = &tokens[result.count];
+            t->kind = TK_STRING;
+            t->lexeme = unescaped;  /* 使用转义后的字符串 */
+            t->lexeme_length = unescaped_len;  /* 保存实际长度，支持\0字符串 */
+            t->line = start_line_str;
+            t->column = start_col_str;
+            
+            /* 设置原始源位置映射 */
+            if (offset_map && offset_map_size > 0 && (start_offset + start) < offset_map_size &&
+                norm_source_map && norm_source_map_size > 0) {
+                size_t norm_offset = offset_map[start_offset + start];
+                if (norm_offset < norm_source_map_size) {
+                    const SourceLocation* loc = &norm_source_map[norm_offset];
+                    if (loc->is_synthetic && norm_offset > 0) {
+                        for (size_t j = norm_offset; j > 0; j--) {
+                            if (!norm_source_map[j - 1].is_synthetic) {
+                                loc = &norm_source_map[j - 1];
+                                break;
+                            }
+                        }
+                    }
+                    if (loc->is_synthetic) {
+                        t->orig_line = 0;
+                        t->orig_column = 0;
+                        t->orig_length = 0;
+                    } else {
+                        t->orig_line = loc->orig_line;
+                        t->orig_column = loc->orig_column;
+                        t->orig_length = (int)(i - start);
+                    }
+                } else {
+                    t->orig_line = 0;
+                    t->orig_column = 0;
+                    t->orig_length = 0;
+                }
+            } else {
+                t->orig_line = start_line_str;
+                t->orig_column = start_col_str;
+                t->orig_length = (int)(i - start);
+            }
+            
+            result.count++;
             continue;
         }
 
@@ -750,11 +917,12 @@ LexerResult lexer_tokenize(const char* source,
             continue;
         }
 
-        /* > / >=（这里 >= 默认作为 FUNC_TYPE_END；如果以后要区分 GE，可以再增加状态机） */
+        /* > / >= */
         if (c == '>') {
             if (i + 1 < len && source[i + 1] == '=') {
+                // >= 统一识别为 TK_GE，在parser中根据上下文判断是比较运算符还是函数类型结尾
                 if (!emit_token(&tokens, &result.count, &cap,
-                                TK_FUNC_TYPE_END, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                                TK_GE, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;

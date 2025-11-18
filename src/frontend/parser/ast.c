@@ -251,13 +251,30 @@ ASTNode *ast_num_literal_create(double value, char *raw, SourceLocation loc) {
     return node;
 }
 
-ASTNode *ast_string_literal_create(char *value, SourceLocation loc) {
+ASTNode *ast_string_literal_create(char *value, size_t length, SourceLocation loc) {
     ASTNode *node = ast_node_create(AST_STRING_LITERAL, loc);
     if (!node) return NULL;
     
     ASTStringLiteral *str = (ASTStringLiteral *)malloc(sizeof(ASTStringLiteral));
-    str->value = strdup(value);
+    /* 使用memcpy而不是strdup，支持包含\0的字符串 */
+    str->value = (char*)malloc(length + 1);
+    if (str->value) {
+        memcpy(str->value, value, length);
+        str->value[length] = '\0';  /* 添加终止符以便其他地方使用 */
+    }
+    str->length = length;  /* 保存实际长度，支持\0字符串 */
     node->data = str;
+    
+    return node;
+}
+
+ASTNode *ast_bool_literal_create(bool value, SourceLocation loc) {
+    ASTNode *node = ast_node_create(AST_BOOL_LITERAL, loc);
+    if (!node) return NULL;
+    
+    ASTBoolLiteral *bl = (ASTBoolLiteral *)malloc(sizeof(ASTBoolLiteral));
+    bl->value = value;
+    node->data = bl;
     
     return node;
 }

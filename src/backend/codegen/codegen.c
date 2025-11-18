@@ -25,6 +25,46 @@ static char *new_string_label(CodeGen *gen) {
     return label;
 }
 
+/* 转义字符串用于LLVM IR输出 - 支持包含\0的字符串 */
+static char *escape_for_ir(const char *str, size_t in_len, size_t* out_len) {
+    size_t len = in_len;
+    // 最坏情况：每个字符都需要转义为 \xx 格式 (3字节)
+    char *escaped = (char *)malloc(len * 3 + 1);
+    char *out = escaped;
+    
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)str[i];
+        if (c == '\\') {
+            *out++ = '\\';
+            *out++ = '\\';
+        } else if (c == '"') {
+            *out++ = '\\';
+            *out++ = '2';
+            *out++ = '2';
+        } else if (c == '\n') {
+            *out++ = '\\';
+            *out++ = '0';
+            *out++ = 'A';
+        } else if (c == '\r') {
+            *out++ = '\\';
+            *out++ = '0';
+            *out++ = 'D';
+        } else if (c == '\t') {
+            *out++ = '\\';
+            *out++ = '0';
+            *out++ = '9';
+        } else if (c < 32 || c >= 127) {
+            // 非打印字符转为十六进制
+            out += sprintf(out, "\\%02X", c);
+        } else {
+            *out++ = c;
+        }
+    }
+    *out = '\0';
+    if (out_len) *out_len = out - escaped;  /* 返回转义后的实际长度 */
+    return escaped;
+}
+
 /* 注册数组元数据 */
 static void register_array(CodeGen *gen, const char *var_name, const char *array_ptr, size_t elem_count) {
     ArrayMetadata *meta = (ArrayMetadata *)malloc(sizeof(ArrayMetadata));
@@ -166,28 +206,62 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
             return temp;
         }
         
+        case AST_BOOL_LITERAL: {
+            ASTBoolLiteral *bl = (ASTBoolLiteral *)node->data;
+            char *temp = new_temp(gen);
+            
+            // 使用 box_bool 将布尔值装箱为 Value*
+            // LLVM i1/i32: false=0, true=1
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %d)\n", 
+                    temp, bl->value ? 1 : 0);
+            
+            return temp;
+        }
+        
         case AST_STRING_LITERAL: {
             ASTStringLiteral *str = (ASTStringLiteral *)node->data;
             char *str_label = new_string_label(gen);
             char *temp = new_temp(gen);
             char *str_ptr = new_temp(gen);
             
-            size_t len = strlen(str->value);
+            size_t len = str->length;  /* 使用AST中的实际长度，支持\0字符串 */
+            size_t escaped_len = 0;
+            char *escaped = escape_for_ir(str->value, len, &escaped_len);
             
-            // 声明全局字符串常量（写入全局缓冲区）
+            // 声明全局字符串常量
+            // IR中\0A等转义符会被解析为单字节，所以数组大小应该是原始长度+1
             fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
-                    str_label, len + 1, str->value);
+                    str_label, len + 1, escaped);
             
             // 获取指针
             fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x i8], [%zu x i8]* %s, i32 0, i32 0\n",
                     str_ptr, len + 1, len + 1, str_label);
             
-            // 使用 box_string 装箱
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n",
-                    temp, str_ptr);
+            // 使用 box_string_with_length 装箱，传递显式长度支持\0字符串
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string_with_length(i8* %s, i64 %zu)\n",
+                    temp, str_ptr, len);
             
+            free(escaped);
             free(str_label);
             free(str_ptr);
+            return temp;
+        }
+        
+        case AST_NULL_LITERAL: {
+            char *temp = new_temp(gen);
+            
+            // 调用 box_null() 创建 null 值
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", temp);
+            
+            return temp;
+        }
+        
+        case AST_UNDEF_LITERAL: {
+            char *temp = new_temp(gen);
+            
+            // undef 用 null 指针表示
+            fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value*\n", temp);
+            
             return temp;
         }
         
@@ -224,6 +298,10 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     break;
                 case TK_SLASH:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_divide(%%struct.Value* %s, %%struct.Value* %s)\n", 
+                            result, left, right);
+                    break;
+                case TK_POWER:
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_power(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
                     break;
                 case TK_LT:
@@ -354,21 +432,59 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
         
         case AST_CALL_EXPR: {
             ASTCallExpr *call = (ASTCallExpr *)node->data;
+            
+            // 确保callee是标识符
+            if (!call->callee || call->callee->kind != AST_IDENTIFIER) {
+                fprintf(stderr, "Error: callee is not an identifier\n");
+                return NULL;
+            }
+            
             ASTIdentifier *callee = (ASTIdentifier *)call->callee->data;
             
-            // 特殊处理 print 函数
+            // 特殊处理 print 函数（不换行，逗号分隔直接拼接）
             if (strcmp(callee->name, "print") == 0) {
-                // 使用 value_print 打印所有参数
+                // 使用 value_print 打印所有参数，参数间无换行
                 for (size_t i = 0; i < call->arg_count; i++) {
                     char *arg = codegen_expr(gen, call->args[i]);
-                    
-                    // 调用 value_print
                     fprintf(gen->code_buf, "  call void @value_print(%%struct.Value* %s)\n", arg);
-                    
                     free(arg);
                 }
-                
                 return NULL;
+            }
+            
+            // 特殊处理 println 函数（每个参数后换行）
+            if (strcmp(callee->name, "println") == 0) {
+                if (call->arg_count == 0) {
+                    // println() 无参数时只输出换行
+                    // 创建换行字符串常量
+                    char *newline_label = new_string_label(gen);
+                    fprintf(gen->globals_buf, "%s = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n", newline_label);
+                    fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* %s, i32 0, i32 0))\n", newline_label);
+                    free(newline_label);
+                } else {
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        char *arg = codegen_expr(gen, call->args[i]);
+                        fprintf(gen->code_buf, "  call void @value_println(%%struct.Value* %s)\n", arg);
+                        free(arg);
+                    }
+                }
+                return NULL;
+            }
+            
+            // 特殊处理 typeOf 函数
+            if (strcmp(callee->name, "typeOf") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                char *type_str = new_temp(gen);
+                
+                // 调用 value_typeof 获取类型字符串
+                fprintf(gen->code_buf, "  %s = call i8* @value_typeof(%%struct.Value* %s)\n", type_str, arg);
+                // 装箱为 Value*
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n", result, type_str);
+                
+                free(arg);
+                free(type_str);
+                return result;
             }
             
             // 特殊处理 length 函数
@@ -429,9 +545,9 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
             size_t count = arr_lit->elem_count;
             
             if (count == 0) {
-                // 空数组：返回 null
+                // 空数组：返回一个size=0的数组
                 char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; empty array\n", temp);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_array(i8* null, i64 0)  ; empty array\n", temp);
                 return temp;
             }
             
@@ -751,15 +867,40 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
             
             // 如果有初始化表达式
             if (decl->init_expr) {
-                // 设置当前变量名，以便数组字面量可以注册
-                gen->current_var_name = decl->name;
-                char *init_val = codegen_expr(gen, decl->init_expr);
-                gen->current_var_name = NULL;  // 重置
-                
-                if (init_val) {
+                // 检查是否是带类型注解的null
+                if (decl->type_annotation && decl->init_expr->kind == AST_NULL_LITERAL) {
+                    // 需要用box_null_typed创建带声明类型的null
+                    // 从type_annotation获取类型
+                    int type_code = 5; // 默认VALUE_NULL
+                    if (decl->type_annotation->kind == AST_TYPE_ANNOTATION) {
+                        ASTTypeAnnotation *type_ann = (ASTTypeAnnotation *)decl->type_annotation->data;
+                        // 映射类型token到VALUE_*常量
+                        switch (type_ann->type_token) {
+                            case TK_TYPE_NUM: type_code = 0; break;  // VALUE_NUMBER
+                            case TK_TYPE_STR: type_code = 1; break;  // VALUE_STRING
+                            case TK_TYPE_BL:  type_code = 4; break;  // VALUE_BOOL
+                            case TK_TYPE_OBJ: type_code = 3; break;  // VALUE_OBJECT
+                            default: type_code = 5; break;           // VALUE_NULL
+                        }
+                    }
+                    
+                    char *init_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null_typed(i32 %d)\n",
+                            init_val, type_code);
                     fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                             init_val, decl->name);
                     free(init_val);
+                } else {
+                    // 普通初始化
+                    gen->current_var_name = decl->name;
+                    char *init_val = codegen_expr(gen, decl->init_expr);
+                    gen->current_var_name = NULL;
+                    
+                    if (init_val) {
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
+                                init_val, decl->name);
+                        free(init_val);
+                    }
                 }
             }
             break;
@@ -768,18 +909,41 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_ASSIGN_STMT: {
             ASTAssignStmt *assign = (ASTAssignStmt *)node->data;
             
-            char *value = codegen_expr(gen, assign->value);
-            if (!value) break;
+            char *value = NULL;
             
             // 检查target的类型
             if (assign->target->kind == AST_IDENTIFIER) {
                 // 简单变量赋值: x = 10
                 ASTIdentifier *target = (ASTIdentifier *)assign->target->data;
-                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
-                        value, target->name);
+                
+                // 如果赋值的是null，需要保持变量的declared_type
+                if (assign->value->kind == AST_NULL_LITERAL) {
+                    // 先加载旧值获取declared_type，然后用box_null_preserve_type创建新null
+                    char *old_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                            old_val, target->name);
+                    
+                    char *new_null = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null_preserve_type(%%struct.Value* %s)\n",
+                            new_null, old_val);
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
+                            new_null, target->name);
+                    
+                    free(old_val);
+                    free(new_null);
+                } else {
+                    // 普通赋值
+                    value = codegen_expr(gen, assign->value);
+                    if (!value) break;
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
+                            value, target->name);
+                }
             }
             else if (assign->target->kind == AST_INDEX_EXPR) {
                 // 数组索引赋值: arr[i] = 10
+                value = codegen_expr(gen, assign->value);
+                if (!value) break;
+                
                 ASTIndexExpr *idx_expr = (ASTIndexExpr *)assign->target->data;
                 
                 // 获取数组变量
@@ -861,7 +1025,7 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  ; ERROR: unsupported assignment target\n");
             }
             
-            free(value);
+            if (value) free(value);
             break;
         }
         
@@ -1127,8 +1291,11 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, ";; Boxing functions\n");
     fprintf(gen->output, "declare %%struct.Value* @box_number(double)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_string(i8*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_string_with_length(i8*, i64)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_bool(i32)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null()\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_null_typed(i32)\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_null_preserve_type(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");
@@ -1138,10 +1305,13 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, ";; Utility functions\n");
     fprintf(gen->output, "declare i32 @value_is_truthy(%%struct.Value*)\n");
     fprintf(gen->output, "declare void @value_print(%%struct.Value*)\n");
+    fprintf(gen->output, "declare void @value_println(%%struct.Value*)\n");
+    fprintf(gen->output, "declare i8* @value_typeof(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_add(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_subtract(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_multiply(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_divide(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_power(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_equals(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_less_than(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_greater_than(%%struct.Value*, %%struct.Value*)\n");

@@ -37,12 +37,21 @@ static char* dup_range(const char* s, int l, int r_incl){
 
 static int find_matching_paren(const char* s, int i){
     int n=(int)strlen(s), in_str=0, esc=0, pd=0, bd=0, cd=0;
+    char str_quote = 0;  /* 记录字符串开始的引号类型 */
     for (int k=i; k<n; k++){
         char c=s[k];
         if (esc){ esc=0; continue; }
         if (c=='\\'){ esc=1; continue; }
-        if ((c=='"'||c=='\'') && !in_str){ in_str=1; continue; }
-        if ((c=='"'||c=='\'') &&  in_str){ in_str=0; continue; }
+        if (!in_str && (c=='"'||c==39)){  /* 39 is '\'' */
+            in_str=1;
+            str_quote=c;
+            continue;
+        }
+        if (in_str && c==str_quote){
+            in_str=0;
+            str_quote=0;
+            continue;
+        }
         if (in_str) continue;
 
         // 追踪所有类型的括号深度
@@ -172,6 +181,7 @@ static OpInfo read_op_right(const char* s, int pos_after){
 /* 计算字符串 s 的“顶层（二元）运算符”的最低优先级 */
 static int min_top_level_binary_prec(const char* s){
     int n=(int)strlen(s), in_str=0, esc=0;
+    char str_quote = 0;
     int pd=0, bd=0, cd=0;
     int last_operand=0, minp=1000000;
 
@@ -181,8 +191,16 @@ static int min_top_level_binary_prec(const char* s){
         if(esc){esc=0;continue;}
         if(c=='\\'){esc=1;continue;}
 
-        if((c=='"'||c=='\'')&&!in_str){in_str=1;continue;}
-        if((c=='"'||c=='\'')&& in_str){in_str=0;continue;}
+        if(!in_str && (c=='"'||c==39)){
+            in_str=1;
+            str_quote=c;
+            continue;
+        }
+        if(in_str && c==str_quote){
+            in_str=0;
+            str_quote=0;
+            continue;
+        }
         if(in_str) continue;
 
         if(c=='('){ pd++; last_operand=0; continue; }
@@ -234,12 +252,21 @@ static int fully_enclosed_by_paren(const char* s){
     int n=(int)strlen(s);
     if (n<2||s[0]!='('||s[n-1]!=')') return 0;
     int in_str=0,esc=0,pd=0,bd=0,cd=0;
+    char str_quote = 0;
     for (int i=0;i<n;i++){
         char c=s[i];
         if(esc){esc=0;continue;}
         if(c=='\\'){esc=1;continue;}
-        if((c=='"'||c=='\'')&&!in_str){in_str=1;continue;}
-        if((c=='"'||c=='\'')&& in_str){in_str=0;continue;}
+        if(!in_str && (c=='"'||c==39)){
+            in_str=1;
+            str_quote=c;
+            continue;
+        }
+        if(in_str && c==str_quote){
+            in_str=0;
+            str_quote=0;
+            continue;
+        }
         if(in_str) continue;
 
         if(c=='('){ pd++; }
@@ -273,6 +300,7 @@ static char* normalize_whitespace(const char* stmt){
     char* result=(char*)malloc(len+1); if(!result) return NULL;
     int out=0;
     int in_string=0;   // 跟踪是否在字符串内
+    char str_quote=0;  // 跟踪开启字符串的引号类型
     int escape=0;      // 跟踪转义状态
     
     for (size_t i=0;i<len;i++){
@@ -290,9 +318,16 @@ static char* normalize_whitespace(const char* stmt){
             continue;
         }
         
-        // 处理字符串边界
-        if (ch=='"' || ch=='\'') {
-            in_string=!in_string;
+        // 处理字符串边界 - 区分单双引号
+        if (!in_string && (ch=='"' || ch==39)) {  /* 39 is '\'' */
+            in_string=1;
+            str_quote=(char)ch;
+            result[out++]=(char)ch;
+            continue;
+        }
+        if (in_string && ch==str_quote) {
+            in_string=0;
+            str_quote=0;
             result[out++]=(char)ch;
             continue;
         }
@@ -321,7 +356,9 @@ static char* simplify_parens(const char* expr){
     char* out=(char*)malloc(n*2+32); if(!out) return NULL;
 
     int out_idx=0;
-    int in_str=0,esc=0;
+    int in_str=0;
+    char str_quote=0;  // 跟踪开启字符串的引号类型
+    int esc=0;
     int bd=0, cd=0; // 追踪 [] 与 {}，但不用于禁止块内化简
 
     for (int i=0;i<n;i++){
@@ -330,7 +367,9 @@ static char* simplify_parens(const char* expr){
         if(esc){ out[out_idx++]=c; esc=0; continue; }
         if(c=='\\'){ out[out_idx++]=c; esc=1; continue; }
 
-        if(c=='"'||c=='\''){ in_str=!in_str; out[out_idx++]=c; continue; }
+        // 区分单双引号
+        if(!in_str && (c=='"'||c==39)){ in_str=1; str_quote=c; out[out_idx++]=c; continue; }
+        if(in_str && c==str_quote){ in_str=0; str_quote=0; out[out_idx++]=c; continue; }
         if(in_str){ out[out_idx++]=c; continue; }
 
         if(c=='['){ bd++; out[out_idx++]=c; continue; }
