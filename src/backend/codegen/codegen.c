@@ -568,6 +568,51 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
+            // 特殊处理 input 函数
+            if (strcmp(callee->name, "input") == 0) {
+                char *result = new_temp(gen);
+                
+                if (call->arg_count == 0) {
+                    // 无提示符
+                    char *null_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_val);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_input(%%struct.Value* %s)\n", result, null_val);
+                    free(null_val);
+                } else {
+                    // 有提示符
+                    char *prompt = codegen_expr(gen, call->args[0]);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_input(%%struct.Value* %s)\n", result, prompt);
+                    free(prompt);
+                }
+                
+                return result;
+            }
+            
+            // 特殊处理状态查询函数（无参数）
+            if (strcmp(callee->name, "lastStatus") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_last_status()\n", result);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "lastError") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_last_error()\n", result);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "clearError") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_clear_error()\n", result);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "isOk") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", result);
+                return result;
+            }
+            
             // 特殊处理 length 函数
             if (strcmp(callee->name, "length") == 0 && call->arg_count == 1) {
                 // length(arr) 应该返回数组的长度
@@ -686,6 +731,10 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
             fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.ObjectEntry]  ; allocate object entries\n",
                     entries_alloc, prop_count);
             
+            // 用于注册对象元数据的字段列表
+            ObjectField *field_head = NULL;
+            ObjectField *field_tail = NULL;
+            
             // 为每个属性填充 ObjectEntry
             for (size_t i = 0; i < prop_count; i++) {
                 ASTObjectProperty *prop = &obj_lit->properties[i];
@@ -720,6 +769,19 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                         value_field, entry_ptr);
                 fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", value, value_field);
                 
+                // 创建字段元数据（用于后续的成员访问）
+                ObjectField *field = (ObjectField *)malloc(sizeof(ObjectField));
+                field->field_name = strdup(prop->key);
+                field->field_ptr = strdup(value_field);
+                field->next = NULL;
+                
+                if (field_tail) {
+                    field_tail->next = field;
+                    field_tail = field;
+                } else {
+                    field_head = field_tail = field;
+                }
+                
                 free(value);
             }
             
@@ -737,6 +799,11 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
             char *result = new_temp(gen);
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_object(i8* %s, i64 %zu)\n",
                     result, entries_i8, prop_count);
+            
+            // 如果当前正在变量赋值中，注册对象元数据
+            if (gen->current_var_name && field_head) {
+                register_object(gen, gen->current_var_name, field_head);
+            }
             
             return result;
         }
@@ -1035,7 +1102,9 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     free(new_null);
                 } else {
                     // 普通赋值
+                    gen->current_var_name = target->name;
                     value = codegen_expr(gen, assign->value);
+                    gen->current_var_name = NULL;
                     if (!value) break;
                     fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                             value, target->name);
@@ -1463,11 +1532,13 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
             
             fprintf(gen->code_buf, ") {\n");
             
-            // 为参数创建局部变量并存储参数值
+            // 为参数创建局部变量并存储参数值，同时注册到符号表
             for (size_t i = 0; i < func->param_count; i++) {
                 fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", func->params[i]);
                 fprintf(gen->code_buf, "  store %%struct.Value* %%param_%s, %%struct.Value** %%%s\n",
                         func->params[i], func->params[i]);
+                // 注册参数到符号表，使其在函数体内可见
+                register_symbol(gen, func->params[i]);
             }
             
             // 函数体
@@ -1579,6 +1650,15 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_index(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare i64 @value_array_length(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_array_get(%%struct.Value*, %%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; Input/Output functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_input(%%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; Runtime state functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_last_status()\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_last_error()\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

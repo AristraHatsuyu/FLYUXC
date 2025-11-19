@@ -103,6 +103,9 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     /* 实用工具 (3) */
     "assert", "exit", "range",
     
+    /* 运行时状态 (4) */
+    "lastStatus", "lastError", "clearError", "isOk",
+    
     NULL  /* 结束标记 */
 };
 

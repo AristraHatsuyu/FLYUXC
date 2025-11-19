@@ -128,6 +128,12 @@ static const char* BUILTIN_FUNC_TABLE[] = {
     "exit",
     "range",
     
+    /* 运行时状态 (4) */
+    "lastStatus",
+    "lastError",
+    "clearError",
+    "isOk",
+    
     NULL  /* 结束标记 */
 };
 

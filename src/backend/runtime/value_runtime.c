@@ -48,6 +48,72 @@ static int should_use_colors() {
 #define VALUE_NULL 5
 #define VALUE_UNDEF 6
 
+/* ============================================================================
+ * 运行时状态系统 (Runtime State System)
+ * ============================================================================
+ * 用于追踪函数执行状态，支持错误处理和异常情况
+ * 
+ * 状态码：
+ *   0 - OK: 操作成功
+ *   1 - ERROR: 一般错误
+ *   2 - EOF: 文件结束/输入结束
+ *   3 - TYPE_ERROR: 类型错误
+ *   4 - OUT_OF_BOUNDS: 越界错误
+ *   5 - IO_ERROR: 输入输出错误
+ * ============================================================================
+ */
+
+#define FLYUX_OK            0
+#define FLYUX_ERROR         1
+#define FLYUX_EOF           2
+#define FLYUX_TYPE_ERROR    3
+#define FLYUX_OUT_OF_BOUNDS 4
+#define FLYUX_IO_ERROR      5
+
+/* 全局运行时状态 */
+typedef struct {
+    int last_status;        /* 最后一次操作的状态码 */
+    char error_msg[256];    /* 错误消息 */
+    int error_line;         /* 错误行号（供调试用）*/
+} RuntimeState;
+
+static RuntimeState g_runtime_state = {
+    .last_status = FLYUX_OK,
+    .error_msg = "",
+    .error_line = 0
+};
+
+/* 设置运行时状态 */
+static void set_runtime_status(int status, const char *message) {
+    g_runtime_state.last_status = status;
+    if (message) {
+        snprintf(g_runtime_state.error_msg, sizeof(g_runtime_state.error_msg), "%s", message);
+    } else {
+        g_runtime_state.error_msg[0] = '\0';
+    }
+}
+
+/* 获取最后的状态码 */
+int flyux_get_last_status() {
+    return g_runtime_state.last_status;
+}
+
+/* 获取最后的错误消息 */
+const char* flyux_get_last_error() {
+    return g_runtime_state.error_msg;
+}
+
+/* 清除错误状态 */
+void flyux_clear_error() {
+    g_runtime_state.last_status = FLYUX_OK;
+    g_runtime_state.error_msg[0] = '\0';
+}
+
+/* ============================================================================
+ * Value 结构和基础操作
+ * ============================================================================
+ */
+
 /* Value structure */
 typedef struct {
     int type;           /* 当前值的实际类型 */
@@ -922,3 +988,169 @@ Value* value_array_get(Value *array, Value *index) {
     return elements[i];
 }
 
+/* ============================================================================
+ * 输入输出函数
+ * ============================================================================
+ */
+
+/* 
+ * input(prompt) - 从标准输入读取一行
+ * 
+ * 参数：
+ *   prompt: 提示字符串（可选，可以为 null）
+ * 
+ * 返回：
+ *   成功: 返回输入的字符串（不包含换行符）
+ *   失败/EOF: 返回 null，并设置状态码
+ * 
+ * 状态码：
+ *   FLYUX_OK: 读取成功
+ *   FLYUX_EOF: 遇到文件结束（Ctrl+D / Ctrl+Z）
+ *   FLYUX_IO_ERROR: 读取错误
+ * 
+ * 示例：
+ *   name := input("请输入姓名: ")
+ *   if (name == null) {
+ *       println("输入已取消")
+ *   }
+ */
+Value* value_input(Value *prompt) {
+    // 清除之前的错误状态
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    // 显示提示符（如果提供）
+    if (prompt && prompt->type == VALUE_STRING && prompt->data.string) {
+        printf("%s", prompt->data.string);
+        fflush(stdout);  // 确保提示符立即显示
+    }
+    
+    // 读取输入
+    char buffer[4096];  // 支持最多 4KB 的输入
+    
+    if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+        // 读取失败：可能是 EOF 或错误
+        if (feof(stdin)) {
+            set_runtime_status(FLYUX_EOF, "End of input (EOF)");
+        } else {
+            set_runtime_status(FLYUX_IO_ERROR, "Input read error");
+        }
+        return box_null();
+    }
+    
+    // 移除末尾的换行符
+    size_t len = strlen(buffer);
+    if (len > 0 && buffer[len - 1] == '\n') {
+        buffer[len - 1] = '\0';
+        len--;
+    }
+    // 处理 Windows 的 \r\n
+    if (len > 0 && buffer[len - 1] == '\r') {
+        buffer[len - 1] = '\0';
+        len--;
+    }
+    
+    // 复制字符串并创建 Value
+    char *result_str = (char*)malloc(len + 1);
+    if (!result_str) {
+        set_runtime_status(FLYUX_ERROR, "Memory allocation failed");
+        return box_null();
+    }
+    
+    memcpy(result_str, buffer, len + 1);
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_STRING;
+    result->declared_type = VALUE_STRING;
+    result->data.string = result_str;
+    result->string_length = len;
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return result;
+}
+
+/* ============================================================================
+ * 状态查询函数（供用户代码调用）
+ * ============================================================================
+ */
+
+/*
+ * lastStatus() - 获取最后一次操作的状态码
+ * 
+ * 返回：
+ *   状态码（数字）
+ *     0 = OK
+ *     1 = ERROR
+ *     2 = EOF
+ *     3 = TYPE_ERROR
+ *     4 = OUT_OF_BOUNDS
+ *     5 = IO_ERROR
+ * 
+ * 示例：
+ *   input("输入: ")
+ *   if (lastStatus() != 0) {
+ *       println("输入失败")
+ *   }
+ */
+Value* value_last_status() {
+    return box_number((double)g_runtime_state.last_status);
+}
+
+/*
+ * lastError() - 获取最后一次错误的消息
+ * 
+ * 返回：
+ *   错误消息字符串，如果没有错误返回空字符串
+ * 
+ * 示例：
+ *   if (lastStatus() != 0) {
+ *       println("错误:", lastError())
+ *   }
+ */
+Value* value_last_error() {
+    size_t len = strlen(g_runtime_state.error_msg);
+    if (len == 0) {
+        return box_string("");
+    }
+    
+    // 复制错误消息
+    char *msg = (char*)malloc(len + 1);
+    strcpy(msg, g_runtime_state.error_msg);
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_STRING;
+    result->declared_type = VALUE_STRING;
+    result->data.string = msg;
+    result->string_length = len;
+    
+    return result;
+}
+
+/*
+ * clearError() - 清除错误状态
+ * 
+ * 用于在处理完错误后重置状态
+ * 
+ * 示例：
+ *   clearError()
+ */
+Value* value_clear_error() {
+    flyux_clear_error();
+    return box_null();
+}
+
+/*
+ * isOk() - 检查最后一次操作是否成功
+ * 
+ * 返回：
+ *   true: 操作成功
+ *   false: 操作失败
+ * 
+ * 示例：
+ *   data := input("输入数据: ")
+ *   if (!isOk()) {
+ *       println("输入失败")
+ *   }
+ */
+Value* value_is_ok() {
+    return box_bool(g_runtime_state.last_status == FLYUX_OK);
+}
