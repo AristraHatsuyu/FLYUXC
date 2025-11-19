@@ -421,20 +421,29 @@ static char* simplify_parens(const char* expr){
 
             int remove_last_layer = 0;
             if (!keep_whole){
-                // primary 允许彻底去——满足 z:=(((x))) -> z:=x
-                if (is_primary_expr(inner)){
-                    remove_last_layer = 1;
-                }else{
-                    int Pin = min_top_level_binary_prec(inner);
-                    if (Pin < 0){
-                        // 无二元运算符，强绑定，也可去
+                // 检查左侧是否是 L> 或 R>，如果是则保留括号（循环/返回语法）
+                int protect_for_keyword = 0;
+                if (prev_i >= 1 && expr[prev_i] == '>' && 
+                    (expr[prev_i-1] == 'L' || expr[prev_i-1] == 'R')) {
+                    protect_for_keyword = 1;
+                }
+                
+                if (!protect_for_keyword) {
+                    // primary 允许彻底去——满足 z:=(((x))) -> z:=x
+                    if (is_primary_expr(inner)){
                         remove_last_layer = 1;
                     }else{
-                        OpInfo L = read_op_left(expr, prev_i);
-                        OpInfo R = read_op_right(expr, next_i);
-                        int left_ok  = (!L.exists) || (L.prec < Pin);
-                        int right_ok = (!R.exists) || (R.prec < Pin);
-                        if (left_ok && right_ok) remove_last_layer = 1;
+                        int Pin = min_top_level_binary_prec(inner);
+                        if (Pin < 0){
+                            // 无二元运算符，强绑定，也可去
+                            remove_last_layer = 1;
+                        }else{
+                            OpInfo L = read_op_left(expr, prev_i);
+                            OpInfo R = read_op_right(expr, next_i);
+                            int left_ok  = (!L.exists) || (L.prec < Pin);
+                            int right_ok = (!R.exists) || (R.prec < Pin);
+                            if (left_ok && right_ok) remove_last_layer = 1;
+                        }
                     }
                 }
             }

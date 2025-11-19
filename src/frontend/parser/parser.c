@@ -940,9 +940,78 @@ static ASTNode *parse_loop_statement(Parser *p) {
         return NULL;
     }
     
+    // 检查循环类型：必须紧跟 [ 或 (
+    // L> [n] { } - 重复循环
+    // L> (...) { } - for 或 foreach 循环
+    
+    if (match(p, TK_L_BRACKET)) {
+        // 重复循环: L> [n] { }
+        ASTNode *count_expr = parse_expression(p);
+        if (!count_expr) {
+            error_at(p, current_token(p), "Expected expression in repeat loop");
+            return NULL;
+        }
+        if (!match(p, TK_R_BRACKET)) {
+            error_at(p, current_token(p), "Expected ']' after repeat count");
+            return NULL;
+        }
+        ASTNode *body = parse_block(p);
+        return ast_repeat_loop_create(count_expr, body, token_to_loc(start));
+    }
+    
     if (!match(p, TK_L_PAREN)) {
-        error_at(p, current_token(p), "Expected '(' after 'L>'");
+        error_at(p, current_token(p), "Expected '(' or '[' after 'L>'");
         return NULL;
+    }
+    
+    // 区分 for 循环和 foreach 循环
+    // foreach: L> (array : item) { }
+    // for:     L> (init; cond; update) { }
+    
+    // 先向前看，检查是否有单独的 ':' 符号（不是 ':=' 的一部分）
+    int has_colon = 0;
+    int lookahead = 0;
+    while (lookahead < 10) {  // 最多向前看10个token
+        Token *t = peek(p, lookahead);
+        // 单独的冒号（不是 := 或类型注解）
+        if (t->kind == TK_COLON) {
+            // 检查下一个token，如果是 '=' 则是 ':=' 不是 foreach
+            Token *next = peek(p, lookahead + 1);
+            if (next->kind != TK_ASSIGN && next->kind != TK_L_BRACKET && next->kind != TK_L_PAREN) {
+                has_colon = 1;
+                break;
+            }
+        }
+        // 遇到分号说明是 for 循环
+        if (t->kind == TK_SEMI || t->kind == TK_R_PAREN) {
+            break;
+        }
+        lookahead++;
+    }
+    
+    if (has_colon) {
+        // foreach 循环: L> (array : item) { }
+        ASTNode *iterable = parse_expression(p);
+        if (!iterable) {
+            error_at(p, current_token(p), "Expected iterable expression");
+            return NULL;
+        }
+        if (!match(p, TK_COLON)) {
+            error_at(p, current_token(p), "Expected ':' in foreach loop");
+            return NULL;
+        }
+        Token *item_token = current_token(p);
+        if (!match(p, TK_IDENT)) {
+            error_at(p, item_token, "Expected variable name after ':'");
+            return NULL;
+        }
+        char *item_var = strdup(item_token->lexeme);
+        if (!match(p, TK_R_PAREN)) {
+            error_at(p, current_token(p), "Expected ')' after foreach header");
+            return NULL;
+        }
+        ASTNode *body = parse_block(p);
+        return ast_foreach_loop_create(iterable, item_var, body, token_to_loc(start));
     }
     
     // 解析 for 循环: L>(init; cond; update) { ... }

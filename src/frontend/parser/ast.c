@@ -442,3 +442,20 @@ ASTNode *ast_for_loop_create(ASTNode *init, ASTNode *cond, ASTNode *update, ASTN
     loop->loop_data.for_loop.update = update;
     return node;
 }
+
+// 重复循环专用: L> [n] { }
+ASTNode *ast_repeat_loop_create(ASTNode *count_expr, ASTNode *body, SourceLocation loc) {
+    ASTNode *node = ast_loop_stmt_create(LOOP_REPEAT, body, loc);
+    ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
+    loop->loop_data.repeat_count = count_expr;
+    return node;
+}
+
+// foreach循环专用: L> (array : item) { }
+ASTNode *ast_foreach_loop_create(ASTNode *iterable, char *item_var, ASTNode *body, SourceLocation loc) {
+    ASTNode *node = ast_loop_stmt_create(LOOP_FOREACH, body, loc);
+    ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
+    loop->loop_data.foreach_loop.iterable = iterable;
+    loop->loop_data.foreach_loop.item_var = item_var;
+    return node;
+}

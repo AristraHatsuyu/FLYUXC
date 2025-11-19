@@ -375,4 +375,10 @@ ASTNode *ast_loop_stmt_create(LoopType type, ASTNode *body, SourceLocation loc);
 ASTNode *ast_for_loop_create(ASTNode *init, ASTNode *cond, ASTNode *update, 
                               ASTNode *body, SourceLocation loc);
 
+/* 创建重复循环节点 */
+ASTNode *ast_repeat_loop_create(ASTNode *count_expr, ASTNode *body, SourceLocation loc);
+
+/* 创建foreach循环节点 */
+ASTNode *ast_foreach_loop_create(ASTNode *iterable, char *item_var, ASTNode *body, SourceLocation loc);
+
 #endif /* FLYUXC_AST_H */

@@ -370,8 +370,28 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
 
                 int is_object_key = 0;
                 if (after == ':') {
-                    /* 区分类型注解/变量定义 和 对象 key */
-                    if (!looks_like_typed_definition(normalized_source, len, j)) {
+                    /* 区分类型注解/变量定义、对象 key、以及 foreach 循环中的迭代变量 */
+                    // 检查是否是 foreach: L> (arr : item)
+                    // 向前搜索，看是否有 "L>" 跟着 "("
+                    int is_foreach = 0;
+                    if (start >= 3) {
+                        // 向前搜索 L> (，允许中间有空格
+                        size_t k = start - 1;
+                        while (k > 0 && (normalized_source[k] == ' ' || normalized_source[k] == '\t')) {
+                            k--;
+                        }
+                        if (k > 0 && normalized_source[k] == '(') {
+                            k--;
+                            while (k > 0 && (normalized_source[k] == ' ' || normalized_source[k] == '\t')) {
+                                k--;
+                            }
+                            if (k >= 1 && normalized_source[k] == '>' && normalized_source[k-1] == 'L') {
+                                is_foreach = 1;
+                            }
+                        }
+                    }
+                    
+                    if (!is_foreach && !looks_like_typed_definition(normalized_source, len, j)) {
                         is_object_key = 1;
                     }
                 }

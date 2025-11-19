@@ -1215,7 +1215,162 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_LOOP_STMT: {
             ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
             
-            if (loop->loop_type == LOOP_FOR) {
+            if (loop->loop_type == LOOP_REPEAT) {
+                // 重复循环: L> [n] { body }
+                // 转换为: i=0; while(i<n) { body; i++; }
+                char *loop_counter = new_temp(gen);
+                char *loop_limit = codegen_expr(gen, loop->loop_data.repeat_count);
+                
+                // 分配计数器变量
+                fprintf(gen->code_buf, "  %s_var = alloca %%struct.Value*\n", loop_counter);
+                
+                // 初始化计数器为 0
+                char *zero = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 0.0)\n", zero);
+                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s_var\n", zero, loop_counter);
+                free(zero);
+                
+                char *loop_header = new_label(gen);
+                char *loop_body = new_label(gen);
+                char *loop_end = new_label(gen);
+                
+                // 跳转到条件检查
+                fprintf(gen->code_buf, "  br label %%%s\n", loop_header);
+                fprintf(gen->code_buf, "\n%s:\n", loop_header);
+                
+                // 条件: i < n
+                char *counter_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s_var\n", counter_val, loop_counter);
+                char *cond_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_less_than(%%struct.Value* %s, %%struct.Value* %s)\n",
+                        cond_result, counter_val, loop_limit);
+                
+                char *truthy = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, cond_result);
+                char *cond_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", cond_bool, truthy);
+                fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", cond_bool, loop_body, loop_end);
+                
+                free(counter_val);
+                free(cond_result);
+                free(truthy);
+                free(cond_bool);
+                
+                // 循环体
+                fprintf(gen->code_buf, "\n%s:\n", loop_body);
+                if (loop->body) {
+                    codegen_stmt(gen, loop->body);
+                }
+                
+                // i++
+                char *old_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s_var\n", old_val, loop_counter);
+                char *one = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 1.0)\n", one);
+                char *new_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n",
+                        new_val, old_val, one);
+                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s_var\n", new_val, loop_counter);
+                fprintf(gen->code_buf, "  br label %%%s\n", loop_header);
+                
+                free(old_val);
+                free(one);
+                free(new_val);
+                
+                // 结束
+                fprintf(gen->code_buf, "\n%s:\n", loop_end);
+                
+                free(loop_counter);
+                free(loop_limit);
+                free(loop_header);
+                free(loop_body);
+                free(loop_end);
+                
+            } else if (loop->loop_type == LOOP_FOREACH) {
+                // foreach循环: L> (array : item) { body }
+                char *array = codegen_expr(gen, loop->loop_data.foreach_loop.iterable);
+                char *item_var = loop->loop_data.foreach_loop.item_var;
+                
+                // 注册循环变量
+                if (!is_symbol_defined(gen, item_var)) {
+                    register_symbol(gen, item_var);
+                    fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", item_var);
+                }
+                
+                // 获取数组长度
+                char *length = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i64 @value_array_length(%%struct.Value* %s)\n", length, array);
+                
+                // 循环索引
+                char *index_var = new_temp(gen);
+                fprintf(gen->code_buf, "  %s_var = alloca i64\n", index_var);
+                fprintf(gen->code_buf, "  store i64 0, i64* %s_var\n", index_var);
+                
+                char *loop_header = new_label(gen);
+                char *loop_body = new_label(gen);
+                char *loop_end = new_label(gen);
+                
+                // 跳转到条件检查
+                fprintf(gen->code_buf, "  br label %%%s\n", loop_header);
+                fprintf(gen->code_buf, "\n%s:\n", loop_header);
+                
+                // 条件: index < length
+                char *index_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load i64, i64* %s_var\n", index_val, index_var);
+                char *cond = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp slt i64 %s, %s\n", cond, index_val, length);
+                fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", cond, loop_body, loop_end);
+                
+                free(index_val);
+                free(cond);
+                
+                // 循环体
+                fprintf(gen->code_buf, "\n%s:\n", loop_body);
+                
+                // 获取当前元素: item = array[index]
+                char *curr_index = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load i64, i64* %s_var\n", curr_index, index_var);
+                char *index_boxed = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = sitofp i64 %s to double\n", index_boxed, curr_index);
+                char *index_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %s)\n", index_value, index_boxed);
+                char *element = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_array_get(%%struct.Value* %s, %%struct.Value* %s)\n",
+                        element, array, index_value);
+                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n", element, item_var);
+                
+                free(curr_index);
+                free(index_boxed);
+                free(index_value);
+                free(element);
+                
+                // 执行循环体
+                if (loop->body) {
+                    codegen_stmt(gen, loop->body);
+                }
+                
+                // index++
+                char *old_index = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load i64, i64* %s_var\n", old_index, index_var);
+                char *new_index = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = add i64 %s, 1\n", new_index, old_index);
+                fprintf(gen->code_buf, "  store i64 %s, i64* %s_var\n", new_index, index_var);
+                fprintf(gen->code_buf, "  br label %%%s\n", loop_header);
+                
+                free(old_index);
+                free(new_index);
+                
+                // 结束
+                fprintf(gen->code_buf, "\n%s:\n", loop_end);
+                
+                free(array);
+                free(length);
+                free(index_var);
+                free(loop_header);
+                free(loop_body);
+                free(loop_end);
+                
+            } else if (loop->loop_type == LOOP_FOR) {
                 // for循环: init; cond; update { body }
                 char *loop_header = new_label(gen);
                 char *loop_body = new_label(gen);
@@ -1421,7 +1576,9 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_equals(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_less_than(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_greater_than(%%struct.Value*, %%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_index(%%struct.Value*, %%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_index(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare i64 @value_array_length(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_array_get(%%struct.Value*, %%struct.Value*)\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

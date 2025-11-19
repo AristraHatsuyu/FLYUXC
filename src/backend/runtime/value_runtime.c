@@ -511,7 +511,9 @@ void value_print(Value *v) {
 
 /* Print value with newline */
 void value_println(Value *v) {
-    value_print(v);
+    if (v) {
+        value_print(v);
+    }
     printf("\n");
 }
 
@@ -692,9 +694,15 @@ static void format_double_truncate(char *buf, size_t buf_size, double num, int p
     if (dot && precision >= 0) {
         // 截断到目标精度（不四舍五入）
         size_t dot_pos = dot - temp;
-        size_t target_len = dot_pos + 1 + precision;  // 整数部分 + . + 小数位
-        if (target_len < strlen(temp)) {
-            temp[target_len] = '\0';
+        if (precision == 0) {
+            // precision=0 时不输出小数点
+            temp[dot_pos] = '\0';
+        } else {
+            // precision>0 时保留小数点和小数位
+            size_t target_len = dot_pos + 1 + precision;  // 整数部分 + . + 小数位
+            if (target_len < strlen(temp)) {
+                temp[target_len] = '\0';
+            }
         }
     }
     
@@ -887,5 +895,30 @@ void value_printf(Value *format, Value **args, long arg_count) {
             putchar(fmt[i]);
         }
     }
+}
+
+/* 获取数组长度 */
+long value_array_length(Value *v) {
+    if (!v || v->type != VALUE_ARRAY) {
+        return 0;
+    }
+    return v->array_size;
+}
+
+/* 数组元素访问 */
+Value* value_array_get(Value *array, Value *index) {
+    if (!array || array->type != VALUE_ARRAY) {
+        return box_undef();
+    }
+    
+    double idx = unbox_number(index);
+    long i = (long)idx;
+    
+    if (i < 0 || i >= array->array_size) {
+        return box_undef();  // 越界返回 undef
+    }
+    
+    Value **elements = (Value**)array->data.pointer;
+    return elements[i];
 }
 
