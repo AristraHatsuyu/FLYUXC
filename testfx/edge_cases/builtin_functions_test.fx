@@ -50,14 +50,14 @@ idx := indexOf(arr, 2)
 has := includes(arr, 2)
 
 // ===== 对象操作 =====
-obj := {a: 1, b: 2, c: 3}
-k := keys(obj)
-v := values(obj)
-e := entries(obj)
-hasA := hasKey(obj, "a")
+object := {a: 1, b: 2, c: 3}
+k := keys(object)
+v := values(object)
+e := entries(object)
+hasA := hasKey(object, "a")
 merged := merge({a: 1}, {b: 2})
-cloned := clone(obj)
-deepCloned := deepClone(obj)
+cloned := clone(object)
+deepCloned := deepClone(object)
 
 // ===== 类型转换和检查 =====
 num := toNum("123")

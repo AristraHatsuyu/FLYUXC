@@ -141,22 +141,22 @@ R>          // 返回 undef (隐式)
 
 #### 方法链调用（.>）
 ```flyux
-arr.>length.>🐮🐴(2)       // 函数🐮🐴具有两个参数，.>左边作为第一个参数
-obj.>toString.>toUpperCase
+array.>length.>🐮🐴(2)       // 函数🐮🐴具有两个参数，.>左边作为第一个参数
+object.>toString.>toUpperCase
 ```
 
 #### 属性访问（.）
 ```flyux
-obj.property
-obj.nestedObj.deepProperty
+object.property
+object.nestedObj.deepProperty
 ```
 
 #### 数组/对象索引
 ```flyux
-arr[0]
-obj.key
-obj["key"]
-arr[idx]
+array[0]
+object.key
+object["key"]
+array[idx]
 ```
 
 ### 7. 运算符
@@ -645,52 +645,52 @@ has := includes(arr, 2)     // true
 
 ### 🗂️ 对象操作
 
-#### keys(object)
+#### keys(obj)
 返回对象所有键的数组。
 ```flyux
-obj := {a: 1, b: 2, c: 3}
-k := keys(obj)              // ["a", "b", "c"]
+object := {a: 1, b: 2, c: 3}
+k := keys(object)              // ["a", "b", "c"]
 ```
 
-#### values(object)
+#### values(obj)
 返回对象所有值的数组。
 ```flyux
-obj := {a: 1, b: 2, c: 3}
-v := values(obj)            // [1, 2, 3]
+object := {a: 1, b: 2, c: 3}
+v := values(object)            // [1, 2, 3]
 ```
 
-#### entries(object)
+#### entries(obj)
 返回对象键值对数组。
 ```flyux
-obj := {a: 1, b: 2}
-e := entries(obj)           // [["a", 1], ["b", 2]]
+object := {a: 1, b: 2}
+e := entries(object)           // [["a", 1], ["b", 2]]
 ```
 
-#### hasKey(object, key)
+#### hasKey(obj, key)
 检查对象是否有指定键。
 ```flyux
-obj := {a: 1, b: 2}
-has := hasKey(obj, "a")     // true
+object := {a: 1, b: 2}
+has := hasKey(object, "a")     // true
 ```
 
 #### merge(obj1, obj2, ...)
 合并多个对象（后面的覆盖前面的）。
 ```flyux
-obj := merge({a: 1}, {b: 2}, {a: 3})  // {a: 3, b: 2}
+object := merge({a: 1}, {b: 2}, {a: 3})  // {a: 3, b: 2}
 ```
 
-#### clone(object)
+#### clone(obj)
 浅拷贝对象。
 ```flyux
-obj1 := {a: 1, b: 2}
-obj2 := clone(obj1)
+object1 := {a: 1, b: 2}
+object2 := clone(object1)
 ```
 
-#### deepClone(object)
+#### deepClone(obj)
 深拷贝对象。
 ```flyux
-obj1 := {a: {b: 1}}
-obj2 := deepClone(obj1)
+object1 := {a: {b: 1}}
+object2 := deepClone(object1)
 ```
 
 ---

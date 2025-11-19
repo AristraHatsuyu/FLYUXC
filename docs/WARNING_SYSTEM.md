@@ -34,12 +34,12 @@ arr := [1, 2, 3]
 
 **示例**:
 ```javascript
-obj := {a: 1, b: 2,}  // 警告：Trailing comma in object literal
+object := {a: 1, b: 2,}  // 警告：Trailing comma in object literal
 ```
 
 **正确写法**:
 ```javascript
-obj := {a: 1, b: 2}
+object := {a: 1, b: 2}
 ```
 
 ### 3. 函数调用尾随逗号

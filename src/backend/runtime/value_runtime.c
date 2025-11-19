@@ -3,6 +3,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
+
+/* ANSI Color codes (JS console style) */
+#define COLOR_CYAN      "\033[38;5;39m"      /* 数字 (浅青色) */
+#define ANSI_RED_BROWN  "\033[38;5;131m" /* 字符串 (红褐色) */
+#define ANSI_BLUE       "\033[34m"      /* 布尔值 */
+#define COLOR_GRAY      "\033[90m"      /* null/undefined */
+#define COLOR_RESET     "\033[0m"
+
+/* Check if we should use colors (TTY detection) */
+static int should_use_colors() {
+    static int checked = 0;
+    static int use_colors = 0;
+    
+    if (!checked) {
+        use_colors = isatty(fileno(stdout));
+        checked = 1;
+    }
+    
+    return use_colors;
+}
 
 /* Value type tags */
 #define VALUE_NUMBER 0
@@ -188,24 +209,40 @@ static void value_to_json_string(Value *v, char *buf, size_t size) {
 
 /* 递归打印数组内容为JSON格式 */
 static void print_array_json(Value **arr, long size) {
+    int use_colors = should_use_colors();
+    
     printf("[");
     for (long i = 0; i < size; i++) {
         if (i > 0) printf(",");
         if (!arr[i]) {
-            printf("null");
+            if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
+            else printf("null");
         } else {
             switch (arr[i]->type) {
                 case VALUE_NUMBER:
-                    printf("%g", arr[i]->data.number);
+                    if (use_colors) {
+                        printf("%s%g%s", COLOR_CYAN, arr[i]->data.number, COLOR_RESET);
+                    } else {
+                        printf("%g", arr[i]->data.number);
+                    }
                     break;
                 case VALUE_STRING:
-                    printf("\"%s\"", arr[i]->data.string);
+                    if (use_colors) {
+                        printf("%s\"%s\"%s", ANSI_RED_BROWN, arr[i]->data.string, COLOR_RESET);
+                    } else {
+                        printf("\"%s\"", arr[i]->data.string);
+                    }
                     break;
                 case VALUE_BOOL:
-                    printf("%s", arr[i]->data.number != 0 ? "true" : "false");
+                    if (use_colors) {
+                        printf("%s%s%s", ANSI_BLUE, arr[i]->data.number != 0 ? "true" : "false", COLOR_RESET);
+                    } else {
+                        printf("%s", arr[i]->data.number != 0 ? "true" : "false");
+                    }
                     break;
                 case VALUE_NULL:
-                    printf("null");
+                    if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
+                    else printf("null");
                     break;
                 case VALUE_ARRAY: {
                     Value **nested = (Value **)arr[i]->data.pointer;
@@ -216,7 +253,8 @@ static void print_array_json(Value **arr, long size) {
                     printf("{...}"); /* 对象暂时简化 */
                     break;
                 default:
-                    printf("null");
+                    if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
+                    else printf("null");
             }
         }
     }
@@ -225,26 +263,40 @@ static void print_array_json(Value **arr, long size) {
 
 /* Print a value */
 void value_print(Value *v) {
+    int use_colors = should_use_colors();
+    
     if (!v) {
-        printf("<undef>");
+        if (use_colors) printf("%s<undef>%s", COLOR_GRAY, COLOR_RESET);
+        else printf("<undef>");
         return;
     }
     
     switch (v->type) {
         case VALUE_NUMBER:
-            printf("%g", v->data.number);
+            if (use_colors) {
+                printf("%s%g%s", COLOR_CYAN, v->data.number, COLOR_RESET);
+            } else {
+                printf("%g", v->data.number);
+            }
             break;
         case VALUE_STRING:
             /* 使用fwrite支持包含\0的字符串 */
             if (v->data.string && v->string_length > 0) {
+                if (use_colors) printf("%s", ANSI_RED_BROWN);
                 fwrite(v->data.string, 1, v->string_length, stdout);
+                if (use_colors) printf("%s", COLOR_RESET);
             }
             break;
         case VALUE_BOOL:
-            printf("%s", v->data.number != 0 ? "true" : "false");
+            if (use_colors) {
+                printf("%s%s%s", ANSI_BLUE, v->data.number != 0 ? "true" : "false", COLOR_RESET);
+            } else {
+                printf("%s", v->data.number != 0 ? "true" : "false");
+            }
             break;
         case VALUE_NULL:
-            printf("<null>");
+            if (use_colors) printf("%s<null>%s", COLOR_GRAY, COLOR_RESET);
+            else printf("<null>");
             break;
         case VALUE_ARRAY: {
             /* 输出JSON格式的数组 */
@@ -260,7 +312,8 @@ void value_print(Value *v) {
             printf("{...}");
             break;
         default:
-            printf("<unknown>");
+            if (use_colors) printf("%s<unknown>%s", COLOR_GRAY, COLOR_RESET);
+            else printf("<unknown>");
     }
 }
 

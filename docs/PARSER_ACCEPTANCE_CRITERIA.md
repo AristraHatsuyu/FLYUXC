@@ -485,8 +485,8 @@ arr[0]
 matrix[i][j]
 
 // 8. 成员访问
-obj.property
-obj.nested.deep
+object.property
+object.nested.deep
 
 // 9. 方法链
 arr.>length
@@ -523,7 +523,7 @@ PI :(num)= 3.14
 // 2. 赋值
 x = 789
 arr[0] = 1
-obj.prop = "value"
+object.prop = "value"
 
 // 3. if语句
 if (x > 0) {
@@ -720,7 +720,7 @@ _temp := 456              // 应该OK（_前缀）
 {{{{{{{{{{{ x := 1 }}}}}}}}}}}
 
 // 4. 长链式调用
-obj.a.b.c.d.e.f.g.h.i.j
+object.a.b.c.d.e.f.g.h.i.j
 
 // 5. 大量参数
 func(a1, a2, a3, ... a100)

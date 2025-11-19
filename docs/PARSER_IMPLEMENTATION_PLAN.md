@@ -192,9 +192,9 @@ BinaryExpr(+)
 ```flyux
 // test_postfix.fx
 f(1, 2)
-arr[0]
-obj.prop
-arr[0].prop
+array[0]
+object.prop
+array[0].prop
 f(a, b).result
 [1, 2, 3]
 [1, "hello", true, [nested]]
@@ -203,7 +203,7 @@ f(a, b).result
 
 // 链式调用
 arr.>length
-obj.>toString.>toUpperCase
+object.>toString.>toUpperCase
 🐶.>🐮🐴(2)
 ```
 
@@ -265,7 +265,7 @@ main := () {
 }
 
 x = 789
-obj.prop = "hello"
+object.prop = "hello"
 arr[0] = 42
 ```
 
