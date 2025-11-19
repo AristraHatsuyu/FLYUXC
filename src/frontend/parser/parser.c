@@ -434,7 +434,13 @@ static ASTNode *parse_primary(Parser *p) {
     // 数字字面量
     if (match(p, TK_NUM)) {
         Token *t = &p->tokens[p->current - 1];
-        double value = atof(t->lexeme);
+        char *endptr;
+        double value = strtod(t->lexeme, &endptr);
+        // 检查转换是否成功
+        if (endptr == t->lexeme) {
+            error_at(p, t, "Invalid number format");
+            return NULL;
+        }
         return ast_num_literal_create(value, (char *)t->lexeme, token_to_loc(t));
     }
     
@@ -1008,8 +1014,19 @@ static ASTNode *parse_loop_statement(Parser *p) {
 static ASTNode *parse_var_declaration(Parser *p) {
     Token *name_token = current_token(p);
     
-    // Note: 变量名不应该是类型关键字，但这由normalize阶段保证
-    // 这里不再检查，因为类型注解内部可以使用类型关键字
+    // 检查是否使用了保留关键字作为变量名
+    if (name_token->kind == TK_TYPE_NUM || name_token->kind == TK_TYPE_STR ||
+        name_token->kind == TK_TYPE_BL || name_token->kind == TK_TYPE_OBJ ||
+        name_token->kind == TK_TYPE_FUNC || name_token->kind == TK_TRUE ||
+        name_token->kind == TK_FALSE || name_token->kind == TK_NULL ||
+        name_token->kind == TK_UNDEF || name_token->kind == TK_KW_IF) {
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), 
+                "Cannot use reserved keyword '%s' as variable name", 
+                name_token->lexeme);
+        error_at(p, name_token, error_msg);
+        return NULL;
+    }
     
     if (!match(p, TK_IDENT)) {
         return NULL;
@@ -1261,6 +1278,25 @@ static ASTNode *parse_statement(Parser *p) {
     // 因为在这个位置，我们无法区分是类型关键字还是恰好同名的标识符
     // 已移除此检查，类型关键字会在classify_identifier中被识别为TYPE tokens
     // 如果它们出现在变量名位置，parse_var_declaration会处理
+    
+    // 检查是否使用了保留关键字作为变量名（在变量声明位置）
+    Token *cur_tok = current_token(p);
+    Token *next_tok = peek(p, 1);
+    if (next_tok && (next_tok->kind == TK_DEFINE || next_tok->kind == TK_FUNC_TYPE_START || next_tok->kind == TK_COLON)) {
+        // 这是一个变量声明，检查变量名
+        if (cur_tok->kind == TK_TYPE_NUM || cur_tok->kind == TK_TYPE_STR ||
+            cur_tok->kind == TK_TYPE_BL || cur_tok->kind == TK_TYPE_OBJ ||
+            cur_tok->kind == TK_TYPE_FUNC || cur_tok->kind == TK_TRUE ||
+            cur_tok->kind == TK_FALSE || cur_tok->kind == TK_NULL ||
+            cur_tok->kind == TK_UNDEF || cur_tok->kind == TK_KW_IF) {
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg), 
+                    "Cannot use reserved keyword '%s' as variable name", 
+                    cur_tok->lexeme);
+            error_at(p, cur_tok, error_msg);
+            return NULL;
+        }
+    }
     
     // 变量声明或赋值或函数调用
     if (check(p, TK_IDENT) || check(p, TK_BUILTIN_FUNC)) {

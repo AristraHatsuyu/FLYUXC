@@ -4,6 +4,8 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <stdarg.h>
+#include <ctype.h>
 
 /* ANSI Color codes (JS console style) */
 #define COLOR_NUM      "\033[38;5;151m"      /* 数字 (浅青色) */
@@ -225,7 +227,13 @@ static void value_to_json_string(Value *v, char *buf, size_t size) {
     
     switch (v->type) {
         case VALUE_NUMBER:
-            snprintf(buf, size, "%g", v->data.number);
+            if (isinf(v->data.number)) {
+                snprintf(buf, size, "%s", v->data.number > 0 ? "+Inf" : "-Inf");
+            } else if (isnan(v->data.number)) {
+                snprintf(buf, size, "NaN");
+            } else {
+                snprintf(buf, size, "%.16g", v->data.number);
+            }
             break;
         case VALUE_STRING:
             snprintf(buf, size, "\"%s\"", v->data.string);
@@ -247,6 +255,96 @@ static void value_to_json_string(Value *v, char *buf, size_t size) {
     }
 }
 
+/* 智能数字格式化 - 自动清理浮点误差 */
+static void print_smart_number(double num, int use_colors) {
+    // 特殊值检查
+    if (isinf(num)) {
+        if (use_colors) {
+            printf("%s%s%s", COLOR_NUM, num > 0 ? "+Inf" : "-Inf", COLOR_RESET);
+        } else {
+            printf("%s", num > 0 ? "+Inf" : "-Inf");
+        }
+        return;
+    } else if (isnan(num)) {
+        if (use_colors) {
+            printf("%sNaN%s", COLOR_NUM, COLOR_RESET);
+        } else {
+            printf("NaN");
+        }
+        return;
+    }
+    
+    // 对于非常接近整数的值，显示为整数
+    double rounded = round(num);
+    if (fabs(num - rounded) < 1e-9 && fabs(rounded) < 1e15) {
+        if (use_colors) {
+            printf("%s%.0f%s", COLOR_NUM, rounded, COLOR_RESET);
+        } else {
+            printf("%.0f", rounded);
+        }
+        return;
+    }
+    
+    // 对于小数，尝试找到合理的精度
+    // 使用 %.16g 但去除尾部无意义的 0 和浮点误差
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.16g", num);
+    
+    // 如果数字非常小或非常大，保持科学计数法
+    if (fabs(num) < 1e-4 || fabs(num) >= 1e15) {
+        if (use_colors) {
+            printf("%s%s%s", COLOR_NUM, buf, COLOR_RESET);
+        } else {
+            printf("%s", buf);
+        }
+        return;
+    }
+    
+    // 对于普通小数，尝试用更少的精度重新格式化以避免浮点误差
+    // 尝试 1-15 位小数，找到最短的精确表示
+    // 使用截断而不是四舍五入，避免精度边界问题
+    for (int precision = 1; precision <= 15; precision++) {
+        // 先用高精度格式化（precision+2 保证有足够的位数）
+        char temp_buf[64];
+        snprintf(temp_buf, sizeof(temp_buf), "%.*f", precision + 2, num);
+        
+        // 手动截断到目标精度（不四舍五入）
+        char *dot = strchr(temp_buf, '.');
+        if (dot && strlen(dot) > precision + 1) {
+            dot[precision + 1] = '\0';  // 截断到目标精度
+        }
+        
+        // 检查截断后的值是否足够接近原值
+        double reparsed = atof(temp_buf);
+        if (fabs(reparsed - num) < 1e-15) {
+            // 去除尾部的 0
+            size_t len = strlen(temp_buf);
+            while (len > 0 && temp_buf[len-1] == '0') {
+                temp_buf[--len] = '\0';
+            }
+            // 如果最后是小数点，也去掉
+            if (len > 0 && temp_buf[len-1] == '.') {
+                temp_buf[--len] = '\0';
+            }
+            
+            if (use_colors) {
+                printf("%s%s%s", COLOR_NUM, temp_buf, COLOR_RESET);
+            } else {
+                printf("%s", temp_buf);
+            }
+            return;
+        }
+    }
+    
+    // 降级方案：使用 %.16g
+    snprintf(buf, sizeof(buf), "%.16g", num);
+    if (use_colors) {
+        printf("%s%s%s", COLOR_NUM, buf, COLOR_RESET);
+    } else {
+        printf("%s", buf);
+    }
+}
+
 /* 递归打印数组内容为JSON格式，支持嵌套层级的彩虹括号 */
 static void print_array_json_depth(Value **arr, long size, int depth);
 static void print_object_json_depth(ObjectEntry *entries, long count, int depth);
@@ -261,13 +359,10 @@ static void print_value_json_depth(Value *v, int depth) {
     }
     
     switch (v->type) {
-        case VALUE_NUMBER:
-            if (use_colors) {
-                printf("%s%g%s", COLOR_NUM, v->data.number, COLOR_RESET);
-            } else {
-                printf("%g", v->data.number);
-            }
+        case VALUE_NUMBER: {
+            print_smart_number(v->data.number, use_colors);
             break;
+        }
         case VALUE_STRING:
             if (use_colors) {
                 printf("%s\"%s\"%s", ANSI_RED_BROWN, v->data.string, COLOR_RESET);
@@ -365,18 +460,12 @@ void value_print(Value *v) {
     
     switch (v->type) {
         case VALUE_NUMBER:
-            if (use_colors) {
-                printf("%s%g%s", COLOR_NUM, v->data.number, COLOR_RESET);
-            } else {
-                printf("%g", v->data.number);
-            }
+            print_smart_number(v->data.number, use_colors);
             break;
         case VALUE_STRING:
-            /* 使用fwrite支持包含\0的字符串 */
+            /* 直接的字符串不变色，保持默认终端颜色 */
             if (v->data.string && v->string_length > 0) {
-                if (use_colors) printf("%s", ANSI_RED_BROWN);
                 fwrite(v->data.string, 1, v->string_length, stdout);
-                if (use_colors) printf("%s", COLOR_RESET);
             }
             break;
         case VALUE_BOOL:
@@ -470,9 +559,23 @@ Value* value_multiply(Value *a, Value *b) {
 }
 
 Value* value_divide(Value *a, Value *b) {
+    double dividend = unbox_number(a);
     double divisor = unbox_number(b);
-    if (divisor == 0.0) return box_number(INFINITY);
-    return box_number(unbox_number(a) / divisor);
+    
+    if (divisor == 0.0) {
+        if (dividend == 0.0) {
+            // 0 / 0 = NaN
+            return box_number(NAN);
+        } else if (dividend > 0.0) {
+            // 正数 / 0 = Infinity
+            return box_number(INFINITY);
+        } else {
+            // 负数 / 0 = -Infinity
+            return box_number(-INFINITY);
+        }
+    }
+    
+    return box_number(dividend / divisor);
 }
 
 Value* value_power(Value *a, Value *b) {
@@ -530,3 +633,259 @@ void value_free(Value *v) {
         free(v);
     }
 }
+
+/*
+ * 将值转换为字符串（用于 %s 格式符，不带引号）
+ */
+static void value_to_string(Value *v, char *buf, size_t size) {
+    if (!v || !buf || size == 0) {
+        return;
+    }
+    
+    switch (v->type) {
+        case VALUE_NUMBER:
+            if (isinf(v->data.number)) {
+                snprintf(buf, size, "%s", v->data.number > 0 ? "+Inf" : "-Inf");
+            } else if (isnan(v->data.number)) {
+                snprintf(buf, size, "NaN");
+            } else {
+                snprintf(buf, size, "%.16g", v->data.number);
+            }
+            break;
+        case VALUE_STRING:
+            snprintf(buf, size, "%s", v->data.string);  // 不带引号
+            break;
+        case VALUE_BOOL:
+            snprintf(buf, size, "%s", v->data.number != 0 ? "true" : "false");
+            break;
+        case VALUE_NULL:
+            snprintf(buf, size, "null");
+            break;
+        case VALUE_UNDEF:
+            snprintf(buf, size, "undef");
+            break;
+        case VALUE_ARRAY:
+            snprintf(buf, size, "[...]");
+            break;
+        case VALUE_OBJECT:
+            snprintf(buf, size, "{...}");
+            break;
+        default:
+            snprintf(buf, size, "unknown");
+            break;
+    }
+}
+
+/*
+ * 格式化浮点数到指定精度（截断而不是四舍五入）
+ * 用于 printf 的 %f 格式符
+ */
+static void format_double_truncate(char *buf, size_t buf_size, double num, int precision) {
+    if (precision < 0) precision = 6;  // 默认精度
+    
+    // 使用更高的精度先格式化
+    char temp[256];
+    snprintf(temp, sizeof(temp), "%.*f", precision + 2, num);
+    
+    // 找到小数点
+    char *dot = strchr(temp, '.');
+    if (dot && precision >= 0) {
+        // 截断到目标精度（不四舍五入）
+        size_t dot_pos = dot - temp;
+        size_t target_len = dot_pos + 1 + precision;  // 整数部分 + . + 小数位
+        if (target_len < strlen(temp)) {
+            temp[target_len] = '\0';
+        }
+    }
+    
+    snprintf(buf, buf_size, "%s", temp);
+}
+
+/* 
+ * FLYUX printf 函数
+ * 支持格式化输出，类似 C 的 printf
+ * 格式说明符：
+ *   %d, %i - 整数
+ *   %f - 浮点数（默认6位小数）
+ *   %.Nf - N位小数的浮点数
+ *   %s - 字符串（支持宽度和对齐，如 %10s, %-10s）
+ *   %b - 布尔值
+ *   %v - 值（自动判断类型，JSON格式）
+ *   %% - 百分号字面量
+ */
+void value_printf(Value *format, Value **args, long arg_count) {
+    if (!format || format->type != VALUE_STRING) {
+        return;
+    }
+    
+    char *fmt = format->data.string;
+    size_t fmt_len = format->string_length;
+    long arg_index = 0;
+    
+    for (size_t i = 0; i < fmt_len; i++) {
+        if (fmt[i] == '%' && i + 1 < fmt_len) {
+            char spec = fmt[i + 1];
+            
+            if (spec == '%') {
+                // %% -> %
+                putchar('%');
+                i++;
+                continue;
+            }
+            
+            if (arg_index >= arg_count) {
+                // 参数不足，打印原样
+                putchar('%');
+                continue;
+            }
+            
+            Value *arg = args[arg_index];
+            
+            // 解析格式符：支持 %[-][width][.precision]type
+            // 例如：%-10s, %5d, %8.2f
+            int left_align = 0;     // 是否左对齐
+            int width = 0;          // 宽度
+            int precision = -1;     // 精度
+            size_t j = i + 1;       // 从 % 后开始解析
+            
+            // 1. 检查对齐标志
+            if (j < fmt_len && fmt[j] == '-') {
+                left_align = 1;
+                j++;
+            }
+            
+            // 2. 解析宽度
+            while (j < fmt_len && isdigit(fmt[j])) {
+                width = width * 10 + (fmt[j] - '0');
+                j++;
+            }
+            
+            // 3. 解析精度
+            if (j < fmt_len && fmt[j] == '.') {
+                j++;
+                precision = 0;
+                while (j < fmt_len && isdigit(fmt[j])) {
+                    precision = precision * 10 + (fmt[j] - '0');
+                    j++;
+                }
+            }
+            
+            // 4. 获取类型符
+            if (j >= fmt_len) {
+                putchar('%');
+                continue;
+            }
+            spec = fmt[j];
+            i = j;  // 更新位置到格式符
+            
+            switch (spec) {
+                case 'd':
+                case 'i': {
+                    // 整数（带颜色，支持宽度）
+                    double num = unbox_number(arg);
+                    int use_colors = should_use_colors();
+                    
+                    char temp[64];
+                    snprintf(temp, sizeof(temp), "%lld", (long long)num);
+                    
+                    if (use_colors) printf(COLOR_NUM);
+                    if (width > 0) {
+                        printf("%*s", left_align ? -width : width, temp);
+                    } else {
+                        printf("%s", temp);
+                    }
+                    if (use_colors) printf(COLOR_RESET);
+                    break;
+                }
+                case 'f':
+                case 'g': {
+                    // 浮点数（带颜色，支持宽度和精度）
+                    double num = unbox_number(arg);
+                    int use_colors = should_use_colors();
+                    
+                    char temp[128];
+                    if (isinf(num)) {
+                        snprintf(temp, sizeof(temp), "%s", num > 0 ? "+Inf" : "-Inf");
+                    } else if (isnan(num)) {
+                        snprintf(temp, sizeof(temp), "NaN");
+                    } else {
+                        if (precision >= 0) {
+                            if (spec == 'f') {
+                                // 使用截断而不是四舍五入
+                                format_double_truncate(temp, sizeof(temp), num, precision);
+                            } else {  // 'g'
+                                snprintf(temp, sizeof(temp), "%.*g", precision, num);
+                            }
+                        } else {
+                            snprintf(temp, sizeof(temp), "%.16g", num);
+                        }
+                    }
+                    
+                    if (use_colors) printf(COLOR_NUM);
+                    if (width > 0) {
+                        printf("%*s", left_align ? -width : width, temp);
+                    } else {
+                        printf("%s", temp);
+                    }
+                    if (use_colors) printf(COLOR_RESET);
+                    break;
+                }
+                case 's': {
+                    // 字符串（带颜色，支持宽度和对齐）
+                    int use_colors = should_use_colors();
+                    char temp_buf[256];
+                    
+                    // 转换为纯文本字符串（不带引号）
+                    value_to_string(arg, temp_buf, sizeof(temp_buf));
+                    
+                    if (use_colors) printf(ANSI_RED_BROWN);
+                    if (width > 0) {
+                        printf("%*s", left_align ? -width : width, temp_buf);
+                    } else {
+                        printf("%s", temp_buf);
+                    }
+                    if (use_colors) printf(COLOR_RESET);
+                    break;
+                }
+                case 'b': {
+                    // 布尔值（带颜色）
+                    int use_colors = should_use_colors();
+                    
+                    char temp_buf[8];
+                    if (arg && arg->type == VALUE_BOOL) {
+                        snprintf(temp_buf, sizeof(temp_buf), "%s", arg->data.number != 0 ? "true" : "false");
+                    } else {
+                        snprintf(temp_buf, sizeof(temp_buf), "%s", unbox_number(arg) != 0 ? "true" : "false");
+                    }
+                    
+                    if (use_colors) printf(ANSI_BLUE);
+                    if (width > 0) {
+                        printf("%*s", left_align ? -width : width, temp_buf);
+                    } else {
+                        printf("%s", temp_buf);
+                    }
+                    if (use_colors) printf(COLOR_RESET);
+                    break;
+                }
+                case 'v': {
+                    // 值（JSON格式，带颜色）
+                    print_value_json_depth(arg, 0);
+                    break;
+                }
+                default:
+                    // 未知格式符，打印原样
+                    putchar('%');
+                    putchar(spec);
+                    arg_index--;  // 不消耗参数
+                    break;
+            }
+            
+            arg_index++;
+            // i 已经指向格式符位置，for 循环会自动 i++
+        } else {
+            // 普通字符
+            putchar(fmt[i]);
+        }
+    }
+}
+

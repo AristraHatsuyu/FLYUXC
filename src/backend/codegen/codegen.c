@@ -228,7 +228,8 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
             char *temp = new_temp(gen);
             
             // 使用 box_number 将数字装箱为 Value*
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %f)\n", 
+            // 使用 %.17e 科学计数法保持完整精度（17位有效数字）
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %.17e)\n", 
                     temp, num->value);
             
             return temp;
@@ -504,6 +505,50 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                         free(arg);
                     }
                 }
+                return NULL;
+            }
+            
+            // 特殊处理 printf 函数（格式化输出）
+            if (strcmp(callee->name, "printf") == 0 && call->arg_count >= 1) {
+                // 第一个参数是格式字符串
+                char *fmt_arg = codegen_expr(gen, call->args[0]);
+                
+                // 创建参数数组
+                if (call->arg_count > 1) {
+                    // 分配数组存储参数
+                    char *args_array = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]\n", 
+                            args_array, call->arg_count - 1);
+                    
+                    // 填充参数
+                    for (size_t i = 1; i < call->arg_count; i++) {
+                        char *arg = codegen_expr(gen, call->args[i]);
+                        char *elem_ptr = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
+                                elem_ptr, call->arg_count - 1, call->arg_count - 1, args_array, i - 1);
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", arg, elem_ptr);
+                        free(arg);
+                        free(elem_ptr);
+                    }
+                    
+                    // 转换为 Value** 并调用 value_printf
+                    char *args_ptr = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 0\n",
+                            args_ptr, call->arg_count - 1, call->arg_count - 1, args_array);
+                    fprintf(gen->code_buf, "  call void @value_printf(%%struct.Value* %s, %%struct.Value** %s, i64 %zu)\n",
+                            fmt_arg, args_ptr, call->arg_count - 1);
+                    free(args_ptr);
+                    free(args_array);
+                } else {
+                    // 只有格式字符串，无参数
+                    char *null_ptr = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value**\n", null_ptr);
+                    fprintf(gen->code_buf, "  call void @value_printf(%%struct.Value* %s, %%struct.Value** %s, i64 0)\n",
+                            fmt_arg, null_ptr);
+                    free(null_ptr);
+                }
+                
+                free(fmt_arg);
                 return NULL;
             }
             
@@ -906,11 +951,15 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_VAR_DECL: {
             ASTVarDecl *decl = (ASTVarDecl *)node->data;
             
-            // 注册变量到符号表
-            register_symbol(gen, decl->name);
+            // 检查变量是否已定义
+            int already_defined = is_symbol_defined(gen, decl->name);
             
-            // 分配栈空间存储 Value*
-            fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", decl->name);
+            if (!already_defined) {
+                // 首次定义：注册变量并分配栈空间
+                register_symbol(gen, decl->name);
+                fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", decl->name);
+            }
+            // 如果已定义，则变成重新赋值（只更新值，不重新 alloca）
             
             // 如果有初始化表达式
             if (decl->init_expr) {
@@ -1362,6 +1411,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare i32 @value_is_truthy(%%struct.Value*)\n");
     fprintf(gen->output, "declare void @value_print(%%struct.Value*)\n");
     fprintf(gen->output, "declare void @value_println(%%struct.Value*)\n");
+    fprintf(gen->output, "declare void @value_printf(%%struct.Value*, %%struct.Value**, i64)\n");
     fprintf(gen->output, "declare i8* @value_typeof(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_add(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_subtract(%%struct.Value*, %%struct.Value*)\n");
