@@ -45,6 +45,8 @@ build/
 *.idb
 *.pdb
 
+/*.fx
+
 # IDE specific files
 .vscode/*
 !.vscode/tasks.json

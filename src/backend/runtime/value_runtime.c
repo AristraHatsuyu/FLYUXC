@@ -6,11 +6,23 @@
 #include <unistd.h>
 
 /* ANSI Color codes (JS console style) */
-#define COLOR_CYAN      "\033[38;5;39m"      /* 数字 (浅青色) */
-#define ANSI_RED_BROWN  "\033[38;5;131m" /* 字符串 (红褐色) */
+#define COLOR_NUM      "\033[38;5;151m"      /* 数字 (浅青色) */
+#define ANSI_RED_BROWN  "\033[38;5;173m" /* 字符串 (红褐色) */
 #define ANSI_BLUE       "\033[34m"      /* 布尔值 */
 #define COLOR_GRAY      "\033[90m"      /* null/undefined */
 #define COLOR_RESET     "\033[0m"
+
+/* Rainbow bracket colors (like VSCode) */
+#define BRACKET_GOLD    "\033[38;5;220m"  /* 金黄色 */
+#define BRACKET_PURPLE  "\033[38;5;176m"  /* 紫色 */
+#define BRACKET_CYAN    "\033[38;5;111m"   /* 青色 */
+
+static const char* bracket_colors[] = {
+    BRACKET_GOLD,
+    BRACKET_PURPLE, 
+    BRACKET_CYAN
+};
+#define NUM_BRACKET_COLORS 3
 
 /* Check if we should use colors (TTY detection) */
 static int should_use_colors() {
@@ -32,6 +44,7 @@ static int should_use_colors() {
 #define VALUE_OBJECT 3
 #define VALUE_BOOL 4
 #define VALUE_NULL 5
+#define VALUE_UNDEF 6
 
 /* Value structure */
 typedef struct {
@@ -92,6 +105,14 @@ Value* box_null() {
     return v;
 }
 
+/* Box undef - for undefined variables */
+Value* box_undef() {
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_UNDEF;
+    v->declared_type = VALUE_UNDEF;
+    return v;
+}
+
 /* Box null with declared type - for typed variables */
 Value* box_null_typed(int decl_type) {
     Value *v = (Value*)malloc(sizeof(Value));
@@ -133,6 +154,7 @@ double unbox_number(Value *v) {
             }
             return 0.0;
         case VALUE_NULL:
+        case VALUE_UNDEF:
             return 0.0;
         default:
             return 0.0;
@@ -153,7 +175,8 @@ char* unbox_string(Value *v) {
             return buf;
         }
         case VALUE_NULL:
-            return "null";
+        case VALUE_UNDEF:
+            return "";
         default:
             return "(object)";
     }
@@ -170,6 +193,7 @@ int value_is_truthy(Value *v) {
         case VALUE_STRING:
             return v->data.string && v->data.string[0] != '\0';
         case VALUE_NULL:
+        case VALUE_UNDEF:
             return 0;
         default:
             return 1;  // objects/arrays are truthy
@@ -207,11 +231,14 @@ static void value_to_json_string(Value *v, char *buf, size_t size) {
     }
 }
 
-/* 递归打印数组内容为JSON格式 */
-static void print_array_json(Value **arr, long size) {
+/* 递归打印数组内容为JSON格式，支持嵌套层级的彩虹括号 */
+static void print_array_json_depth(Value **arr, long size, int depth) {
     int use_colors = should_use_colors();
+    const char* bracket_color = use_colors ? bracket_colors[depth % NUM_BRACKET_COLORS] : "";
     
+    if (use_colors) printf("%s", bracket_color);
     printf("[");
+    if (use_colors) printf("%s", COLOR_RESET);
     for (long i = 0; i < size; i++) {
         if (i > 0) printf(",");
         if (!arr[i]) {
@@ -221,7 +248,7 @@ static void print_array_json(Value **arr, long size) {
             switch (arr[i]->type) {
                 case VALUE_NUMBER:
                     if (use_colors) {
-                        printf("%s%g%s", COLOR_CYAN, arr[i]->data.number, COLOR_RESET);
+                        printf("%s%g%s", COLOR_NUM, arr[i]->data.number, COLOR_RESET);
                     } else {
                         printf("%g", arr[i]->data.number);
                     }
@@ -244,9 +271,13 @@ static void print_array_json(Value **arr, long size) {
                     if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
                     else printf("null");
                     break;
+                case VALUE_UNDEF:
+                    if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
+                    else printf("undef");
+                    break;
                 case VALUE_ARRAY: {
                     Value **nested = (Value **)arr[i]->data.pointer;
-                    print_array_json(nested, arr[i]->array_size);
+                    print_array_json_depth(nested, arr[i]->array_size, depth + 1);
                     break;
                 }
                 case VALUE_OBJECT:
@@ -258,7 +289,14 @@ static void print_array_json(Value **arr, long size) {
             }
         }
     }
+    if (use_colors) printf("%s", bracket_color);
     printf("]");
+    if (use_colors) printf("%s", COLOR_RESET);
+}
+
+/* 递归打印数组内容为JSON格式（兼容接口）*/
+static void print_array_json(Value **arr, long size) {
+    print_array_json_depth(arr, size, 0);
 }
 
 /* Print a value */
@@ -266,15 +304,15 @@ void value_print(Value *v) {
     int use_colors = should_use_colors();
     
     if (!v) {
-        if (use_colors) printf("%s<undef>%s", COLOR_GRAY, COLOR_RESET);
-        else printf("<undef>");
+        if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
+        else printf("undef");
         return;
     }
     
     switch (v->type) {
         case VALUE_NUMBER:
             if (use_colors) {
-                printf("%s%g%s", COLOR_CYAN, v->data.number, COLOR_RESET);
+                printf("%s%g%s", COLOR_NUM, v->data.number, COLOR_RESET);
             } else {
                 printf("%g", v->data.number);
             }
@@ -295,8 +333,12 @@ void value_print(Value *v) {
             }
             break;
         case VALUE_NULL:
-            if (use_colors) printf("%s<null>%s", COLOR_GRAY, COLOR_RESET);
-            else printf("<null>");
+            if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
+            else printf("null");
+            break;
+        case VALUE_UNDEF:
+            if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
+            else printf("undef");
             break;
         case VALUE_ARRAY: {
             /* 输出JSON格式的数组 */
@@ -312,8 +354,8 @@ void value_print(Value *v) {
             printf("{...}");
             break;
         default:
-            if (use_colors) printf("%s<unknown>%s", COLOR_GRAY, COLOR_RESET);
-            else printf("<unknown>");
+            if (use_colors) printf("%sunknown%s", COLOR_GRAY, COLOR_RESET);
+            else printf("unknown");
     }
 }
 

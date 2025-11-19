@@ -114,6 +114,24 @@ static ObjectField *find_field(ObjectMetadata *obj_meta, const char *field_name)
     return NULL;
 }
 
+/* 注册变量到符号表 */
+static void register_symbol(CodeGen *gen, const char *var_name) {
+    SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+    entry->name = strdup(var_name);
+    entry->next = gen->symbols;
+    gen->symbols = entry;
+}
+
+/* 检查变量是否已定义 */
+static int is_symbol_defined(CodeGen *gen, const char *var_name) {
+    for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* ============================================================================
  * 前向声明
  * ============================================================================ */
@@ -143,6 +161,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->string_count = 0;
     gen->arrays = NULL;
     gen->objects = NULL;
+    gen->symbols = NULL;
     gen->current_var_name = NULL;
     
     return gen;
@@ -181,6 +200,15 @@ void codegen_free(CodeGen *gen) {
             
             free(obj_meta);
             obj_meta = next_obj;
+        }
+        
+        // 释放符号表
+        SymbolEntry *sym = gen->symbols;
+        while (sym) {
+            SymbolEntry *next_sym = sym->next;
+            free(sym->name);
+            free(sym);
+            sym = next_sym;
         }
         
         free(gen);
@@ -259,8 +287,8 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
         case AST_UNDEF_LITERAL: {
             char *temp = new_temp(gen);
             
-            // undef 用 null 指针表示
-            fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value*\n", temp);
+            // undef 使用 box_undef()
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", temp);
             
             return temp;
         }
@@ -268,6 +296,14 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
         case AST_IDENTIFIER: {
             ASTIdentifier *id = (ASTIdentifier *)node->data;
             char *temp = new_temp(gen);
+            
+            // 检查变量是否已定义
+            if (!is_symbol_defined(gen, id->name)) {
+                // 未定义的变量返回 undef
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()  ; undef variable '%s'\n", 
+                        temp, id->name);
+                return temp;
+            }
             
             // 加载变量值（现在是 Value*）
             fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", 
@@ -862,6 +898,9 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_VAR_DECL: {
             ASTVarDecl *decl = (ASTVarDecl *)node->data;
             
+            // 注册变量到符号表
+            register_symbol(gen, decl->name);
+            
             // 分配栈空间存储 Value*
             fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", decl->name);
             
@@ -915,6 +954,12 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
             if (assign->target->kind == AST_IDENTIFIER) {
                 // 简单变量赋值: x = 10
                 ASTIdentifier *target = (ASTIdentifier *)assign->target->data;
+                
+                // 如果变量未定义，先分配空间并注册
+                if (!is_symbol_defined(gen, target->name)) {
+                    register_symbol(gen, target->name);
+                    fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", target->name);
+                }
                 
                 // 如果赋值的是null，需要保持变量的declared_type
                 if (assign->value->kind == AST_NULL_LITERAL) {
@@ -1294,6 +1339,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_string_with_length(i8*, i64)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_bool(i32)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null()\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_undef()\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null_typed(i32)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null_preserve_type(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n\n");

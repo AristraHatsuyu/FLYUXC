@@ -26,6 +26,12 @@ typedef struct ObjectMetadata {
     struct ObjectMetadata *next;
 } ObjectMetadata;
 
+/* 符号表条目 - 记录已定义的变量 */
+typedef struct SymbolEntry {
+    char *name;             /* 变量名 */
+    struct SymbolEntry *next;
+} SymbolEntry;
+
 /* 代码生成器结构 */
 typedef struct CodeGen {
     FILE *output;           /* 最终输出文件 */
@@ -36,6 +42,7 @@ typedef struct CodeGen {
     int string_count;       /* 字符串常量计数器 */
     ArrayMetadata *arrays;  /* 数组元数据链表 */
     ObjectMetadata *objects; /* 对象元数据链表 */
+    SymbolEntry *symbols;   /* 符号表 - 已定义的变量 */
     const char *current_var_name;  /* 当前正在赋值的变量名（用于数组/对象跟踪） */
 } CodeGen;
 

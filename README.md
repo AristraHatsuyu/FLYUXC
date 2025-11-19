@@ -46,7 +46,7 @@ main := () {
 
 ```
 ERROR: Type mismatch at line 15, column 10
-       x:<num> := "string";
+       x:[num]= "string";
                   ^^^^^^^^^
        Expected: num
        Got:      str
@@ -264,8 +264,8 @@ age := 25;
 active := true;
 
 // 显式类型
-score:<num> := 95;
-username:<str> := "Bob";
+score:[num] := 95;
+username:[str] := "Bob";
 ```
 
 ### 函数
