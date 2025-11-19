@@ -1155,6 +1155,44 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return temp;
             }
             
+            // 特殊处理：如果property是内置函数，生成函数调用
+            // 这支持 obj.>len 这样的无括号调用
+            if (strcmp(member->property, "len") == 0) {
+                char *obj_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_len(%%struct.Value* %s)  ; %s.>len\n", result, obj_value, obj_name);
+                free(obj_value);
+                return result;
+            }
+            
+            if (strcmp(member->property, "upper") == 0) {
+                char *obj_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_upper(%%struct.Value* %s)  ; %s.>upper\n", result, obj_value, obj_name);
+                free(obj_value);
+                return result;
+            }
+            
+            if (strcmp(member->property, "lower") == 0) {
+                char *obj_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_lower(%%struct.Value* %s)  ; %s.>lower\n", result, obj_value, obj_name);
+                free(obj_value);
+                return result;
+            }
+            
+            if (strcmp(member->property, "trim") == 0) {
+                char *obj_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_trim(%%struct.Value* %s)  ; %s.>trim\n", result, obj_value, obj_name);
+                free(obj_value);
+                return result;
+            }
+            
             // 加载对象Value*
             char *obj_value = new_temp(gen);
             fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load dynamic object\n",
