@@ -43,7 +43,7 @@ println("\n=== 测试 4: 数组 → 对象 ===")
 arr := [1, 2, 3]
 println("初始值（数组）:")
 printf("类型: %s, 长度: ", typeOf(arr))
-print(length(arr))
+print(len(arr))
 println("")
 
 arr := {name: "test", value: 100}

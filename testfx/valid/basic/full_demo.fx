@@ -19,7 +19,7 @@ main:=(){
     print(arr[0])   // 10
     
     // 数组长度
-    len := arr.>length
+    len := arr.>len
     print(len)      // 4
     
     // ===== 2. 对象操作 =====
@@ -69,7 +69,7 @@ main:=(){
     }
     
     // ===== 7. 链式调用 =====
-    chain_result := arr.>length.>calculate(2)
+    chain_result := arr.>len.>calculate(2)
     print(chain_result)   // 12 (4 + 2*4)
     
     print(888)  // 结束标记

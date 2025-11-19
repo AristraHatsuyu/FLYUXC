@@ -6,9 +6,9 @@ myFunc:<num>=(a,b){
 main:=(){
     arr := ["A", 3, "B", 5];
     myobj := {key1:"value", key2:[7, "text"]};
-    result := arr.>length.>myFunc(2);
+    result := arr.>len.>myFunc(2);
     
-    L>(i:=0; i<arr.>length; i++){
+    L>(i:=0; i<arr.>len; i++){
         item := arr[i];
         if((item > 3*(i+2) && !i) || item.>myFunc(i)){
             arr[i] = item.>myFunc(result);
@@ -19,5 +19,5 @@ main:=(){
     };
     
     final := {data:arr, text:myobj.key1};
-    print(final.data[1], final.text, result, arr.>length);
+    print(final.data[1], final.text, result, arr.>len);
 };

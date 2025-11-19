@@ -8,7 +8,7 @@ content := readFile("data.txt")
 writeFile("output.txt", "test")
 
 // ===== 字符串操作 =====
-len := length("Hello")
+len := len("Hello")
 sub := substr("Hello", 1, 3)
 pos := indexOf("Hello", "l")
 replaced := replace("Hello", "l", "r")

@@ -70,31 +70,32 @@ static int is_reserved_identifier(const char* name, size_t len) {
 
 /* 内置标识符（如内置函数）——不会被加入映射表，也不会替换 */
 /* 
- * FLYUX 内置函数完整列表 (66个)
- * 与 lexer.c 中的 BUILTIN_FUNC_TABLE 保持一致
- * 最后更新: 2025-11-17
+ * FLYUX 内置函数完整列表
+ * 与实际实现保持一致
+ * 最后更新: 2025-11-19
  */
 static const char* BUILTIN_IDENTIFIERS[] = {
     /* 输入输出 (6) */
     "print", "println", "printf", "input", "readFile", "writeFile",
     
-    /* 字符串操作 (11) */
+    /* 字符串操作 (17) */
     "length", "substr", "indexOf", "replace", "split", "join",
     "toUpper", "toLower", "trim", "startsWith", "endsWith",
+    "len", "charAt", "upper", "lower",
     
     /* 数学函数 (10) */
     "abs", "floor", "ceil", "round", "sqrt", "pow",
     "min", "max", "random", "randomInt",
     
-    /* 数组操作 (13) */
+    /* 数组操作 (19) */
     "push", "pop", "shift", "unshift", "slice", "concat",
     "reverse", "sort", "filter", "map", "reduce", "find", "includes",
     
     /* 对象操作 (7) */
     "keys", "values", "entries", "hasKey", "merge", "clone", "deepClone",
     
-    /* 类型转换和检查 (11) */
-    "toNum", "toStr", "toBl", "typeOf",
+    /* 类型转换和检查 (15) */
+    "toNum", "toStr", "toBl", "toInt", "toFloat", "typeOf",
     "isNum", "isStr", "isBl", "isArr", "isObj", "isNull", "isUndef",
     
     /* 时间函数 (3) */
@@ -102,9 +103,6 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     
     /* 实用工具 (3) */
     "assert", "exit", "range",
-    
-    /* 运行时状态 (4) */
-    "lastStatus", "lastError", "clearError", "isOk",
     
     NULL  /* 结束标记 */
 };

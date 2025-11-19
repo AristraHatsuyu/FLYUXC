@@ -588,31 +588,6 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 特殊处理状态查询函数（无参数）
-            if (strcmp(callee->name, "lastStatus") == 0 && call->arg_count == 0) {
-                char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_last_status()\n", result);
-                return result;
-            }
-            
-            if (strcmp(callee->name, "lastError") == 0 && call->arg_count == 0) {
-                char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_last_error()\n", result);
-                return result;
-            }
-            
-            if (strcmp(callee->name, "clearError") == 0 && call->arg_count == 0) {
-                char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_clear_error()\n", result);
-                return result;
-            }
-            
-            if (strcmp(callee->name, "isOk") == 0 && call->arg_count == 0) {
-                char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", result);
-                return result;
-            }
-            
             // 特殊处理类型转换函数
             if (strcmp(callee->name, "toNum") == 0 && call->arg_count == 1) {
                 char *arg = codegen_expr(gen, call->args[0]);
@@ -638,7 +613,213 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 特殊处理 length 函数
+            if (strcmp(callee->name, "toInt") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_int(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "toFloat") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_float(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // 字符串处理函数
+            if (strcmp(callee->name, "len") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_len(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "charAt") == 0 && call->arg_count == 2) {
+                char *str = codegen_expr(gen, call->args[0]);
+                char *idx = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_char_at(%%struct.Value* %s, %%struct.Value* %s)\n", result, str, idx);
+                free(str);
+                free(idx);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "substr") == 0 && (call->arg_count == 2 || call->arg_count == 3)) {
+                char *str = codegen_expr(gen, call->args[0]);
+                char *start = codegen_expr(gen, call->args[1]);
+                char *len = call->arg_count == 3 ? codegen_expr(gen, call->args[2]) : NULL;
+                char *result = new_temp(gen);
+                
+                if (len) {
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_substr(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, str, start, len);
+                    free(len);
+                } else {
+                    char *null_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_val);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_substr(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, str, start, null_val);
+                    free(null_val);
+                }
+                free(str);
+                free(start);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "indexOf") == 0 && call->arg_count == 2) {
+                char *str = codegen_expr(gen, call->args[0]);
+                char *substr = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_index_of(%%struct.Value* %s, %%struct.Value* %s)\n", result, str, substr);
+                free(str);
+                free(substr);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "replace") == 0 && call->arg_count == 3) {
+                char *str = codegen_expr(gen, call->args[0]);
+                char *old = codegen_expr(gen, call->args[1]);
+                char *new = codegen_expr(gen, call->args[2]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_replace(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, str, old, new);
+                free(str);
+                free(old);
+                free(new);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "split") == 0 && (call->arg_count == 1 || call->arg_count == 2)) {
+                char *str = codegen_expr(gen, call->args[0]);
+                char *delim = call->arg_count == 2 ? codegen_expr(gen, call->args[1]) : NULL;
+                char *result = new_temp(gen);
+                
+                if (delim) {
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_split(%%struct.Value* %s, %%struct.Value* %s)\n", result, str, delim);
+                    free(delim);
+                } else {
+                    char *null_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_val);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_split(%%struct.Value* %s, %%struct.Value* %s)\n", result, str, null_val);
+                    free(null_val);
+                }
+                free(str);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "join") == 0 && (call->arg_count == 1 || call->arg_count == 2)) {
+                char *arr = codegen_expr(gen, call->args[0]);
+                char *sep = call->arg_count == 2 ? codegen_expr(gen, call->args[1]) : NULL;
+                char *result = new_temp(gen);
+                
+                if (sep) {
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_join(%%struct.Value* %s, %%struct.Value* %s)\n", result, arr, sep);
+                    free(sep);
+                } else {
+                    char *null_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_val);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_join(%%struct.Value* %s, %%struct.Value* %s)\n", result, arr, null_val);
+                    free(null_val);
+                }
+                free(arr);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "trim") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_trim(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "upper") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_upper(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "lower") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_lower(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // 数组操作函数
+            if (strcmp(callee->name, "push") == 0 && call->arg_count == 2) {
+                char *arr = codegen_expr(gen, call->args[0]);
+                char *val = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_push(%%struct.Value* %s, %%struct.Value* %s)\n", result, arr, val);
+                free(arr);
+                free(val);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "pop") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_pop(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "shift") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_shift(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "unshift") == 0 && call->arg_count == 2) {
+                char *arr = codegen_expr(gen, call->args[0]);
+                char *val = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_unshift(%%struct.Value* %s, %%struct.Value* %s)\n", result, arr, val);
+                free(arr);
+                free(val);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "slice") == 0 && (call->arg_count >= 1 && call->arg_count <= 3)) {
+                char *arr = codegen_expr(gen, call->args[0]);
+                char *start = call->arg_count >= 2 ? codegen_expr(gen, call->args[1]) : NULL;
+                char *end = call->arg_count == 3 ? codegen_expr(gen, call->args[2]) : NULL;
+                char *result = new_temp(gen);
+                
+                if (!start) {
+                    start = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", start);
+                }
+                if (!end) {
+                    end = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", end);
+                }
+                
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_slice(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, arr, start, end);
+                free(arr);
+                free(start);
+                free(end);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "concat") == 0 && call->arg_count == 2) {
+                char *arr1 = codegen_expr(gen, call->args[0]);
+                char *arr2 = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_concat(%%struct.Value* %s, %%struct.Value* %s)\n", result, arr1, arr2);
+                free(arr1);
+                free(arr2);
+                return result;
+            }
+            
+            // 特殊处理 length 函数（保留向后兼容）
             if (strcmp(callee->name, "length") == 0 && call->arg_count == 1) {
                 // length(arr) 应该返回数组的长度
                 // 参数应该是 IDENTIFIER
@@ -1437,6 +1618,9 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     free(error_obj);
                 }
                 
+                // 清除错误状态（catch已处理）
+                fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+                
                 // 执行catch块
                 codegen_stmt(gen, try_stmt->catch_block);
                 
@@ -1780,6 +1964,20 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 register_symbol(gen, func->params[i]);
             }
             
+            // 预扫描函数体：收集所有try-catch的catch参数，在entry块alloca
+            if (func->body) {
+                FILE *entry_alloca_buf = tmpfile();
+                collect_catch_params(gen, func->body, entry_alloca_buf);
+                
+                // 写入entry块的alloca语句
+                rewind(entry_alloca_buf);
+                char buffer[1024];
+                while (fgets(buffer, sizeof(buffer), entry_alloca_buf)) {
+                    fputs(buffer, gen->code_buf);
+                }
+                fclose(entry_alloca_buf);
+            }
+            
             // 函数体
             if (func->body) {
                 codegen_stmt(gen, func->body);
@@ -1918,7 +2116,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, ";; Input/Output functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_input(%%struct.Value*)\n\n");
     
-    fprintf(gen->output, ";; Runtime state functions\n");
+    fprintf(gen->output, ";; Runtime state functions (internal use only)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_last_status()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_last_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
@@ -1927,7 +2125,29 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, ";; Type conversion functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_to_num(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_to_str(%%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_to_bl(%%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_bl(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_int(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_float(%%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; String manipulation functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_len(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_char_at(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_substr(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_index_of(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_replace(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_split(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_join(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_trim(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_upper(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_lower(%%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; Array manipulation functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_push(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_pop(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_shift(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_unshift(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_slice(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_concat(%%struct.Value*, %%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
