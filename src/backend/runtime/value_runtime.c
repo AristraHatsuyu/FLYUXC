@@ -341,12 +341,8 @@ static void print_object_json_depth(ObjectEntry *entries, long count, int depth)
     for (long i = 0; i < count; i++) {
         if (i > 0) printf(", ");
         
-        // 打印键
-        if (use_colors) {
-            printf("%s%s%s: ", ANSI_RED_BROWN, entries[i].key, COLOR_RESET);
-        } else {
-            printf("%s: ", entries[i].key);
-        }
+        // 打印键（使用默认颜色）
+        printf("%s: ", entries[i].key);
         
         // 打印值
         print_value_json_depth(entries[i].value, depth + 1);
