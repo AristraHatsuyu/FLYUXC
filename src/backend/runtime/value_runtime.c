@@ -59,6 +59,12 @@ typedef struct {
     size_t string_length;  /* 字符串长度（支持包含\0的字符串）*/
 } Value;
 
+/* Object key-value pair (after Value definition) */
+typedef struct ObjectEntry {
+    char *key;
+    Value *value;
+} ObjectEntry;
+
 /* Box a number into a Value */
 Value* box_number(double num) {
     Value *v = (Value*)malloc(sizeof(Value));
@@ -133,7 +139,17 @@ Value* box_array(void *array_ptr, long size) {
     v->type = VALUE_ARRAY;
     v->declared_type = VALUE_ARRAY;
     v->data.pointer = array_ptr;
-    v->array_size = size;  /* 存储数组大小 */
+    v->array_size = size;
+    return v;
+}
+
+/* Box an object - takes array of ObjectEntry */
+Value* box_object(void *entries_ptr, long count) {
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_OBJECT;
+    v->declared_type = VALUE_OBJECT;
+    v->data.pointer = entries_ptr;  /* ObjectEntry* */
+    v->array_size = count;          /* number of properties */
     return v;
 }
 
@@ -232,6 +248,64 @@ static void value_to_json_string(Value *v, char *buf, size_t size) {
 }
 
 /* 递归打印数组内容为JSON格式，支持嵌套层级的彩虹括号 */
+static void print_array_json_depth(Value **arr, long size, int depth);
+static void print_object_json_depth(ObjectEntry *entries, long count, int depth);
+
+static void print_value_json_depth(Value *v, int depth) {
+    int use_colors = should_use_colors();
+    
+    if (!v) {
+        if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
+        else printf("null");
+        return;
+    }
+    
+    switch (v->type) {
+        case VALUE_NUMBER:
+            if (use_colors) {
+                printf("%s%g%s", COLOR_NUM, v->data.number, COLOR_RESET);
+            } else {
+                printf("%g", v->data.number);
+            }
+            break;
+        case VALUE_STRING:
+            if (use_colors) {
+                printf("%s\"%s\"%s", ANSI_RED_BROWN, v->data.string, COLOR_RESET);
+            } else {
+                printf("\"%s\"", v->data.string);
+            }
+            break;
+        case VALUE_BOOL:
+            if (use_colors) {
+                printf("%s%s%s", ANSI_BLUE, v->data.number != 0 ? "true" : "false", COLOR_RESET);
+            } else {
+                printf("%s", v->data.number != 0 ? "true" : "false");
+            }
+            break;
+        case VALUE_NULL:
+            if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
+            else printf("null");
+            break;
+        case VALUE_UNDEF:
+            if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
+            else printf("undef");
+            break;
+        case VALUE_ARRAY: {
+            Value **nested = (Value **)v->data.pointer;
+            print_array_json_depth(nested, v->array_size, depth);
+            break;
+        }
+        case VALUE_OBJECT: {
+            ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
+            print_object_json_depth(entries, v->array_size, depth);
+            break;
+        }
+        default:
+            if (use_colors) printf("%sunknown%s", COLOR_GRAY, COLOR_RESET);
+            else printf("unknown");
+    }
+}
+
 static void print_array_json_depth(Value **arr, long size, int depth) {
     int use_colors = should_use_colors();
     const char* bracket_color = use_colors ? bracket_colors[depth % NUM_BRACKET_COLORS] : "";
@@ -239,56 +313,12 @@ static void print_array_json_depth(Value **arr, long size, int depth) {
     if (use_colors) printf("%s", bracket_color);
     printf("[");
     if (use_colors) printf("%s", COLOR_RESET);
+    
     for (long i = 0; i < size; i++) {
-        if (i > 0) printf(",");
-        if (!arr[i]) {
-            if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
-            else printf("null");
-        } else {
-            switch (arr[i]->type) {
-                case VALUE_NUMBER:
-                    if (use_colors) {
-                        printf("%s%g%s", COLOR_NUM, arr[i]->data.number, COLOR_RESET);
-                    } else {
-                        printf("%g", arr[i]->data.number);
-                    }
-                    break;
-                case VALUE_STRING:
-                    if (use_colors) {
-                        printf("%s\"%s\"%s", ANSI_RED_BROWN, arr[i]->data.string, COLOR_RESET);
-                    } else {
-                        printf("\"%s\"", arr[i]->data.string);
-                    }
-                    break;
-                case VALUE_BOOL:
-                    if (use_colors) {
-                        printf("%s%s%s", ANSI_BLUE, arr[i]->data.number != 0 ? "true" : "false", COLOR_RESET);
-                    } else {
-                        printf("%s", arr[i]->data.number != 0 ? "true" : "false");
-                    }
-                    break;
-                case VALUE_NULL:
-                    if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
-                    else printf("null");
-                    break;
-                case VALUE_UNDEF:
-                    if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
-                    else printf("undef");
-                    break;
-                case VALUE_ARRAY: {
-                    Value **nested = (Value **)arr[i]->data.pointer;
-                    print_array_json_depth(nested, arr[i]->array_size, depth + 1);
-                    break;
-                }
-                case VALUE_OBJECT:
-                    printf("{...}"); /* 对象暂时简化 */
-                    break;
-                default:
-                    if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
-                    else printf("null");
-            }
-        }
+        if (i > 0) printf(", ");
+        print_value_json_depth(arr[i], depth + 1);
     }
+    
     if (use_colors) printf("%s", bracket_color);
     printf("]");
     if (use_colors) printf("%s", COLOR_RESET);
@@ -297,6 +327,34 @@ static void print_array_json_depth(Value **arr, long size, int depth) {
 /* 递归打印数组内容为JSON格式（兼容接口）*/
 static void print_array_json(Value **arr, long size) {
     print_array_json_depth(arr, size, 0);
+}
+
+/* 打印对象内容为JSON格式 */
+static void print_object_json_depth(ObjectEntry *entries, long count, int depth) {
+    int use_colors = should_use_colors();
+    const char* bracket_color = use_colors ? bracket_colors[depth % NUM_BRACKET_COLORS] : "";
+    
+    if (use_colors) printf("%s", bracket_color);
+    printf("{ ");
+    if (use_colors) printf("%s", COLOR_RESET);
+    
+    for (long i = 0; i < count; i++) {
+        if (i > 0) printf(", ");
+        
+        // 打印键
+        if (use_colors) {
+            printf("%s%s%s: ", ANSI_RED_BROWN, entries[i].key, COLOR_RESET);
+        } else {
+            printf("%s: ", entries[i].key);
+        }
+        
+        // 打印值
+        print_value_json_depth(entries[i].value, depth + 1);
+    }
+    
+    if (use_colors) printf("%s", bracket_color);
+    printf(" }");
+    if (use_colors) printf("%s", COLOR_RESET);
 }
 
 /* Print a value */
@@ -350,9 +408,16 @@ void value_print(Value *v) {
             }
             break;
         }
-        case VALUE_OBJECT:
-            printf("{...}");
+        case VALUE_OBJECT: {
+            /* 输出JSON格式的对象 */
+            ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
+            if (!entries || v->array_size == 0) {
+                printf("{}");
+            } else {
+                print_object_json_depth(entries, v->array_size, 0);
+            }
             break;
+        }
         default:
             if (use_colors) printf("%sunknown%s", COLOR_GRAY, COLOR_RESET);
             else printf("unknown");

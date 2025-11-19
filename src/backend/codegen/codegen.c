@@ -625,65 +625,73 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
         }
         
         case AST_OBJECT_LITERAL: {
-            // 实现对象字面量：为每个属性分配一个 Value*
+            // 实现对象字面量：创建 ObjectEntry 数组
             ASTObjectLiteral *obj_lit = (ASTObjectLiteral *)node->data;
             size_t prop_count = obj_lit->prop_count;
             
             if (prop_count == 0) {
-                // 空对象：返回 null
+                // 空对象
                 char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; empty object\n", temp);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_object(i8* null, i64 0)  ; empty object\n", temp);
                 return temp;
             }
             
-            // 为每个属性创建一个 Value* 变量并初始化
-            ObjectField *fields = NULL;
-            ObjectField *last_field = NULL;
+            // 分配 ObjectEntry 数组
+            char *entries_alloc = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.ObjectEntry]  ; allocate object entries\n",
+                    entries_alloc, prop_count);
             
+            // 为每个属性填充 ObjectEntry
             for (size_t i = 0; i < prop_count; i++) {
                 ASTObjectProperty *prop = &obj_lit->properties[i];
                 
-                // 分配属性的存储空间
-                char *field_ptr = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = alloca %%struct.Value*  ; object field '%s'\n", 
-                        field_ptr, prop->key);
+                // 生成键字符串
+                char *key_label = new_string_label(gen);
+                size_t key_len = strlen(prop->key);
+                fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                        key_label, key_len + 1, prop->key);
                 
-                // 计算并存储属性值
+                char *key_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr [%zu x i8], [%zu x i8]* %s, i32 0, i32 0\n",
+                        key_ptr, key_len + 1, key_len + 1, key_label);
+                
+                // 计算属性值
                 char *value = codegen_expr(gen, prop->value);
-                if (value) {
-                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", 
-                            value, field_ptr);
-                    free(value);
-                }
                 
-                // 添加到字段链表
-                ObjectField *field = (ObjectField *)malloc(sizeof(ObjectField));
-                field->field_name = strdup(prop->key);
-                field->field_ptr = strdup(field_ptr);
-                field->next = NULL;
+                // 获取 entry[i] 的指针
+                char *entry_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr [%zu x %%struct.ObjectEntry], [%zu x %%struct.ObjectEntry]* %s, i32 0, i32 %zu\n",
+                        entry_ptr, prop_count, prop_count, entries_alloc, i);
                 
-                if (!fields) {
-                    fields = field;
-                    last_field = field;
-                } else {
-                    last_field->next = field;
-                    last_field = field;
-                }
+                // 设置 entry.key
+                char *key_field = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr %%struct.ObjectEntry, %%struct.ObjectEntry* %s, i32 0, i32 0\n",
+                        key_field, entry_ptr);
+                fprintf(gen->code_buf, "  store i8* %s, i8** %s\n", key_ptr, key_field);
+                
+                // 设置 entry.value
+                char *value_field = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr %%struct.ObjectEntry, %%struct.ObjectEntry* %s, i32 0, i32 1\n",
+                        value_field, entry_ptr);
+                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", value, value_field);
+                
+                free(value);
             }
             
-            // 如果我们知道这个对象要赋给哪个变量，就注册它
-            if (gen->current_var_name) {
-                register_object(gen, gen->current_var_name, fields);
-            }
+            // 获取数组首地址
+            char *entries_ptr = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = getelementptr [%zu x %%struct.ObjectEntry], [%zu x %%struct.ObjectEntry]* %s, i32 0, i32 0\n",
+                    entries_ptr, prop_count, prop_count, entries_alloc);
             
-            // 返回第一个属性的值作为占位符
+            // 转换为 i8*
+            char *entries_i8 = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = bitcast %%struct.ObjectEntry* %s to i8*\n",
+                    entries_i8, entries_ptr);
+            
+            // 调用 box_object
             char *result = new_temp(gen);
-            if (fields && fields->field_ptr) {
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s  ; object placeholder return\n",
-                        result, fields->field_ptr);
-            } else {
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; empty object\n", result);
-            }
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_object(i8* %s, i64 %zu)\n",
+                    result, entries_i8, prop_count);
             
             return result;
         }
@@ -1330,7 +1338,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     
     // 2. Value 结构体定义
     fprintf(gen->output, ";; Mixed-type value system\n");
-    fprintf(gen->output, "%%struct.Value = type { i32, [12 x i8] }\n\n");
+    fprintf(gen->output, "%%struct.Value = type { i32, [12 x i8] }\n");
+    fprintf(gen->output, "%%struct.ObjectEntry = type { i8*, %%struct.Value* }\n\n");
     
     // 3. 运行时函数声明
     fprintf(gen->output, ";; Boxing functions\n");
@@ -1342,7 +1351,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_undef()\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null_typed(i32)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null_preserve_type(%%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_object(i8*, i64)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");
     fprintf(gen->output, "declare double @unbox_number(%%struct.Value*)\n");

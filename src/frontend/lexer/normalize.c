@@ -345,25 +345,35 @@ static char* normalize_internal_newlines(const char* stmt) {
             bracket_depth--;
         }
 
-        /* 块内换行 → 分号（仅在不处于 () / [] 中；且换行后第一个非空不是 '}'） */
+        /* 块内换行 → 分号（仅在不处于 () / [] 中；且换行后第一个非空不是 '}'；且当前是代码块而非对象字面量） */
         if (ch == '\n' && brace_depth > 0 && paren_depth == 0 && bracket_depth == 0) {
-            int j = i + 1;
-            while (j < (int)len && (stmt[j] == ' ' || stmt[j] == '\t' || stmt[j] == '\n')) {
-                j++;
-            }
-            if (j < (int)len && stmt[j] != '}') {
-                // 检查当前输出末尾是否已经有 ';' / '{' / '('
-                int last = out_idx - 1;
-                while (last >= 0 && (result[last] == ' ' || result[last] == '\t')) {
-                    last--;
+            // 检查当前是否在代码块中（而不是对象字面量中）
+            unsigned char is_block = brace_is_block[brace_depth];
+            
+            // 只在代码块中添加分号，对象字面量中保留换行
+            if (is_block) {
+                int j = i + 1;
+                while (j < (int)len && (stmt[j] == ' ' || stmt[j] == '\t' || stmt[j] == '\n')) {
+                    j++;
                 }
-                if (last >= 0 && result[last] != ';' && result[last] != '{' && result[last] != '(') {
-                    result[out_idx++] = ';';
+                if (j < (int)len && stmt[j] != '}') {
+                    // 检查当前输出末尾是否已经有 ';' / '{' / '('
+                    int last = out_idx - 1;
+                    while (last >= 0 && (result[last] == ' ' || result[last] == '\t')) {
+                        last--;
+                    }
+                    if (last >= 0 && result[last] != ';' && result[last] != '{' && result[last] != '(') {
+                        result[out_idx++] = ';';
+                    }
+                    // 跳过该换行
+                    continue;
+                } else {
+                    // 块的结尾（后续是 '}'），跳过该换行，交由 '}' 分支统一补 ';'
+                    continue;
                 }
-                // 跳过该换行
-                continue;
             } else {
-                // 块的结尾（后续是 '}'），跳过该换行，交由 '}' 分支统一补 ';'
+                // 对象字面量中的换行，转换为空格以便解析
+                result[out_idx++] = ' ';
                 continue;
             }
         }
