@@ -933,6 +933,78 @@ static ASTNode *parse_return_statement(Parser *p) {
     return ast_return_stmt_create(value, token_to_loc(start));
 }
 
+static ASTNode *parse_try_statement(Parser *p) {
+    Token *start = current_token(p);
+    
+    if (!match(p, TK_KW_TRY)) {
+        return NULL;
+    }
+    
+    // 必须有try块: T> { ... }
+    if (!check(p, TK_L_BRACE)) {
+        error_at(p, current_token(p), "Expected '{' after 'T>'");
+        return NULL;
+    }
+    
+    ASTNode *try_block = parse_block(p);
+    if (!try_block) {
+        return NULL;
+    }
+    
+    // 可选的catch块: (error) { ... }
+    char *catch_param = NULL;
+    ASTNode *catch_block = NULL;
+    
+    if (check(p, TK_L_PAREN)) {
+        advance(p);  // 消耗 (
+        
+        if (current_token(p)->kind != TK_IDENT) {
+            error_at(p, current_token(p), "Expected parameter name in catch clause");
+            ast_node_free(try_block);
+            return NULL;
+        }
+        
+        Token *param_tok = current_token(p);
+        catch_param = strdup(param_tok->lexeme);
+        advance(p);
+        
+        if (!match(p, TK_R_PAREN)) {
+            error_at(p, current_token(p), "Expected ')' after catch parameter");
+            free(catch_param);
+            ast_node_free(try_block);
+            return NULL;
+        }
+        
+        if (!check(p, TK_L_BRACE)) {
+            error_at(p, current_token(p), "Expected '{' for catch block");
+            free(catch_param);
+            ast_node_free(try_block);
+            return NULL;
+        }
+        
+        catch_block = parse_block(p);
+        if (!catch_block) {
+            free(catch_param);
+            ast_node_free(try_block);
+            return NULL;
+        }
+    }
+    
+    // 可选的finally块: { ... } (没有参数括号)
+    ASTNode *finally_block = NULL;
+    if (check(p, TK_L_BRACE)) {
+        finally_block = parse_block(p);
+        if (!finally_block) {
+            if (catch_param) free(catch_param);
+            ast_node_free(catch_block);
+            ast_node_free(try_block);
+            return NULL;
+        }
+    }
+    
+    return ast_try_stmt_create(try_block, catch_param, catch_block, finally_block, token_to_loc(start));
+}
+
 static ASTNode *parse_loop_statement(Parser *p) {
     Token *start = current_token(p);
     
@@ -1325,6 +1397,11 @@ static ASTNode *parse_statement(Parser *p) {
     // Return 语句
     if (check(p, TK_KW_RETURN)) {
         return parse_return_statement(p);
+    }
+    
+    // Try 语句
+    if (check(p, TK_KW_TRY)) {
+        return parse_try_statement(p);
     }
     
     // Loop 语句 (for循环)

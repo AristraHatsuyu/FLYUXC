@@ -452,6 +452,19 @@ LexerResult lexer_tokenize(const char* source,
             continue;
         }
 
+        if (c == 'T' && i + 1 < len && source[i + 1] == '>') {
+            if (!emit_token(&tokens, &result.count, &cap,
+                            TK_KW_TRY, source + i, 2, start_line, start_col,
+                            norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                result.error_code = -1;
+                result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                goto fail;
+            }
+            i += 2;
+            col += 2;
+            continue;
+        }
+
         /* 标识符 / 关键字 / 内置函数 / 类型名 */
         if (is_ident_start((unsigned char)c)) {
             size_t start = i;

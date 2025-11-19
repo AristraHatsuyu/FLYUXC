@@ -1154,3 +1154,258 @@ Value* value_clear_error() {
 Value* value_is_ok() {
     return box_bool(g_runtime_state.last_status == FLYUX_OK);
 }
+
+/* ============================================================================
+ * 类型转换函数
+ * ============================================================================
+ */
+
+/*
+ * toNum(value) - 转换为数字
+ * 
+ * 支持的转换:
+ *   - 数字 → 数字 (直接返回)
+ *   - 字符串 → 数字 (解析，失败返回 0 并设置错误)
+ *   - 布尔值 → 数字 (true=1, false=0)
+ *   - null/undef → 0
+ *   - 其他 → 0 (并设置类型错误)
+ * 
+ * 状态码:
+ *   FLYUX_OK: 转换成功
+ *   FLYUX_TYPE_ERROR: 无法转换的类型或格式错误
+ */
+Value* value_to_num(Value *v) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!v || v->type == VALUE_UNDEF) {
+        return box_number(0.0);
+    }
+    
+    switch (v->type) {
+        case VALUE_NUMBER:
+            return box_number(v->data.number);
+            
+        case VALUE_STRING: {
+            if (!v->data.string || v->string_length == 0) {
+                set_runtime_status(FLYUX_TYPE_ERROR, "Empty string cannot be converted to number");
+                return box_number(0.0);
+            }
+            
+            char *endptr;
+            double result = strtod(v->data.string, &endptr);
+            
+            // 检查是否有无效字符
+            if (endptr == v->data.string || *endptr != '\0') {
+                set_runtime_status(FLYUX_TYPE_ERROR, "Invalid number format");
+                return box_number(0.0);
+            }
+            
+            return box_number(result);
+        }
+        
+        case VALUE_BOOL:
+            return box_number(v->data.number != 0 ? 1.0 : 0.0);
+            
+        case VALUE_NULL:
+            return box_number(0.0);
+            
+        default:
+            set_runtime_status(FLYUX_TYPE_ERROR, "Cannot convert array/object to number");
+            return box_number(0.0);
+    }
+}
+
+/*
+ * toStr(value) - 转换为字符串
+ * 
+ * 支持的转换:
+ *   - 字符串 → 字符串 (直接返回)
+ *   - 数字 → 字符串 (格式化)
+ *   - 布尔值 → "true" / "false"
+ *   - null → "null"
+ *   - undef → "undef"
+ *   - 数组/对象 → JSON 格式字符串
+ * 
+ * 状态码:
+ *   FLYUX_OK: 转换成功
+ */
+Value* value_to_str(Value *v) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!v || v->type == VALUE_UNDEF) {
+        char *str = strdup("undef");
+        return box_string(str);
+    }
+    
+    char buffer[256];
+    
+    switch (v->type) {
+        case VALUE_STRING: {
+            // 复制字符串
+            char *str = (char*)malloc(v->string_length + 1);
+            memcpy(str, v->data.string, v->string_length);
+            str[v->string_length] = '\0';
+            return box_string(str);
+        }
+        
+        case VALUE_NUMBER: {
+            // 格式化数字，去除不必要的小数点
+            double num = v->data.number;
+            if (floor(num) == num && fabs(num) < 1e15) {
+                // 整数
+                snprintf(buffer, sizeof(buffer), "%.0f", num);
+            } else {
+                // 浮点数
+                snprintf(buffer, sizeof(buffer), "%.16g", num);
+            }
+            char *str = strdup(buffer);
+            return box_string(str);
+        }
+        
+        case VALUE_BOOL:
+            return box_string(strdup(v->data.number != 0 ? "true" : "false"));
+            
+        case VALUE_NULL:
+            return box_string(strdup("null"));
+            
+        case VALUE_ARRAY:
+        case VALUE_OBJECT: {
+            // 使用 JSON 格式
+            value_to_string(v, buffer, sizeof(buffer));
+            char *str = strdup(buffer);
+            return box_string(str);
+        }
+        
+        default:
+            return box_string(strdup("unknown"));
+    }
+}
+
+/*
+ * toBl(value) - 转换为布尔值
+ * 
+ * 支持的转换:
+ *   - 布尔值 → 布尔值 (直接返回)
+ *   - 数字 → 布尔值 (0=false, 其他=true)
+ *   - 字符串 → 布尔值 (空串=false, 其他=true)
+ *   - null/undef → false
+ *   - 数组/对象 → true
+ * 
+ * 状态码:
+ *   FLYUX_OK: 转换成功
+ */
+Value* value_to_bl(Value *v) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!v || v->type == VALUE_UNDEF || v->type == VALUE_NULL) {
+        return box_bool(0);
+    }
+    
+    switch (v->type) {
+        case VALUE_BOOL:
+            return box_bool(v->data.number != 0);
+            
+        case VALUE_NUMBER:
+            // 0, NaN → false, 其他 → true
+            return box_bool(v->data.number != 0 && !isnan(v->data.number));
+            
+        case VALUE_STRING:
+            // 空字符串 → false, 其他 → true
+            return box_bool(v->string_length > 0);
+            
+        case VALUE_ARRAY:
+        case VALUE_OBJECT:
+            // 数组和对象总是 true
+            return box_bool(1);
+            
+        default:
+            return box_bool(0);
+    }
+}
+
+/*
+ * create_error_object - 创建详细的错误对象
+ * 
+ * 参数：
+ *   message: 错误消息（Value字符串）
+ *   code: 错误代码（Value数字）
+ *   type: 错误类型名称（Value字符串）
+ * 
+ * 返回：
+ *   包含 {message, code, type} 三个字段的对象
+ * 
+ * 示例：
+ *   error := create_error_object("Invalid number", 3, "TypeError")
+ *   println(error.message)  // "Invalid number"
+ *   println(error.code)     // 3
+ *   println(error.type)     // "TypeError"
+ */
+Value* create_error_object(Value *message, Value *code, Value *type) {
+    // 创建3个键值对
+    ObjectEntry *entries = (ObjectEntry*)malloc(3 * sizeof(ObjectEntry));
+    
+    // message字段
+    entries[0].key = strdup("message");
+    entries[0].value = message;
+    
+    // code字段
+    entries[1].key = strdup("code");
+    entries[1].value = code;
+    
+    // type字段
+    entries[2].key = strdup("type");
+    entries[2].value = type;
+    
+    // 创建对象Value
+    Value *obj = (Value*)malloc(sizeof(Value));
+    obj->type = VALUE_OBJECT;
+    obj->declared_type = VALUE_OBJECT;
+    obj->data.pointer = entries;
+    obj->array_size = 3;  // 3个键值对
+    
+    return obj;
+}
+
+/*
+ * value_get_field - 从对象中获取指定字段的值
+ * 
+ * 参数：
+ *   obj: 对象Value（必须是VALUE_OBJECT类型）
+ *   field_name: 字段名（Value字符串）
+ * 
+ * 返回：
+ *   字段的Value，如果找不到则返回null
+ * 
+ * 示例：
+ *   msg := value_get_field(error, "message")
+ */
+Value* value_get_field(Value *obj, Value *field_name) {
+    if (!obj || !field_name) {
+        return box_null();
+    }
+    
+    // 检查obj是否为对象类型
+    if (obj->type != VALUE_OBJECT) {
+        return box_null();
+    }
+    
+    // 检查field_name是否为字符串
+    if (field_name->type != VALUE_STRING) {
+        return box_null();
+    }
+    
+    // 获取字段名
+    const char *key = (const char*)field_name->data.pointer;
+    
+    // 遍历对象的所有字段
+    ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+    for (size_t i = 0; i < obj->array_size; i++) {
+        if (strcmp(entries[i].key, key) == 0) {
+            return entries[i].value;
+        }
+    }
+    
+    // 字段不存在
+    return box_null();
+}
+

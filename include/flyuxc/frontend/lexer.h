@@ -64,6 +64,7 @@ typedef enum TokenKind {
     TK_KW_IF,      /* if */
     TK_KW_LOOP,    /* L> */
     TK_KW_RETURN,  /* R> */
+    TK_KW_TRY,     /* T> */
 
     /* 类型关键字 */
     TK_TYPE_NUM,   /* num */

@@ -613,6 +613,31 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
+            // 特殊处理类型转换函数
+            if (strcmp(callee->name, "toNum") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_num(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "toStr") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_str(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "toBl") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_bl(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
             // 特殊处理 length 函数
             if (strcmp(callee->name, "length") == 0 && call->arg_count == 1) {
                 // length(arr) 应该返回数组的长度
@@ -921,28 +946,53 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
             }
             
-            // 查找对象元数据
+            // 查找对象元数据（静态对象）
             ObjectMetadata *obj_meta = find_object(gen, obj_name);
-            if (!obj_meta) {
+            if (obj_meta) {
+                // 静态对象：编译时已知字段位置
+                ObjectField *field = find_field(obj_meta, member->property);
+                if (!field) {
+                    char *temp = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; field '%s' not found in object '%s'\n",
+                            temp, member->property, obj_name);
+                    return temp;
+                }
+                
+                // 加载字段值
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s  ; %s.%s\n",
+                        result, field->field_ptr, obj_name, member->property);
+                return result;
+            }
+            
+            // 动态对象：运行时查找字段（如catch参数）
+            // 检查变量是否存在
+            if (!is_symbol_defined(gen, obj_name)) {
                 char *temp = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; object '%s' not found\n", 
                         temp, obj_name);
                 return temp;
             }
             
-            // 查找字段
-            ObjectField *field = find_field(obj_meta, member->property);
-            if (!field) {
-                char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; field '%s' not found in object '%s'\n",
-                        temp, member->property, obj_name);
-                return temp;
-            }
+            // 加载对象Value*
+            char *obj_value = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load dynamic object\n",
+                    obj_value, obj_name);
             
-            // 加载字段值
+            // 创建字段名字符串（直接使用box_string和C字面量）
+            char *field_name = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* getelementptr inbounds ([%zu x i8], [%zu x i8]* @.str.%d, i32 0, i32 0))\n",
+                    field_name, strlen(member->property) + 1, strlen(member->property) + 1, gen->string_count);
+            
+            // 添加字符串常量到globals
+            fprintf(gen->globals_buf, "@.str.%d = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                    gen->string_count, strlen(member->property) + 1, member->property);
+            gen->string_count++;
+            
+            // 调用运行时函数获取字段值
             char *result = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s  ; %s.%s\n",
-                    result, field->field_ptr, obj_name, member->property);
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_field(%%struct.Value* %s, %%struct.Value* %s)  ; %s.%s\n",
+                    result, obj_value, field_name, obj_name, member->property);
             
             return result;
         }
@@ -1004,6 +1054,55 @@ static char *codegen_expr(CodeGen *gen, ASTNode *node) {
         
         default:
             return NULL;
+    }
+}
+
+/* ============================================================================
+ * AST预扫描 - 收集需要在entry块alloca的变量
+ * ============================================================================ */
+
+static void collect_catch_params(CodeGen *gen, ASTNode *node, FILE *entry_buf) {
+    if (!node) return;
+    
+    switch (node->kind) {
+        case AST_TRY_STMT: {
+            ASTTryStmt *try_stmt = (ASTTryStmt *)node->data;
+            if (try_stmt->catch_param && !is_symbol_defined(gen, try_stmt->catch_param)) {
+                register_symbol(gen, try_stmt->catch_param);
+                fprintf(entry_buf, "  %%%s = alloca %%struct.Value*\n", try_stmt->catch_param);
+            }
+            // 递归扫描try/catch/finally块
+            collect_catch_params(gen, try_stmt->try_block, entry_buf);
+            collect_catch_params(gen, try_stmt->catch_block, entry_buf);
+            collect_catch_params(gen, try_stmt->finally_block, entry_buf);
+            break;
+        }
+        
+        case AST_BLOCK: {
+            ASTBlock *block = (ASTBlock *)node->data;
+            for (size_t i = 0; i < block->stmt_count; i++) {
+                collect_catch_params(gen, block->statements[i], entry_buf);
+            }
+            break;
+        }
+        
+        case AST_IF_STMT: {
+            ASTIfStmt *ifstmt = (ASTIfStmt *)node->data;
+            for (size_t i = 0; i < ifstmt->cond_count; i++) {
+                collect_catch_params(gen, ifstmt->then_blocks[i], entry_buf);
+            }
+            collect_catch_params(gen, ifstmt->else_block, entry_buf);
+            break;
+        }
+        
+        case AST_LOOP_STMT: {
+            ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
+            collect_catch_params(gen, loop->body, entry_buf);
+            break;
+        }
+        
+        default:
+            break;
     }
 }
 
@@ -1220,6 +1319,146 @@ static void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  ret %%struct.Value* %s\n", null_ret);
                 free(null_ret);
             }
+            break;
+        }
+        
+        case AST_TRY_STMT: {
+            ASTTryStmt *try_stmt = (ASTTryStmt *)node->data;
+            
+            // catch参数应该已经在函数开头alloca过了（通过预扫描）
+            // 这里只需要确保它被注册到符号表
+            if (try_stmt->catch_param && try_stmt->catch_block) {
+                if (!is_symbol_defined(gen, try_stmt->catch_param)) {
+                    register_symbol(gen, try_stmt->catch_param);
+                }
+            }
+            
+            // 清除错误状态，准备执行try块
+            fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+            
+            // 创建标签
+            char *catch_label = new_label(gen);
+            char *finally_label = new_label(gen);
+            char *end_label = new_label(gen);
+            
+            // 执行try块（需要在每条语句后检查错误）
+            if (try_stmt->try_block && try_stmt->try_block->kind == AST_BLOCK) {
+                ASTBlock *block = (ASTBlock *)try_stmt->try_block->data;
+                
+                // 遍历try块中的每条语句
+                for (size_t i = 0; i < block->stmt_count; i++) {
+                    // 执行语句
+                    codegen_stmt(gen, block->statements[i]);
+                    
+                    // 检查错误状态
+                    char *ok_result = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", ok_result);
+                    
+                    char *truthy = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                            truthy, ok_result);
+                    
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_ok, truthy);
+                    
+                    // 如果有错误，跳转到catch（如果有）或finally
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_ok, continue_label,
+                            try_stmt->catch_block ? catch_label : 
+                            (try_stmt->finally_block ? finally_label : end_label));
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    
+                    free(ok_result);
+                    free(truthy);
+                    free(is_ok);
+                    free(continue_label);
+                }
+            }
+            
+            // try块正常结束，跳转到finally或end
+            fprintf(gen->code_buf, "  br label %%%s\n", 
+                    try_stmt->finally_block ? finally_label : end_label);
+            
+            // catch块
+            if (try_stmt->catch_block) {
+                fprintf(gen->code_buf, "%s:\n", catch_label);
+                
+                // 创建错误对象
+                if (try_stmt->catch_param) {
+                    // 1. 获取错误消息
+                    char *error_msg_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_last_error()\n", error_msg_val);
+                    
+                    // 2. 获取错误码
+                    char *error_code_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_last_status()\n", error_code_val);
+                    
+                    // 3. 创建类型字符串
+                    char *error_type = new_temp(gen);
+                    char *status_num = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", status_num, error_code_val);
+                    char *status_int = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = fptosi double %s to i32\n", status_int, status_num);
+                    
+                    // 根据错误码创建类型名称
+                    char *is_type_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 3\n", is_type_error, status_int); // 3 = TYPE_ERROR
+                    
+                    char *type_str_ptr = new_temp(gen);
+                    char *type_error_str = new_temp(gen);
+                    char *generic_error_str = new_temp(gen);
+                    
+                    fprintf(gen->code_buf, "  %s = getelementptr [10 x i8], [10 x i8]* @str_type_error, i32 0, i32 0\n", type_error_str);
+                    fprintf(gen->code_buf, "  %s = getelementptr [6 x i8], [6 x i8]* @str_error, i32 0, i32 0\n", generic_error_str);
+                    fprintf(gen->code_buf, "  %s = select i1 %s, i8* %s, i8* %s\n", 
+                            type_str_ptr, is_type_error, type_error_str, generic_error_str);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n", error_type, type_str_ptr);
+                    
+                    // 4. 使用运行时函数创建错误对象
+                    char *error_obj = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @create_error_object(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
+                            error_obj, error_msg_val, error_code_val, error_type);
+                    
+                    // 5. 存储到catch参数变量
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n", 
+                            error_obj, try_stmt->catch_param);
+                    
+                    // 清理临时变量
+                    free(error_msg_val);
+                    free(error_code_val);
+                    free(error_type);
+                    free(status_num);
+                    free(status_int);
+                    free(is_type_error);
+                    free(type_str_ptr);
+                    free(type_error_str);
+                    free(generic_error_str);
+                    free(error_obj);
+                }
+                
+                // 执行catch块
+                codegen_stmt(gen, try_stmt->catch_block);
+                
+                // catch执行完毕，跳转到finally或end
+                fprintf(gen->code_buf, "  br label %%%s\n", 
+                        try_stmt->finally_block ? finally_label : end_label);
+            }
+            
+            // finally块
+            if (try_stmt->finally_block) {
+                fprintf(gen->code_buf, "%s:\n", finally_label);
+                codegen_stmt(gen, try_stmt->finally_block);
+                fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+            }
+            
+            // 结束标签
+            fprintf(gen->code_buf, "%s:\n", end_label);
+            
+            free(catch_label);
+            free(finally_label);
+            free(end_label);
+            
             break;
         }
         
@@ -1593,6 +1832,22 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
         if (!has_main) {
             fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
             
+            // 预扫描：收集所有需要在entry块alloca的变量（catch参数等）
+            FILE *entry_alloca_buf = tmpfile();
+            for (size_t i = 0; i < prog->stmt_count; i++) {
+                if (prog->statements[i]->kind != AST_FUNC_DECL) {
+                    collect_catch_params(gen, prog->statements[i], entry_alloca_buf);
+                }
+            }
+            
+            // 写入entry块的alloca语句
+            rewind(entry_alloca_buf);
+            char buffer[1024];
+            while (fgets(buffer, sizeof(buffer), entry_alloca_buf)) {
+                fputs(buffer, gen->code_buf);
+            }
+            fclose(entry_alloca_buf);
+            
             // 执行所有顶层语句
             for (size_t i = 0; i < prog->stmt_count; i++) {
                 if (prog->statements[i]->kind != AST_FUNC_DECL) {
@@ -1611,10 +1866,19 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "target datalayout = \"e-m:o-i64:64-f80:128-n8:16:32:64-S128\"\n");
     fprintf(gen->output, "target triple = \"x86_64-apple-macosx10.15.0\"\n\n");
     
+    // 1.5. 错误对象字段名称常量
+    fprintf(gen->output, ";; Error object field names\n");
+    fprintf(gen->output, "@str_message = private unnamed_addr constant [8 x i8] c\"message\\00\"\n");
+    fprintf(gen->output, "@str_code = private unnamed_addr constant [5 x i8] c\"code\\00\"\n");
+    fprintf(gen->output, "@str_type = private unnamed_addr constant [5 x i8] c\"type\\00\"\n");
+    fprintf(gen->output, "@str_type_error = private unnamed_addr constant [10 x i8] c\"TypeError\\00\"\n");
+    fprintf(gen->output, "@str_error = private unnamed_addr constant [6 x i8] c\"Error\\00\"\n\n");
+    
     // 2. Value 结构体定义
     fprintf(gen->output, ";; Mixed-type value system\n");
     fprintf(gen->output, "%%struct.Value = type { i32, [12 x i8] }\n");
-    fprintf(gen->output, "%%struct.ObjectEntry = type { i8*, %%struct.Value* }\n\n");
+    fprintf(gen->output, "%%struct.ObjectEntry = type { i8*, %%struct.Value* }\n");
+    fprintf(gen->output, "%%struct.ObjectPair = type { i8*, %%struct.Value* }\n\n");
     
     // 3. 运行时函数声明
     fprintf(gen->output, ";; Boxing functions\n");
@@ -1659,6 +1923,15 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_last_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n\n");
+    
+    fprintf(gen->output, ";; Type conversion functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_num(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_str(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_bl(%%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; Error object creation and field access\n");
+    fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_field(%%struct.Value*, %%struct.Value*)\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

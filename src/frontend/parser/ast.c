@@ -112,6 +112,16 @@ void ast_node_free(ASTNode *node) {
             break;
         }
         
+        case AST_TRY_STMT: {
+            ASTTryStmt *try_stmt = (ASTTryStmt *)node->data;
+            ast_node_free(try_stmt->try_block);
+            if (try_stmt->catch_param) free(try_stmt->catch_param);
+            ast_node_free(try_stmt->catch_block);
+            ast_node_free(try_stmt->finally_block);
+            free(try_stmt);
+            break;
+        }
+        
         case AST_IF_STMT: {
             ASTIfStmt *ifstmt = (ASTIfStmt *)node->data;
             for (size_t i = 0; i < ifstmt->cond_count; i++) {
@@ -290,6 +300,21 @@ ASTNode *ast_return_stmt_create(ASTNode *value, SourceLocation loc) {
     return node;
 }
 
+ASTNode *ast_try_stmt_create(ASTNode *try_block, char *catch_param,
+                              ASTNode *catch_block, ASTNode *finally_block, SourceLocation loc) {
+    ASTNode *node = ast_node_create(AST_TRY_STMT, loc);
+    if (!node) return NULL;
+    
+    ASTTryStmt *try_stmt = (ASTTryStmt *)malloc(sizeof(ASTTryStmt));
+    try_stmt->try_block = try_block;
+    try_stmt->catch_param = catch_param;
+    try_stmt->catch_block = catch_block;
+    try_stmt->finally_block = finally_block;
+    node->data = try_stmt;
+    
+    return node;
+}
+
 ASTNode *ast_if_stmt_create(ASTNode **conditions, ASTNode **then_blocks,
                              size_t cond_count, ASTNode *else_block, SourceLocation loc) {
     ASTNode *node = ast_node_create(AST_IF_STMT, loc);
@@ -329,6 +354,7 @@ const char *ast_kind_name(ASTNodeKind kind) {
         case AST_NUM_LITERAL: return "NUM_LITERAL";
         case AST_STRING_LITERAL: return "STRING_LITERAL";
         case AST_RETURN_STMT: return "RETURN_STMT";
+        case AST_TRY_STMT: return "TRY_STMT";
         case AST_IF_STMT: return "IF_STMT";
         case AST_ASSIGN_STMT: return "ASSIGN_STMT";
         default: return "UNKNOWN";

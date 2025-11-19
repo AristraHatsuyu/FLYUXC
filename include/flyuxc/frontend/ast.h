@@ -26,6 +26,7 @@ typedef enum ASTNodeKind {
     AST_IF_STMT,         /* if语句 */
     AST_LOOP_STMT,       /* L>循环语句 */
     AST_RETURN_STMT,     /* R>返回语句 */
+    AST_TRY_STMT,        /* T>异常处理语句 */
     AST_BLOCK,           /* 代码块: { ... } */
     
     /* ===== 表达式 (Expressions) ===== */
@@ -143,6 +144,14 @@ typedef struct ASTLoopStmt {
 typedef struct ASTReturnStmt {
     ASTNode *value;          /* 返回值（可为NULL表示返回undef） */
 } ASTReturnStmt;
+
+/* T>异常处理: T> { try } (error) { catch } { finally } */
+typedef struct ASTTryStmt {
+    ASTNode *try_block;      /* try代码块（必需） */
+    char *catch_param;       /* catch参数名（可为NULL） */
+    ASTNode *catch_block;    /* catch代码块（可为NULL） */
+    ASTNode *finally_block;  /* finally代码块（可为NULL） */
+} ASTTryStmt;
 
 /* 代码块: { stmt1; stmt2; ... } */
 typedef struct ASTBlock {
@@ -300,6 +309,10 @@ ASTNode *ast_loop_stmt_create(LoopType type, ASTNode *body, SourceLocation loc);
 
 /* 创建返回语句节点 */
 ASTNode *ast_return_stmt_create(ASTNode *value, SourceLocation loc);
+
+/* 创建异常处理节点 */
+ASTNode *ast_try_stmt_create(ASTNode *try_block, char *catch_param, 
+                              ASTNode *catch_block, ASTNode *finally_block, SourceLocation loc);
 
 /* 创建代码块节点 */
 ASTNode *ast_block_create(ASTNode **statements, size_t count, SourceLocation loc);
