@@ -91,8 +91,9 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     "push", "pop", "shift", "unshift", "slice", "concat",
     "reverse", "sort", "filter", "map", "reduce", "find", "includes",
     
-    /* 对象操作 (7) */
+    /* 对象操作 (10) */
     "keys", "values", "entries", "hasKey", "merge", "clone", "deepClone",
+    "setField", "deleteField", "hasField",
     
     /* 类型转换和检查 (15) */
     "toNum", "toStr", "toBl", "toInt", "toFloat", "typeOf",

@@ -607,6 +607,47 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
+            // 动态对象操作函数
+            if (strcmp(callee->name, "setField") == 0 && call->arg_count == 3) {
+                char *obj = codegen_expr(gen, call->args[0]);
+                char *key = codegen_expr(gen, call->args[1]);
+                char *val = codegen_expr(gen, call->args[2]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_field(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, obj, key, val);
+                free(obj);
+                free(key);
+                free(val);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "deleteField") == 0 && call->arg_count == 2) {
+                char *obj = codegen_expr(gen, call->args[0]);
+                char *key = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_delete_field(%%struct.Value* %s, %%struct.Value* %s)\n", result, obj, key);
+                free(obj);
+                free(key);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "hasField") == 0 && call->arg_count == 2) {
+                char *obj = codegen_expr(gen, call->args[0]);
+                char *key = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_has_field(%%struct.Value* %s, %%struct.Value* %s)\n", result, obj, key);
+                free(obj);
+                free(key);
+                return result;
+            }
+            
+            if (strcmp(callee->name, "keys") == 0 && call->arg_count == 1) {
+                char *obj = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_keys(%%struct.Value* %s)\n", result, obj);
+                free(obj);
+                return result;
+            }
+            
             // 特殊处理 length 函数（保留向后兼容）
             if (strcmp(callee->name, "length") == 0 && call->arg_count == 1) {
                 // length(arr) 应该返回数组的长度
@@ -890,117 +931,96 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
         }
         
         case AST_MEMBER_EXPR: {
-            // 实现对象成员访问：obj.prop
+            // 实现对象成员访问：obj.prop 或 expr.prop
             ASTMemberExpr *member = (ASTMemberExpr *)node->data;
             
-            // 获取对象（应该是标识符）
-            if (member->object->kind != AST_IDENTIFIER) {
-                char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; member expr object not identifier\n", temp);
-                return temp;
-            }
+            // 支持任意表达式作为对象（不仅限于标识符）
+            char *obj_value = NULL;
+            const char *obj_name = NULL;
             
-            ASTIdentifier *obj_ident = (ASTIdentifier *)member->object->data;
-            const char *obj_name = obj_ident->name;
-            
-            // 检查是否是数组的 length 属性
-            if (strcmp(member->property, "length") == 0) {
-                ArrayMetadata *arr_meta = find_array(gen, obj_name);
-                if (arr_meta) {
-                    // 返回数组长度
-                    char *result = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %zu.0)  ; %s.length\n",
-                            result, arr_meta->elem_count, obj_name);
-                    return result;
-                }
-            }
-            
-            // 查找对象元数据（静态对象）
-            ObjectMetadata *obj_meta = find_object(gen, obj_name);
-            if (obj_meta) {
-                // 静态对象：编译时已知字段位置
-                ObjectField *field = find_field(obj_meta, member->property);
-                if (!field) {
-                    char *temp = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; field '%s' not found in object '%s'\n",
-                            temp, member->property, obj_name);
-                    return temp;
+            if (member->object->kind == AST_IDENTIFIER) {
+                // 简单标识符：obj.prop
+                ASTIdentifier *obj_ident = (ASTIdentifier *)member->object->data;
+                obj_name = obj_ident->name;
+                
+                // 检查是否是数组的 length 属性
+                if (strcmp(member->property, "length") == 0) {
+                    ArrayMetadata *arr_meta = find_array(gen, obj_name);
+                    if (arr_meta) {
+                        // 返回数组长度
+                        char *result = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %zu.0)  ; %s.length\n",
+                                result, arr_meta->elem_count, obj_name);
+                        return result;
+                    }
                 }
                 
-                // 加载字段值
-                char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s  ; %s.%s\n",
-                        result, field->field_ptr, obj_name, member->property);
-                return result;
+                // 加载对象
+                obj_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                        obj_value, obj_name);
+            } else {
+                // 复杂表达式：(expr).prop, obj.nested.prop 等
+                obj_value = codegen_expr(gen, member->object);
+                if (!obj_value) {
+                    char *temp = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; nested member expr failed\n", temp);
+                    return temp;
+                }
             }
             
-            // 动态对象：运行时查找字段（如catch参数）
-            // 检查变量是否存在
-            if (!is_symbol_defined(gen, obj_name)) {
-                char *temp = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; object '%s' not found\n", 
-                        temp, obj_name);
-                return temp;
-            }
-            
-            // 特殊处理：如果property是内置函数，生成函数调用
-            // 这支持 obj.>len 这样的无括号调用
+            // 特殊处理：内置方法
             if (strcmp(member->property, "len") == 0) {
-                char *obj_value = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
                 char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_len(%%struct.Value* %s)  ; %s.>len\n", result, obj_value, obj_name);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_len(%%struct.Value* %s)\n", result, obj_value);
                 free(obj_value);
                 return result;
             }
             
             if (strcmp(member->property, "upper") == 0) {
-                char *obj_value = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
                 char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_upper(%%struct.Value* %s)  ; %s.>upper\n", result, obj_value, obj_name);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_upper(%%struct.Value* %s)\n", result, obj_value);
                 free(obj_value);
                 return result;
             }
             
             if (strcmp(member->property, "lower") == 0) {
-                char *obj_value = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
                 char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_lower(%%struct.Value* %s)  ; %s.>lower\n", result, obj_value, obj_name);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_lower(%%struct.Value* %s)\n", result, obj_value);
                 free(obj_value);
                 return result;
             }
             
             if (strcmp(member->property, "trim") == 0) {
-                char *obj_value = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", obj_value, obj_name);
                 char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_trim(%%struct.Value* %s)  ; %s.>trim\n", result, obj_value, obj_name);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_trim(%%struct.Value* %s)\n", result, obj_value);
                 free(obj_value);
                 return result;
             }
             
-            // 加载对象Value*
-            char *obj_value = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load dynamic object\n",
-                    obj_value, obj_name);
+            // 创建字段名字符串
+            char *key_label = new_string_label(gen);
+            size_t key_len = strlen(member->property);
+            fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                    key_label, key_len + 1, member->property);
             
-            // 创建字段名字符串（直接使用box_string和C字面量）
+            char *key_ptr = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = getelementptr [%zu x i8], [%zu x i8]* %s, i32 0, i32 0\n",
+                    key_ptr, key_len + 1, key_len + 1, key_label);
+            
             char *field_name = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* getelementptr inbounds ([%zu x i8], [%zu x i8]* @.str.%d, i32 0, i32 0))\n",
-                    field_name, strlen(member->property) + 1, strlen(member->property) + 1, gen->string_count);
-            
-            // 添加字符串常量到globals
-            fprintf(gen->globals_buf, "@.str.%d = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
-                    gen->string_count, strlen(member->property) + 1, member->property);
-            gen->string_count++;
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n",
+                    field_name, key_ptr);
             
             // 调用运行时函数获取字段值
             char *result = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_field(%%struct.Value* %s, %%struct.Value* %s)  ; %s.%s\n",
-                    result, obj_value, field_name, obj_name, member->property);
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_field(%%struct.Value* %s, %%struct.Value* %s)  ; .%s\n",
+                    result, obj_value, field_name, member->property);
             
+            free(obj_value);
+            free(key_label);
+            free(key_ptr);
+            free(field_name);
             return result;
         }
         

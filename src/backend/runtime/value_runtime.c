@@ -683,12 +683,25 @@ Value* value_greater_than(Value *a, Value *b) {
 Value* value_index(Value *obj, Value *index) {
     if (!obj) return box_null();
     
-    // For arrays stored as pointers
+    // For arrays with numeric index
     if (obj->type == VALUE_ARRAY && obj->data.pointer) {
         int idx = (int)unbox_number(index);
         Value **array = (Value **)obj->data.pointer;
         // Note: no bounds checking for now
         return array[idx];
+    }
+    
+    // For objects with string index (inline implementation to avoid forward declaration)
+    if (obj->type == VALUE_OBJECT && index && index->type == VALUE_STRING) {
+        const char *key = (const char*)index->data.pointer;
+        ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+        size_t count = obj->array_size;
+        
+        for (size_t i = 0; i < count; i++) {
+            if (strcmp(entries[i].key, key) == 0) {
+                return entries[i].value;
+            }
+        }
     }
     
     return box_null();
@@ -1360,6 +1373,262 @@ Value* value_get_field(Value *obj, Value *field_name) {
     
     // 字段不存在
     return box_null();
+}
+
+/*
+ * value_set_field - 动态设置对象字段的值
+ * 
+ * 参数：
+ *   obj: 对象Value（必须是VALUE_OBJECT类型）
+ *   field_name: 字段名（Value字符串）
+ *   value: 要设置的值
+ * 
+ * 返回：
+ *   设置成功返回true，失败返回false
+ * 
+ * 行为：
+ *   - 如果字段已存在，更新其值
+ *   - 如果字段不存在，动态添加新字段
+ * 
+ * 注意：
+ *   使用malloc分配新数组而不是realloc，因为原数组可能在栈上
+ * 
+ * 示例：
+ *   value_set_field(obj, box_string("name"), box_string("Alice"))
+ */
+Value* value_set_field(Value *obj, Value *field_name, Value *value) {
+    if (!obj || !field_name || !value) {
+        return box_bool(0);
+    }
+    
+    // 检查obj是否为对象类型
+    if (obj->type != VALUE_OBJECT) {
+        return box_bool(0);
+    }
+    
+    // 检查field_name是否为字符串
+    if (field_name->type != VALUE_STRING) {
+        return box_bool(0);
+    }
+    
+    const char *key = (const char*)field_name->data.pointer;
+    ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+    size_t count = obj->array_size;
+    
+    // 查找是否已存在该字段
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(entries[i].key, key) == 0) {
+            // 字段已存在，更新值
+            entries[i].value = value;
+            return box_bool(1);
+        }
+    }
+    
+    // 字段不存在，需要添加新字段
+    // 分配新数组（不能用realloc，因为原数组可能在栈上）
+    ObjectEntry *new_entries = (ObjectEntry*)malloc(sizeof(ObjectEntry) * (count + 1));
+    if (!new_entries) {
+        return box_bool(0);  // 内存分配失败
+    }
+    
+    // 复制旧entries
+    for (size_t i = 0; i < count; i++) {
+        new_entries[i].key = entries[i].key;      // 保持原key指针
+        new_entries[i].value = entries[i].value;  // 保持原value指针
+    }
+    
+    // 添加新字段
+    new_entries[count].key = strdup(key);  // 复制字段名
+    new_entries[count].value = value;
+    
+    // 更新对象指针和大小
+    obj->data.pointer = new_entries;
+    obj->array_size = count + 1;
+    
+    // 注意：不释放旧entries，因为可能在栈上
+    
+    return box_bool(1);
+}
+
+/*
+ * value_delete_field - 动态删除对象字段
+ * 
+ * 参数：
+ *   obj: 对象Value（必须是VALUE_OBJECT类型）
+ *   field_name: 字段名（Value字符串）
+ * 
+ * 返回：
+ *   删除成功返回true，字段不存在或失败返回false
+ * 
+ * 注意：
+ *   使用malloc分配新数组，不释放旧数组（可能在栈上）
+ * 
+ * 示例：
+ *   value_delete_field(obj, box_string("name"))
+ */
+Value* value_delete_field(Value *obj, Value *field_name) {
+    if (!obj || !field_name) {
+        return box_bool(0);
+    }
+    
+    // 检查obj是否为对象类型
+    if (obj->type != VALUE_OBJECT) {
+        return box_bool(0);
+    }
+    
+    // 检查field_name是否为字符串
+    if (field_name->type != VALUE_STRING) {
+        return box_bool(0);
+    }
+    
+    const char *key = (const char*)field_name->data.pointer;
+    ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+    size_t count = obj->array_size;
+    
+    // 查找要删除的字段
+    int found_index = -1;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(entries[i].key, key) == 0) {
+            found_index = (int)i;
+            break;
+        }
+    }
+    
+    if (found_index < 0) {
+        // 字段不存在
+        return box_bool(0);
+    }
+    
+    // 如果删除后为空对象
+    if (count == 1) {
+        obj->data.pointer = NULL;
+        obj->array_size = 0;
+        // 注意：不释放entries[0].key，可能是字面量
+        return box_bool(1);
+    }
+    
+    // 分配新数组（不用realloc，因为可能在栈上）
+    ObjectEntry *new_entries = (ObjectEntry*)malloc(sizeof(ObjectEntry) * (count - 1));
+    if (!new_entries) {
+        return box_bool(0);
+    }
+    
+    // 复制除了被删除字段外的所有字段
+    size_t new_idx = 0;
+    for (size_t i = 0; i < count; i++) {
+        if ((int)i != found_index) {
+            new_entries[new_idx].key = entries[i].key;
+            new_entries[new_idx].value = entries[i].value;
+            new_idx++;
+        }
+        // 注意：不释放 entries[found_index].key，可能是字面量
+    }
+    
+    // 更新对象
+    obj->data.pointer = new_entries;
+    obj->array_size = count - 1;
+    
+    return box_bool(1);
+}
+
+/*
+ * value_has_field - 检查对象是否有指定字段
+ * 
+ * 参数：
+ *   obj: 对象Value
+ *   field_name: 字段名（Value字符串）
+ * 
+ * 返回：
+ *   存在返回true，不存在返回false
+ */
+Value* value_has_field(Value *obj, Value *field_name) {
+    if (!obj || !field_name) {
+        return box_bool(0);
+    }
+    
+    if (obj->type != VALUE_OBJECT || field_name->type != VALUE_STRING) {
+        return box_bool(0);
+    }
+    
+    const char *key = (const char*)field_name->data.pointer;
+    ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+    
+    for (size_t i = 0; i < obj->array_size; i++) {
+        if (strcmp(entries[i].key, key) == 0) {
+            return box_bool(1);
+        }
+    }
+    
+    return box_bool(0);
+}
+
+/*
+ * value_keys - 获取对象的所有键名
+ * 
+ * 参数：
+ *   obj: 对象Value
+ * 
+ * 返回：
+ *   包含所有键名的数组Value
+ */
+Value* value_keys(Value *obj) {
+    if (!obj || obj->type != VALUE_OBJECT) {
+        return box_array(NULL, 0);  // 返回空数组
+    }
+    
+    ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+    size_t count = obj->array_size;
+    
+    // 创建字符串数组
+    Value **keys = (Value**)malloc(sizeof(Value*) * count);
+    for (size_t i = 0; i < count; i++) {
+        keys[i] = box_string(entries[i].key);
+    }
+    
+    return box_array(keys, count);
+}
+
+/*
+ * value_set_index - 设置数组或对象的索引值
+ * 
+ * 参数：
+ *   obj: 数组或对象 Value
+ *   index: 索引（数字或字符串）
+ *   value: 要设置的值
+ * 
+ * 返回：
+ *   设置成功返回 true，失败返回 false
+ * 
+ * 行为：
+ *   - 如果是数组且 index 是数字，设置数组元素
+ *   - 如果是对象且 index 是字符串，设置对象字段
+ */
+Value* value_set_index(Value *obj, Value *index, Value *value) {
+    if (!obj || !index || !value) {
+        return box_bool(0);
+    }
+    
+    // 如果是数组
+    if (obj->type == VALUE_ARRAY && index->type == VALUE_NUMBER) {
+        Value **elements = (Value**)obj->data.pointer;
+        size_t count = obj->array_size;
+        
+        double idx_double = index->data.number;
+        if (idx_double < 0 || idx_double >= (double)count) {
+            return box_bool(0);  // 索引越界
+        }
+        
+        size_t idx = (size_t)idx_double;
+        elements[idx] = value;
+        return box_bool(1);
+    }
+    
+    // 如果是对象且索引是字符串
+    if (obj->type == VALUE_OBJECT && index->type == VALUE_STRING) {
+        return value_set_field(obj, index, value);
+    }
+    
+    return box_bool(0);
 }
 
 /* ============================================================================

@@ -388,6 +388,50 @@ char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, 
         return result;
     }
     
+    // setField - 动态设置对象字段
+    if (strcmp(func_name, "setField") == 0 && arg_count == 3) {
+        char *obj = codegen_expr(gen, args[0]);
+        char *field = codegen_expr(gen, args[1]);
+        char *value = codegen_expr(gen, args[2]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_field(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, obj, field, value);
+        free(obj);
+        free(field);
+        free(value);
+        return result;
+    }
+    
+    // deleteField - 删除对象字段
+    if (strcmp(func_name, "deleteField") == 0 && arg_count == 2) {
+        char *obj = codegen_expr(gen, args[0]);
+        char *field = codegen_expr(gen, args[1]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_delete_field(%%struct.Value* %s, %%struct.Value* %s)\n", result, obj, field);
+        free(obj);
+        free(field);
+        return result;
+    }
+    
+    // hasField - 检查字段是否存在
+    if (strcmp(func_name, "hasField") == 0 && arg_count == 2) {
+        char *obj = codegen_expr(gen, args[0]);
+        char *field = codegen_expr(gen, args[1]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_has_field(%%struct.Value* %s, %%struct.Value* %s)\n", result, obj, field);
+        free(obj);
+        free(field);
+        return result;
+    }
+    
+    // keys - 获取对象的所有键名
+    if (strcmp(func_name, "keys") == 0 && arg_count == 1) {
+        char *obj = codegen_expr(gen, args[0]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_keys(%%struct.Value* %s)\n", result, obj);
+        free(obj);
+        return result;
+    }
+    
     // 不是内置函数，返回NULL表示需要普通函数调用
     return NULL;
 }

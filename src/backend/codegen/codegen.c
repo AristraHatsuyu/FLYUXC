@@ -235,7 +235,12 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_get_field(%%struct.Value*, %%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_field(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_set_field(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_delete_field(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_has_field(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_keys(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_set_index(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

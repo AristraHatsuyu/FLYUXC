@@ -156,86 +156,75 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 }
             }
             else if (assign->target->kind == AST_INDEX_EXPR) {
-                // 数组索引赋值: arr[i] = 10
+                // 数组/对象索引赋值: arr[i] = 10 或 obj["key"] = 10 或 obj.arr[i] = 10
                 value = codegen_expr(gen, assign->value);
                 if (!value) break;
                 
                 ASTIndexExpr *idx_expr = (ASTIndexExpr *)assign->target->data;
                 
-                // 获取数组变量
-                if (idx_expr->object->kind != AST_IDENTIFIER) {
-                    fprintf(gen->code_buf, "  ; ERROR: array index assignment target not identifier\n");
+                // 获取对象/数组（支持任意表达式）
+                char *obj_val = codegen_expr(gen, idx_expr->object);
+                if (!obj_val) {
                     free(value);
                     break;
                 }
                 
-                ASTIdentifier *arr_ident = (ASTIdentifier *)idx_expr->object->data;
-                const char *arr_name = arr_ident->name;
-                
-                // 查找数组元数据
-                ArrayMetadata *meta = find_array(gen, arr_name);
-                if (!meta) {
-                    fprintf(gen->code_buf, "  ; ERROR: array '%s' not found for assignment\n", arr_name);
-                    free(value);
-                    break;
-                }
-                
-                // 计算索引
+                // 计算索引（支持数字和字符串）
                 char *index_val = codegen_expr(gen, idx_expr->index);
-                char *index_double = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n",
-                        index_double, index_val);
-                char *index_i64 = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = fptosi double %s to i64\n", 
-                        index_i64, index_double);
+                if (!index_val) {
+                    free(obj_val);
+                    free(value);
+                    break;
+                }
                 
-                // 获取元素地址
-                char *elem_ptr = new_temp(gen);
-                fprintf(gen->code_buf, 
-                        "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %s\n",
-                        elem_ptr, meta->elem_count, meta->elem_count, 
-                        meta->array_ptr, index_i64);
+                // 调用运行时函数设置索引值
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_index(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
+                        result, obj_val, index_val, value);
                 
-                // 存储值
-                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s  ; arr[%s] = value\n",
-                        value, elem_ptr, index_i64);
-                
+                free(obj_val);
                 free(index_val);
+                free(result);
             }
             else if (assign->target->kind == AST_MEMBER_EXPR) {
-                // 对象成员赋值: obj.prop = 10
+                // 对象成员赋值: obj.prop = value 或 expr.prop = value
+                // 先生成要赋的值
+                value = codegen_expr(gen, assign->value);
+                if (!value) break;
+                
                 ASTMemberExpr *member = (ASTMemberExpr *)assign->target->data;
                 
-                // 获取对象变量
-                if (member->object->kind != AST_IDENTIFIER) {
-                    fprintf(gen->code_buf, "  ; ERROR: member assignment target not identifier\n");
+                // 获取对象 Value* （支持任意表达式）
+                char *obj_var = codegen_expr(gen, member->object);
+                if (!obj_var) {
                     free(value);
                     break;
                 }
                 
-                ASTIdentifier *obj_ident = (ASTIdentifier *)member->object->data;
-                const char *obj_name = obj_ident->name;
+                // 创建字段名字符串
+                char *key_label = new_string_label(gen);
+                size_t key_len = strlen(member->property);
+                fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                        key_label, key_len + 1, member->property);
                 
-                // 查找对象元数据
-                ObjectMetadata *obj_meta = find_object(gen, obj_name);
-                if (!obj_meta) {
-                    fprintf(gen->code_buf, "  ; ERROR: object '%s' not found for assignment\n", obj_name);
-                    free(value);
-                    break;
-                }
+                char *key_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr [%zu x i8], [%zu x i8]* %s, i32 0, i32 0\n",
+                        key_ptr, key_len + 1, key_len + 1, key_label);
                 
-                // 查找字段
-                ObjectField *field = find_field(obj_meta, member->property);
-                if (!field) {
-                    fprintf(gen->code_buf, "  ; ERROR: field '%s' not found in object '%s'\n",
-                            member->property, obj_name);
-                    free(value);
-                    break;
-                }
+                char *key_value = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n",
+                        key_value, key_ptr);
                 
-                // 存储值
-                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s  ; %s.%s = value\n",
-                        value, field->field_ptr, obj_name, member->property);
+                // 调用 value_set_field
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_field(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
+                        result, obj_var, key_value, value);
+                
+                free(obj_var);
+                free(key_label);
+                free(key_ptr);
+                free(key_value);
+                free(result);
             }
             else {
                 fprintf(gen->code_buf, "  ; ERROR: unsupported assignment target\n");
