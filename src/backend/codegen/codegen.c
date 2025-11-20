@@ -255,7 +255,23 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_list_dir(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_dir_exists(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_parse_json(%%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_to_json(%%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_json(%%struct.Value*)\n");
+    
+    fprintf(gen->output, ";; Math functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_abs(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_floor(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_ceil(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_round(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_sqrt(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_pow(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_min(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_max(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_random()\n");
+    
+    fprintf(gen->output, ";; String enhancement functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_starts_with(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_ends_with(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_contains(%%struct.Value*, %%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");

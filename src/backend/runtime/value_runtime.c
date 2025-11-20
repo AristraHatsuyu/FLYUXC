@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
@@ -79,6 +80,7 @@ static int should_use_colors() {
 #define FLYUX_TYPE_ERROR    3
 #define FLYUX_OUT_OF_BOUNDS 4
 #define FLYUX_IO_ERROR      5
+#define FLYUX_MATH_ERROR    6
 
 /* 全局运行时状态 */
 typedef struct {
@@ -715,7 +717,7 @@ void value_println(Value *v) {
 
 /* 打印致命错误并退出 */
 void value_fatal_error() {
-    fprintf(stderr, "\n\033[34mFLYUX 0.1.0\033[0m \033[31m[Err]\033[0m Fatal Error: %s\nAbort.\n", g_runtime_state.error_msg);
+    fprintf(stderr, "\n\033[38;5;27mFLYUX\033[38;5;39m 0.1.0\033[0m\n\033[31m[Err]\033[0m Fatal Error: %s\nAbort.\n", g_runtime_state.error_msg);
     abort();
 }
 
@@ -3356,4 +3358,188 @@ Value* value_to_json(Value* obj) {
     Value* result = box_string(buffer);
     set_runtime_status(FLYUX_OK, NULL);
     return result;
+}
+
+/* ============================================
+ * 数学函数 (Math Functions)
+ * ============================================ */
+
+/* abs(num) -> num - 绝对值 */
+Value* value_abs(Value* num) {
+    if (!num || num->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "abs: argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(fabs(num->data.number));
+}
+
+/* floor(num) -> num - 向下取整 */
+Value* value_floor(Value* num) {
+    if (!num || num->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "floor: argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(floor(num->data.number));
+}
+
+/* ceil(num) -> num - 向上取整 */
+Value* value_ceil(Value* num) {
+    if (!num || num->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "ceil: argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(ceil(num->data.number));
+}
+
+/* round(num) -> num - 四舍五入 */
+Value* value_round(Value* num) {
+    if (!num || num->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "round: argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(round(num->data.number));
+}
+
+/* sqrt(num) -> num - 平方根 */
+Value* value_sqrt(Value* num) {
+    if (!num || num->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "sqrt: argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    if (num->data.number < 0) {
+        set_runtime_status(FLYUX_MATH_ERROR, "sqrt: negative number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(sqrt(num->data.number));
+}
+
+/* pow(base, exp) -> num - 幂运算 */
+Value* value_pow(Value* base, Value* exp) {
+    if (!base || base->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "pow: base must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    if (!exp || exp->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "pow: exponent must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(pow(base->data.number, exp->data.number));
+}
+
+/* min(a, b) -> num - 最小值 */
+Value* value_min(Value* a, Value* b) {
+    if (!a || a->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "min: first argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    if (!b || b->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "min: second argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    double result = (a->data.number < b->data.number) ? a->data.number : b->data.number;
+    return box_number(result);
+}
+
+/* max(a, b) -> num - 最大值 */
+Value* value_max(Value* a, Value* b) {
+    if (!a || a->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "max: first argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    if (!b || b->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "max: second argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    double result = (a->data.number > b->data.number) ? a->data.number : b->data.number;
+    return box_number(result);
+}
+
+/* random() -> num - 返回 [0,1) 之间的随机数 */
+Value* value_random() {
+    static int initialized = 0;
+    if (!initialized) {
+        srand((unsigned)time(NULL));
+        initialized = 1;
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number((double)rand() / RAND_MAX);
+}
+
+/* startsWith(str, prefix) -> bl - 判断字符串是否以指定前缀开头 */
+Value* value_starts_with(Value* str, Value* prefix) {
+    if (!str || str->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "startsWith: first argument must be a string");
+        return box_bool(0);
+    }
+    if (!prefix || prefix->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "startsWith: second argument must be a string");
+        return box_bool(0);
+    }
+    
+    const char* s = (const char*)str->data.pointer;
+    const char* p = (const char*)prefix->data.pointer;
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(strncmp(s, p, strlen(p)) == 0);
+}
+
+/* endsWith(str, suffix) -> bl - 判断字符串是否以指定后缀结尾 */
+Value* value_ends_with(Value* str, Value* suffix) {
+    if (!str || str->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "endsWith: first argument must be a string");
+        return box_bool(0);
+    }
+    if (!suffix || suffix->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "endsWith: second argument must be a string");
+        return box_bool(0);
+    }
+    
+    const char* s = (const char*)str->data.pointer;
+    const char* p = (const char*)suffix->data.pointer;
+    size_t s_len = strlen(s);
+    size_t p_len = strlen(p);
+    
+    if (p_len > s_len) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(0);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(strcmp(s + s_len - p_len, p) == 0);
+}
+
+/* contains(str, substr) -> bl - 判断字符串是否包含子串 */
+Value* value_contains(Value* str, Value* substr) {
+    if (!str || str->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "contains: first argument must be a string");
+        return box_bool(0);
+    }
+    if (!substr || substr->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "contains: second argument must be a string");
+        return box_bool(0);
+    }
+    
+    const char* s = (const char*)str->data.pointer;
+    const char* p = (const char*)substr->data.pointer;
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(strstr(s, p) != NULL);
 }
