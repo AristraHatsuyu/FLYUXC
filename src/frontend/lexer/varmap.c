@@ -89,9 +89,10 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     "toUpper", "toLower", "trim", "startsWith", "endsWith", "contains",
     "len", "charAt", "upper", "lower",
     
-    /* 数学函数 (10) */
+    /* 数学函数 (13) */
     "abs", "floor", "ceil", "round", "sqrt", "pow",
     "min", "max", "random", "randomInt",
+    "isNaN", "isFinite", "clamp",
     
     /* 数组操作 (19) */
     "push", "pop", "shift", "unshift", "slice", "concat",
@@ -105,8 +106,11 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     "toNum", "toStr", "toBl", "toInt", "toFloat", "typeOf",
     "isNum", "isStr", "isBl", "isArr", "isObj", "isNull", "isUndef",
     
-    /* 时间函数 (3) */
-    "now", "sleep", "dateStr",
+    /* 时间函数 (6) */
+    "now", "sleep", "dateStr", "time", "date",
+    
+    /* 系统操作 (4) */
+    "exit", "getEnv", "setEnv",
     
     /* 实用工具 (3) */
     "assert", "exit", "range",

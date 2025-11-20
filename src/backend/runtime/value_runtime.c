@@ -11,6 +11,8 @@
 #include <dirent.h>
 #include <errno.h>
 
+#define FLYUXC_VERSION "0.1.0"
+
 /* ANSI Color codes (JS console style) */
 #define COLOR_NUM      "\033[38;5;151m"      /* 数字 (浅青色) */
 #define ANSI_RED_BROWN  "\033[38;5;173m" /* 字符串 (红褐色) */
@@ -716,9 +718,70 @@ void value_println(Value *v) {
 }
 
 /* 打印致命错误并退出 */
+/* 打印致命错误并退出 */
 void value_fatal_error() {
-    fprintf(stderr, "\n\033[38;5;27mFLYUX\033[38;5;39m 0.1.0\033[0m\n\033[31m[Err]\033[0m Fatal Error: %s\nAbort.\n", g_runtime_state.error_msg);
-    abort();
+    const char *platform;
+
+    /* 简单的平台与架构检测 */
+    #if defined(__APPLE__)
+        #if defined(__aarch64__) || defined(__arm64__)
+            platform = "macOS-arm64";
+        #elif defined(__x86_64__)
+            platform = "macOS-x86_64";
+        #else
+            platform = "macOS-unknown";
+        #endif
+    #elif defined(__linux__)
+        #if defined(__aarch64__) || defined(__arm64__)
+            platform = "Linux-arm64";
+        #elif defined(__x86_64__)
+            platform = "Linux-x86_64";
+        #else
+            platform = "Linux-unknown";
+        #endif
+    #elif defined(_WIN32)
+        #if defined(_WIN64)
+            platform = "Windows-x64";
+        #else
+            platform = "Windows-x86";
+        #endif
+    #else
+        platform = "unknown-platform";
+    #endif
+
+    /* 获取当前本地时间并格式化 */
+    time_t now = time(NULL);
+    const char *time_str = "unknown-time";
+    char time_buf[32];
+
+    if (now != (time_t)-1) {
+        struct tm tm_info;
+        /* 线程安全版本：Windows / 其他平台分别处理 */
+        #if defined(_WIN32)
+            if (localtime_s(&tm_info, &now) == 0) {
+                if (strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_info) > 0) {
+                    time_str = time_buf;
+                }
+            }
+        #else
+            if (localtime_r(&now, &tm_info) != NULL) {
+                if (strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_info) > 0) {
+                    time_str = time_buf;
+                }
+            }
+        #endif
+    }
+
+    fprintf(stderr,
+            "\n\033[38;5;27mFLYUX\033[38;5;39m %s\033[0m (%s)\n"
+            "\033[31m[Err]\033[0m Fatal Error: %s\n"
+            "\033[33mExecution Terminated.\033[0m  [%s]\n",
+            FLYUXC_VERSION,
+            platform,
+            g_runtime_state.error_msg,
+            time_str);
+
+    exit(g_runtime_state.last_status);
 }
 
 /* Get type of value as string */
@@ -843,7 +906,10 @@ Value* value_greater_than(Value *a, Value *b) {
 
 /* Array/Object index access - runtime version */
 Value* value_index(Value *obj, Value *index) {
-    if (!obj) return box_null();
+    if (!obj) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "Attempt to index null value");
+        return box_null();
+    }
     
     // For arrays with numeric index
     if (obj->type == VALUE_ARRAY && obj->data.pointer) {
@@ -880,7 +946,8 @@ Value* value_index(Value *obj, Value *index) {
             }
         }
     }
-    
+
+    set_runtime_status(FLYUX_TYPE_ERROR, "Invalid index operation");
     return box_null();
 }
 
@@ -1220,11 +1287,11 @@ Value* value_input(Value *prompt) {
     if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
         // 读取失败：可能是 EOF 或错误
         if (feof(stdin)) {
-            set_runtime_status(FLYUX_EOF, "End of input (EOF)");
+            set_runtime_status(FLYUX_EOF, "(input) End of input (EOF)");
         } else {
-            set_runtime_status(FLYUX_IO_ERROR, "Input read error");
+            set_runtime_status(FLYUX_IO_ERROR, "(input) Input read error");
         }
-        return box_null();
+        return box_null_typed(VALUE_STRING);
     }
     
     // 移除末尾的换行符
@@ -1242,8 +1309,8 @@ Value* value_input(Value *prompt) {
     // 复制字符串并创建 Value
     char *result_str = (char*)malloc(len + 1);
     if (!result_str) {
-        set_runtime_status(FLYUX_ERROR, "Memory allocation failed");
-        return box_null();
+        set_runtime_status(FLYUX_ERROR, "(input) Memory allocation failed");
+        return box_null_typed(VALUE_STRING);
     }
     
     memcpy(result_str, buffer, len + 1);
@@ -1295,7 +1362,7 @@ Value* value_last_status() {
 // 内部函数：清除错误状态（供try-catch使用）
 Value* value_clear_error() {
     flyux_clear_error();
-    return box_null();
+    return box_null(); // ignore
 }
 
 /* ============================================================================
@@ -1330,7 +1397,7 @@ Value* value_to_num(Value *v) {
             
         case VALUE_STRING: {
             if (!v->data.string || v->string_length == 0) {
-                set_runtime_status(FLYUX_TYPE_ERROR, "Empty string cannot be converted to number");
+                set_runtime_status(FLYUX_TYPE_ERROR, "(toNum) Empty string cannot be converted to number");
                 return box_null_typed(VALUE_NUMBER);
             }
             
@@ -1339,7 +1406,7 @@ Value* value_to_num(Value *v) {
             
             // 检查是否有无效字符
             if (endptr == v->data.string || *endptr != '\0') {
-                set_runtime_status(FLYUX_TYPE_ERROR, "Invalid number format");
+                set_runtime_status(FLYUX_TYPE_ERROR, "(toNum) Invalid number format");
                 return box_null_typed(VALUE_NUMBER);
             }
             
@@ -1353,7 +1420,7 @@ Value* value_to_num(Value *v) {
             return box_number(0.0);
             
         default:
-            set_runtime_status(FLYUX_TYPE_ERROR, "Cannot convert array/object to number");
+            set_runtime_status(FLYUX_TYPE_ERROR, "(toNum) Cannot convert array/object to number");
             return box_null_typed(VALUE_NUMBER);
     }
 }
@@ -1524,16 +1591,19 @@ Value* create_error_object(Value *message, Value *code, Value *type) {
  */
 Value* value_get_field(Value *obj, Value *field_name) {
     if (!obj || !field_name) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(getField) Null argument");
         return box_null();
     }
     
     // 检查obj是否为对象类型
     if (obj->type != VALUE_OBJECT) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(getField) Not an object");
         return box_null();
     }
     
     // 检查field_name是否为字符串
     if (field_name->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(getField) Field name must be a string");
         return box_null();
     }
     
@@ -1603,6 +1673,7 @@ Value* value_get_field(Value *obj, Value *field_name) {
     }
     
     // 字段不存在
+    set_runtime_status(FLYUX_TYPE_ERROR, "(getField) Field not found");
     return box_null();
 }
 
@@ -1926,13 +1997,13 @@ Value* value_char_at(Value *str, Value *index) {
     // 支持数组访问
     if (str && str->type == VALUE_ARRAY) {
         if (!index || index->type != VALUE_NUMBER) {
-            set_runtime_status(FLYUX_TYPE_ERROR, "charAt requires numeric index");
+            set_runtime_status(FLYUX_TYPE_ERROR, "(charAt) requires numeric index");
             return box_null();
         }
         
         int idx = (int)index->data.number;
         if (idx < 0 || idx >= (int)str->array_size) {
-            set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Array index out of range");
+            set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(charAt) array index out of range");
             return box_null();
         }
         
@@ -1942,18 +2013,18 @@ Value* value_char_at(Value *str, Value *index) {
     
     // 支持字符串访问
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "charAt requires string or array");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(charAt) requires string or array");
         return box_string("");
     }
     
     if (!index || index->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "charAt requires numeric index");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(charAt) requires numeric index");
         return box_string("");
     }
     
     int idx = (int)index->data.number;
     if (idx < 0 || idx >= (int)str->string_length) {
-        set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Index out of range");
+        set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(charAt) index out of range");
         return box_string("");
     }
     
@@ -1968,12 +2039,12 @@ Value* value_substr(Value *str, Value *start, Value *length) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "substr requires string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(substr) requires string");
         return box_string("");
     }
     
     if (!start || start->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "substr requires numeric start");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(substr) requires numeric start");
         return box_string("");
     }
     
@@ -2003,7 +2074,7 @@ Value* value_index_of(Value *str, Value *substr) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!str || str->type != VALUE_STRING || !substr || substr->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "indexOf requires two strings");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(indexOf) requires two strings");
         return box_number(-1);
     }
     
@@ -2026,7 +2097,7 @@ Value* value_replace(Value *str, Value *old_str, Value *new_str) {
     if (!str || str->type != VALUE_STRING || 
         !old_str || old_str->type != VALUE_STRING ||
         !new_str || new_str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "replace requires three strings");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(replace) requires three strings");
         return box_string("");
     }
     
@@ -2061,8 +2132,8 @@ Value* value_split(Value *str, Value *delimiter) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "split requires string");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(split) requires string");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     const char *source = (const char*)str->data.pointer;
@@ -2125,7 +2196,7 @@ Value* value_join(Value *arr, Value *separator) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "join requires array");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(join) requires array");
         return box_string("");
     }
     
@@ -2177,7 +2248,7 @@ Value* value_trim(Value *str) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "trim requires string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(trim) requires string");
         return box_string("");
     }
     
@@ -2206,7 +2277,7 @@ Value* value_upper(Value *str) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "upper requires string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(upper) requires string");
         return box_string("");
     }
     
@@ -2229,7 +2300,7 @@ Value* value_lower(Value *str) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "lower requires string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(lower) requires string");
         return box_string("");
     }
     
@@ -2258,8 +2329,8 @@ Value* value_push(Value *arr, Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "push requires array");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(push) requires array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     size_t new_size = arr->array_size + 1;
@@ -2290,13 +2361,13 @@ Value* value_pop(Value *arr) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "pop requires array");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(pop) requires array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     if (arr->array_size == 0) {
-        set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Cannot pop from empty array");
-        return box_null();
+        set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(pop) cannot pop from empty array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     Value **old_elements = (Value**)arr->data.pointer;
@@ -2324,13 +2395,13 @@ Value* value_shift(Value *arr) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "shift requires array");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(shift) requires array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     if (arr->array_size == 0) {
-        set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Cannot shift from empty array");
-        return box_null();
+        set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(shift) cannot shift from empty array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     Value **old_elements = (Value**)arr->data.pointer;
@@ -2358,8 +2429,8 @@ Value* value_unshift(Value *arr, Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "unshift requires array");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(unshift) requires array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     size_t new_size = arr->array_size + 1;
@@ -2388,8 +2459,8 @@ Value* value_slice(Value *arr, Value *start, Value *end) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "slice requires array");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(slice) requires array");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     int start_idx = (start && start->type == VALUE_NUMBER) ? (int)start->data.number : 0;
@@ -2430,8 +2501,8 @@ Value* value_concat(Value *arr1, Value *arr2) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr1 || arr1->type != VALUE_ARRAY || !arr2 || arr2->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "concat requires two arrays");
-        return box_null();
+        set_runtime_status(FLYUX_TYPE_ERROR, "(concat) requires two arrays");
+        return box_null_typed(VALUE_OBJECT);
     }
     
     size_t new_size = arr1->array_size + arr2->array_size;
@@ -2464,7 +2535,7 @@ Value* value_concat(Value *arr1, Value *arr2) {
 /* readFile(path) -> string | null - 读取文本文件 */
 Value* value_read_file(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "readFile: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(readFile) path must be a string");
         return box_null_typed(VALUE_STRING);
     }
     
@@ -2472,7 +2543,7 @@ Value* value_read_file(Value *path) {
     FILE *fp = fopen(filepath, "r");
     
     if (!fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        set_runtime_status(FLYUX_IO_ERROR, "(readFile) cannot open file");
         return box_null_typed(VALUE_STRING);
     }
     
@@ -2494,11 +2565,11 @@ Value* value_read_file(Value *path) {
 /* writeFile(path, content) -> bool - 写入文本文件 */
 Value* value_write_file(Value *path, Value *content) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "writeFile: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(writeFile) path must be a string");
         return box_bool(0);
     }
     if (!content || content->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "writeFile: content必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(writeFile) content must be a string");
         return box_bool(0);
     }
     
@@ -2507,7 +2578,7 @@ Value* value_write_file(Value *path, Value *content) {
     
     FILE *fp = fopen(filepath, "w");
     if (!fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot create file");
+        set_runtime_status(FLYUX_IO_ERROR, "(writeFile) cannot create file");
         return box_bool(0);
     }
     
@@ -2521,11 +2592,11 @@ Value* value_write_file(Value *path, Value *content) {
 /* appendFile(path, content) -> bool - 追加到文件 */
 Value* value_append_file(Value *path, Value *content) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "appendFile: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(appendFile) path must be a string");
         return box_bool(0);
     }
     if (!content || content->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "appendFile: content必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(appendFile) content must be a string");
         return box_bool(0);
     }
     
@@ -2534,7 +2605,7 @@ Value* value_append_file(Value *path, Value *content) {
     
     FILE *fp = fopen(filepath, "a");
     if (!fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        set_runtime_status(FLYUX_IO_ERROR, "(appendFile) cannot open file");
         return box_bool(0);
     }
     
@@ -2564,7 +2635,7 @@ Value* value_file_exists(Value *path) {
 /* deleteFile(path) -> bool - 删除文件 */
 Value* value_delete_file(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "deleteFile: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(deleteFile) path must be a string");
         return box_bool(0);
     }
     
@@ -2575,7 +2646,7 @@ Value* value_delete_file(Value *path) {
         set_runtime_status(FLYUX_OK, NULL);
         return box_bool(1);
     } else {
-        set_runtime_status(FLYUX_IO_ERROR, "删除文件失败");
+        set_runtime_status(FLYUX_IO_ERROR, "(deleteFile) failed to delete file");
         return box_bool(0);
     }
 }
@@ -2603,7 +2674,7 @@ Value* value_get_file_size(Value *path) {
 /* readBytes(path) -> Buffer | null - 读取二进制文件 */
 Value* value_read_bytes(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "readBytes: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(readBytes) path must be a string");
         return box_null_typed(VALUE_OBJECT);
     }
     
@@ -2611,7 +2682,7 @@ Value* value_read_bytes(Value *path) {
     FILE *fp = fopen(filepath, "rb");
     
     if (!fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        set_runtime_status(FLYUX_IO_ERROR, "(readBytes) cannot open file");
         return box_null_typed(VALUE_OBJECT);
     }
     
@@ -2645,7 +2716,7 @@ Value* value_read_bytes(Value *path) {
 /* writeBytes(path, data) -> bool - 写入二进制文件 */
 Value* value_write_bytes(Value *path, Value *data) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "writeBytes: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(writeBytes) path must be a string");
         return box_bool(0);
     }
     
@@ -2653,7 +2724,7 @@ Value* value_write_bytes(Value *path, Value *data) {
     FILE *fp = fopen(filepath, "wb");
     
     if (!fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot create file");
+        set_runtime_status(FLYUX_IO_ERROR, "(writeBytes) cannot create file");
         return box_bool(0);
     }
     
@@ -2670,7 +2741,7 @@ Value* value_write_bytes(Value *path, Value *data) {
         }
     } else {
         fclose(fp);
-        set_runtime_status(FLYUX_TYPE_ERROR, "writeBytes: data必须是Buffer或数组");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(writeBytes) data must be Buffer or array");
         return box_bool(0);
     }
     
@@ -2686,7 +2757,7 @@ Value* value_write_bytes(Value *path, Value *data) {
 /* readLines(path) -> str[] - 逐行读取文本文件 */
 Value* value_read_lines(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "readLines: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(readLines) path must be a string");
         return box_null_typed(VALUE_ARRAY);
     }
     
@@ -2694,7 +2765,7 @@ Value* value_read_lines(Value *path) {
     FILE *fp = fopen(filepath, "r");
     
     if (!fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        set_runtime_status(FLYUX_IO_ERROR, "(readLines) cannot open file");
         return box_null_typed(VALUE_ARRAY);
     }
     
@@ -2730,7 +2801,7 @@ Value* value_read_lines(Value *path) {
                 free(lines);
                 free(line);
                 fclose(fp);
-                set_runtime_status(FLYUX_ERROR, "内存分配失败");
+                set_runtime_status(FLYUX_ERROR, "(readLines) memory allocation failed");
                 return box_null_typed(VALUE_ARRAY);
             }
             lines = new_lines;
@@ -2755,12 +2826,12 @@ Value* value_read_lines(Value *path) {
 /* renameFile(oldPath, newPath) -> bool - 重命名/移动文件 */
 Value* value_rename_file(Value *old_path, Value *new_path) {
     if (!old_path || old_path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "renameFile: oldPath必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(renameFile) oldPath must be a string");
         return box_bool(0);
     }
     
     if (!new_path || new_path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "renameFile: newPath必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(renameFile) newPath must be a string");
         return box_bool(0);
     }
     
@@ -2773,7 +2844,7 @@ Value* value_rename_file(Value *old_path, Value *new_path) {
         set_runtime_status(FLYUX_OK, NULL);
         return box_bool(1);
     } else {
-        set_runtime_status(FLYUX_IO_ERROR, "重命名文件失败");
+        set_runtime_status(FLYUX_IO_ERROR, "(renameFile) failed to rename file");
         return box_bool(0);
     }
 }
@@ -2781,12 +2852,12 @@ Value* value_rename_file(Value *old_path, Value *new_path) {
 /* copyFile(src, dest) -> bool - 复制文件 */
 Value* value_copy_file(Value *src_path, Value *dest_path) {
     if (!src_path || src_path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "copyFile: src必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(copyFile) src must be a string");
         return box_bool(0);
     }
     
     if (!dest_path || dest_path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "copyFile: dest必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(copyFile) dest must be a string");
         return box_bool(0);
     }
     
@@ -2795,14 +2866,14 @@ Value* value_copy_file(Value *src_path, Value *dest_path) {
     
     FILE *src_fp = fopen(src, "rb");
     if (!src_fp) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot open source file");
+        set_runtime_status(FLYUX_IO_ERROR, "(copyFile) cannot open source file");
         return box_bool(0);
     }
     
     FILE *dest_fp = fopen(dest, "wb");
     if (!dest_fp) {
         fclose(src_fp);
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot create destination file");
+        set_runtime_status(FLYUX_IO_ERROR, "(copyFile) cannot create destination file");
         return box_bool(0);
     }
     
@@ -2814,7 +2885,7 @@ Value* value_copy_file(Value *src_path, Value *dest_path) {
         if (fwrite(buffer, 1, bytes, dest_fp) != bytes) {
             fclose(src_fp);
             fclose(dest_fp);
-            set_runtime_status(FLYUX_IO_ERROR, "写入目标文件失败");
+            set_runtime_status(FLYUX_IO_ERROR, "(copyFile) failed to write to destination file");
             return box_bool(0);
         }
     }
@@ -2835,7 +2906,7 @@ Value* value_copy_file(Value *src_path, Value *dest_path) {
 /* createDir(path) -> bool - 创建目录 */
 Value* value_create_dir(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "createDir: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(createDir) path must be a string");
         return box_bool(0);
     }
     
@@ -2852,9 +2923,9 @@ Value* value_create_dir(Value *path) {
         return box_bool(1);
     } else {
         if (errno == EEXIST) {
-            set_runtime_status(FLYUX_IO_ERROR, "目录已存在");
+            set_runtime_status(FLYUX_IO_ERROR, "(createDir) directory already exists");
         } else {
-            set_runtime_status(FLYUX_IO_ERROR, "创建目录失败");
+            set_runtime_status(FLYUX_IO_ERROR, "(createDir) failed to create directory");
         }
         return box_bool(0);
     }
@@ -2863,7 +2934,7 @@ Value* value_create_dir(Value *path) {
 /* removeDir(path) -> bool - 删除空目录 */
 Value* value_remove_dir(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "removeDir: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(removeDir) path must be a string");
         return box_bool(0);
     }
     
@@ -2880,11 +2951,11 @@ Value* value_remove_dir(Value *path) {
         return box_bool(1);
     } else {
         if (errno == ENOTEMPTY) {
-            set_runtime_status(FLYUX_IO_ERROR, "目录不为空");
+            set_runtime_status(FLYUX_IO_ERROR, "(removeDir) directory not empty");
         } else if (errno == ENOENT) {
-            set_runtime_status(FLYUX_IO_ERROR, "目录不存在");
+            set_runtime_status(FLYUX_IO_ERROR, "(removeDir) directory does not exist");
         } else {
-            set_runtime_status(FLYUX_IO_ERROR, "删除目录失败");
+            set_runtime_status(FLYUX_IO_ERROR, "(removeDir) failed to remove directory");
         }
         return box_bool(0);
     }
@@ -2893,7 +2964,7 @@ Value* value_remove_dir(Value *path) {
 /* listDir(path) -> str[] - 列出目录内容 */
 Value* value_list_dir(Value *path) {
     if (!path || path->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "listDir: path必须是字符串");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(listDir) path must be a string");
         return box_null_typed(VALUE_ARRAY);
     }
     
@@ -2901,7 +2972,7 @@ Value* value_list_dir(Value *path) {
     DIR *dir = opendir(dirpath);
     
     if (!dir) {
-        set_runtime_status(FLYUX_IO_ERROR, "Cannot open directory");
+        set_runtime_status(FLYUX_IO_ERROR, "(listDir) cannot open directory");
         return box_null_typed(VALUE_ARRAY);
     }
     
@@ -2927,7 +2998,7 @@ Value* value_list_dir(Value *path) {
                 }
                 free(entries);
                 closedir(dir);
-                set_runtime_status(FLYUX_ERROR, "内存分配失败");
+                set_runtime_status(FLYUX_ERROR, "(listDir) memory allocation failed");
                 return box_null_typed(VALUE_ARRAY);
             }
             entries = new_entries;
@@ -3185,7 +3256,7 @@ static Value* parse_json_value(const char** ptr) {
 /* parseJSON(str) -> obj - 解析 JSON 字符串 */
 Value* value_parse_json(Value* json_str) {
     if (!json_str || json_str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "parseJSON: argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(parseJSON) argument must be a string");
         return box_null_typed(VALUE_OBJECT);  // 返回 obj 类型的 null
     }
     
@@ -3197,14 +3268,14 @@ Value* value_parse_json(Value* json_str) {
     if (*ptr == '\0' || (*ptr != '{' && *ptr != '[' && *ptr != '"' &&
         *ptr != 't' && *ptr != 'f' && *ptr != 'n' && *ptr != '-' &&
         !(*ptr >= '0' && *ptr <= '9'))) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "parseJSON: invalid JSON format");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(parseJSON) invalid JSON format");
         return box_null_typed(VALUE_OBJECT);  // 返回 obj 类型的 null
     }
     
     Value* result = parse_json_value(&ptr);
     
     if (!result) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "parseJSON: parse error");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(parseJSON) parse error");
         return box_null_typed(VALUE_OBJECT);  // 返回 obj 类型的 null
     }
     
@@ -3367,7 +3438,7 @@ Value* value_to_json(Value* obj) {
 /* abs(num) -> num - 绝对值 */
 Value* value_abs(Value* num) {
     if (!num || num->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "abs: argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(abs) argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3378,7 +3449,7 @@ Value* value_abs(Value* num) {
 /* floor(num) -> num - 向下取整 */
 Value* value_floor(Value* num) {
     if (!num || num->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "floor: argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(floor) argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3389,7 +3460,7 @@ Value* value_floor(Value* num) {
 /* ceil(num) -> num - 向上取整 */
 Value* value_ceil(Value* num) {
     if (!num || num->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "ceil: argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(ceil) argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3400,7 +3471,7 @@ Value* value_ceil(Value* num) {
 /* round(num) -> num - 四舍五入 */
 Value* value_round(Value* num) {
     if (!num || num->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "round: argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(round) argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3411,12 +3482,12 @@ Value* value_round(Value* num) {
 /* sqrt(num) -> num - 平方根 */
 Value* value_sqrt(Value* num) {
     if (!num || num->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "sqrt: argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(sqrt) argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
     if (num->data.number < 0) {
-        set_runtime_status(FLYUX_MATH_ERROR, "sqrt: negative number");
+        set_runtime_status(FLYUX_MATH_ERROR, "(sqrt) negative number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3427,11 +3498,11 @@ Value* value_sqrt(Value* num) {
 /* pow(base, exp) -> num - 幂运算 */
 Value* value_pow(Value* base, Value* exp) {
     if (!base || base->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "pow: base must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(pow) base must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     if (!exp || exp->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "pow: exponent must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(pow) exponent must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3442,11 +3513,11 @@ Value* value_pow(Value* base, Value* exp) {
 /* min(a, b) -> num - 最小值 */
 Value* value_min(Value* a, Value* b) {
     if (!a || a->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "min: first argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(min) first argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     if (!b || b->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "min: second argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(min) second argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3458,11 +3529,11 @@ Value* value_min(Value* a, Value* b) {
 /* max(a, b) -> num - 最大值 */
 Value* value_max(Value* a, Value* b) {
     if (!a || a->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "max: first argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(max) first argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     if (!b || b->type != VALUE_NUMBER) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "max: second argument must be a number");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(max) second argument must be a number");
         return box_null_typed(VALUE_NUMBER);
     }
     
@@ -3486,11 +3557,11 @@ Value* value_random() {
 /* startsWith(str, prefix) -> bl - 判断字符串是否以指定前缀开头 */
 Value* value_starts_with(Value* str, Value* prefix) {
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "startsWith: first argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(startsWith) first argument must be a string");
         return box_bool(0);
     }
     if (!prefix || prefix->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "startsWith: second argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(startsWith) second argument must be a string");
         return box_bool(0);
     }
     
@@ -3504,11 +3575,11 @@ Value* value_starts_with(Value* str, Value* prefix) {
 /* endsWith(str, suffix) -> bl - 判断字符串是否以指定后缀结尾 */
 Value* value_ends_with(Value* str, Value* suffix) {
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "endsWith: first argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(endsWith) first argument must be a string");
         return box_bool(0);
     }
     if (!suffix || suffix->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "endsWith: second argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(endsWith) second argument must be a string");
         return box_bool(0);
     }
     
@@ -3529,11 +3600,11 @@ Value* value_ends_with(Value* str, Value* suffix) {
 /* contains(str, substr) -> bl - 判断字符串是否包含子串 */
 Value* value_contains(Value* str, Value* substr) {
     if (!str || str->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "contains: first argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(contains) first argument must be a string");
         return box_bool(0);
     }
     if (!substr || substr->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "contains: second argument must be a string");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(contains) second argument must be a string");
         return box_bool(0);
     }
     
@@ -3542,4 +3613,172 @@ Value* value_contains(Value* str, Value* substr) {
     
     set_runtime_status(FLYUX_OK, NULL);
     return box_bool(strstr(s, p) != NULL);
+}
+
+// ========================================
+// 时间函数 (Time Functions)
+// ========================================
+
+// time() - 获取当前Unix时间戳(秒)
+Value* value_time() {
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number((double)time(NULL));
+}
+
+// sleep(seconds) - 休眠指定秒数
+Value* value_sleep(Value* seconds) {
+    if (!seconds || seconds->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(sleep) argument must be a number");
+        return box_null();
+    }
+    
+    double sec = seconds->data.number;
+    if (sec < 0) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(sleep) argument must be non-negative");
+        return box_null();
+    }
+    
+    // 使用 usleep (微秒)
+    usleep((unsigned int)(sec * 1000000));
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_null();
+}
+
+// date() - 获取当前日期时间字符串 (格式: "YYYY-MM-DD HH:MM:SS")
+Value* value_date() {
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_info);
+    
+    // 需要复制字符串，因为buffer是栈上的
+    char* date_str = (char*)malloc(strlen(buffer) + 1);
+    strcpy(date_str, buffer);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_string(date_str);
+}
+
+// ========================================
+// 系统操作函数 (System Functions)
+// ========================================
+
+// exit(code) - 退出程序
+Value* value_exit(Value* code) {
+    int exit_code = 0;
+    
+    if (code && code->type == VALUE_NUMBER) {
+        exit_code = (int)code->data.number;
+    }
+    
+    exit(exit_code);
+    // 不会执行到这里
+    return box_null();
+}
+
+// getEnv(name) - 获取环境变量
+Value* value_get_env(Value* name) {
+    if (!name || name->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(getEnv) argument must be a string");
+        return box_null_typed(VALUE_STRING);
+    }
+    
+    const char* var_name = (const char*)name->data.pointer;
+    const char* value = getenv(var_name);
+    
+    if (value == NULL) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_null_typed(VALUE_STRING);
+    }
+    
+    // 需要复制环境变量的值
+    char* env_value = (char*)malloc(strlen(value) + 1);
+    strcpy(env_value, value);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_string(env_value);
+}
+
+// setEnv(name, value) - 设置环境变量
+Value* value_set_env(Value* name, Value* value) {
+    if (!name || name->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(setEnv) first argument must be a string");
+        return box_bool(0);
+    }
+    if (!value || value->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(setEnv) second argument must be a string");
+        return box_bool(0);
+    }
+    
+    const char* var_name = (const char*)name->data.pointer;
+    const char* var_value = (const char*)value->data.pointer;
+    
+    int result = setenv(var_name, var_value, 1);
+    
+    if (result != 0) {
+        set_runtime_status(FLYUX_IO_ERROR, "(setEnv) failed to set environment variable");
+        return box_bool(0);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(1);
+}
+
+// ========================================
+// 实用工具函数 (Utility Functions)
+// ========================================
+
+// isNaN(value) - 判断是否为NaN
+Value* value_is_nan(Value* val) {
+    if (!val || val->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(0);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(isnan(val->data.number));
+}
+
+// isFinite(value) - 判断是否为有限数
+Value* value_is_finite(Value* val) {
+    if (!val || val->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(0);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(isfinite(val->data.number));
+}
+
+// clamp(value, min, max) - 限制数值在范围内
+Value* value_clamp(Value* val, Value* min_val, Value* max_val) {
+    if (!val || val->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(clamp) first argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    if (!min_val || min_val->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(clamp) second argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    if (!max_val || max_val->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(clamp) third argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    double value = val->data.number;
+    double min = min_val->data.number;
+    double max = max_val->data.number;
+    
+    if (min > max) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(clamp) min must be less than or equal to max");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    if (value < min) value = min;
+    if (value > max) value = max;
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_number(value);
 }

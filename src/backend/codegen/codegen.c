@@ -271,7 +271,22 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, ";; String enhancement functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_starts_with(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_ends_with(%%struct.Value*, %%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_contains(%%struct.Value*, %%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_contains(%%struct.Value*, %%struct.Value*)\n");
+    
+    fprintf(gen->output, ";; Time functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_time()\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_sleep(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_date()\n");
+    
+    fprintf(gen->output, ";; System functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_exit(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_env(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_set_env(%%struct.Value*, %%struct.Value*)\n");
+    
+    fprintf(gen->output, ";; Utility functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_nan(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_finite(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_clamp(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");

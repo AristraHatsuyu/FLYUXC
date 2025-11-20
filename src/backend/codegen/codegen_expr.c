@@ -1619,6 +1619,200 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
+            // ========================================
+            // 时间函数 (Time Functions)
+            // ========================================
+            
+            // time() - 获取Unix时间戳
+            if (strcmp(callee->name, "time") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_time()\n", result);
+                return result;
+            }
+            
+            // sleep(seconds) - 休眠
+            if (strcmp(callee->name, "sleep") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_sleep(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                
+                if (call->throw_on_error == 0) {
+                    fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+                } else if (!gen->in_try_catch) {
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(error_label);
+                    free(continue_label);
+                }
+                return result;
+            }
+            
+            // date() - 获取日期时间字符串
+            if (strcmp(callee->name, "date") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_date()\n", result);
+                return result;
+            }
+            
+            // ========================================
+            // 系统操作函数 (System Functions)
+            // ========================================
+            
+            // exit(code) - 退出程序
+            if (strcmp(callee->name, "exit") == 0 && call->arg_count <= 1) {
+                char *result = new_temp(gen);
+                if (call->arg_count == 0) {
+                    char *zero = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 0.0)\n", zero);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_exit(%%struct.Value* %s)\n", result, zero);
+                    free(zero);
+                } else {
+                    char *arg = codegen_expr(gen, call->args[0]);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_exit(%%struct.Value* %s)\n", result, arg);
+                    free(arg);
+                }
+                return result;
+            }
+            
+            // getEnv(name) - 获取环境变量
+            if (strcmp(callee->name, "getEnv") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_env(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                
+                if (call->throw_on_error == 0) {
+                    fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+                } else if (!gen->in_try_catch) {
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(error_label);
+                    free(continue_label);
+                }
+                return result;
+            }
+            
+            // setEnv(name, value) - 设置环境变量
+            if (strcmp(callee->name, "setEnv") == 0 && call->arg_count == 2) {
+                char *name = codegen_expr(gen, call->args[0]);
+                char *value = codegen_expr(gen, call->args[1]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_env(%%struct.Value* %s, %%struct.Value* %s)\n", result, name, value);
+                free(name);
+                free(value);
+                
+                if (call->throw_on_error == 0) {
+                    fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+                } else if (!gen->in_try_catch) {
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(error_label);
+                    free(continue_label);
+                }
+                return result;
+            }
+            
+            // ========================================
+            // 实用工具函数 (Utility Functions)
+            // ========================================
+            
+            // isNaN(value) - 判断是否为NaN
+            if (strcmp(callee->name, "isNaN") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_nan(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isFinite(value) - 判断是否为有限数
+            if (strcmp(callee->name, "isFinite") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_finite(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // clamp(value, min, max) - 限制数值范围
+            if (strcmp(callee->name, "clamp") == 0 && call->arg_count == 3) {
+                char *val = codegen_expr(gen, call->args[0]);
+                char *min_val = codegen_expr(gen, call->args[1]);
+                char *max_val = codegen_expr(gen, call->args[2]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_clamp(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, val, min_val, max_val);
+                free(val);
+                free(min_val);
+                free(max_val);
+                
+                if (call->throw_on_error == 0) {
+                    fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+                } else if (!gen->in_try_catch) {
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(error_label);
+                    free(continue_label);
+                }
+                return result;
+            }
+            
             // 普通函数调用
             char **arg_regs = NULL;
             if (call->arg_count > 0) {
