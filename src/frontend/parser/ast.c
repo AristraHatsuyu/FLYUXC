@@ -225,7 +225,7 @@ ASTNode *ast_binary_expr_create(TokenKind op, ASTNode *left, ASTNode *right,
 }
 
 ASTNode *ast_call_expr_create(ASTNode *callee, ASTNode **args, size_t arg_count,
-                               SourceLocation loc) {
+                               int throw_on_error, SourceLocation loc) {
     ASTNode *node = ast_node_create(AST_CALL_EXPR, loc);
     if (!node) return NULL;
     
@@ -233,6 +233,7 @@ ASTNode *ast_call_expr_create(ASTNode *callee, ASTNode **args, size_t arg_count,
     call->callee = callee;
     call->args = args;
     call->arg_count = arg_count;
+    call->throw_on_error = throw_on_error;
     node->data = call;
     
     return node;

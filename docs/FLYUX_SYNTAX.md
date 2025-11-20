@@ -1,6 +1,6 @@
 # FLYUX 语言语法规范 - 完整参考
 
-**更新日期**: 2025-11-17
+**更新日期**: 2025-11-20
 
 ## 📌 语法快速参考
 
@@ -33,6 +33,8 @@ arr :[num]= [1, 2, 3]       // num 类型数组
 - `bl` - 布尔值（true/false）
 - `obj` - 对象 ({key: value, ...})
 - `func` - 函数 ((params) => {...})
+
+> **注意**: `obj` 类型包含普通对象和扩展对象类型(如Buffer、FileHandle等)。扩展类型详见 [扩展对象类型](#-扩展对象类型) 章节。
 
 ### 2. 常量定义
 
@@ -373,29 +375,208 @@ FLYUX 提供了丰富的内置函数，覆盖常见的编程需求。
 
 #### print(...args)
 打印任意数量的参数到标准输出。
+
+**特殊行为**: 对于扩展对象类型(Buffer、FileHandle等),仅输出元信息,不输出完整数据,避免终端刷屏。
+
 ```flyux
 print("Hello")              // Hello
 print("x =", x, "y =", y)   // x = 10 y = 20
 print()                     // 空行
+
+// 扩展对象输出
+buffer := readBytes("large.bin")
+print(buffer)               // Buffer { size: 5242880, type: "Buffer" }
 ```
 
 #### input(prompt)
-从标准输入读取一行文本。
+从标准输入读取一行文本。返回字符串类型。
 ```flyux
 name := input("请输入姓名: ")
 age := input("请输入年龄: ")
+print("你好,", name)
 ```
 
-#### readFile(path)
-读取文件内容为字符串。
+---
+
+### 📁 文件输入输出
+
+FLYUX提供三类文件操作函数:
+- **文本文件操作**: 返回/接受字符串 (readFile/writeFile/appendFile)
+- **二进制文件操作**: 返回/接受Buffer对象 (readBytes/writeBytes)
+- **流式文件操作**: 返回FileHandle对象 (openFile)
+
+#### readFile(path) -> string | null
+读取整个文本文件内容为字符串。适合小到中型文本文件。
+
+**返回值**: 成功返回字符串,失败返回null并设置lastError()
+
 ```flyux
-content := readFile("data.txt")
+content := readFile("config.txt")
+if content != null {
+    print("文件内容:", content)
+} else {
+    print("读取失败:", lastError())
+}
 ```
 
-#### writeFile(path, content)
-写入内容到文件。
+#### writeFile(path, content) -> bool
+写入字符串到文件(覆盖模式)。如果文件已存在则覆盖,不存在则创建。
+
+**参数**:
+- `path: str` - 文件路径
+- `content: str` - 要写入的字符串内容
+
+**返回值**: 成功返回true,失败返回false
+
 ```flyux
-writeFile("output.txt", "Hello, FLYUX!")
+success := writeFile("output.txt", "Hello, FLYUX!")
+if success {
+    print("写入成功")
+}
+```
+
+#### appendFile(path, content) -> bool
+追加字符串到文件末尾。保留原有内容,如果文件不存在则创建。
+
+```flyux
+appendFile("log.txt", "2025-11-20: 系统启动\n")
+appendFile("log.txt", "2025-11-20: 处理完成\n")
+```
+
+#### readBytes(path) -> Buffer | null
+读取文件为二进制Buffer对象。适合任意类型文件(图片、音频、视频、二进制数据等)。
+
+**返回值**: 成功返回Buffer对象,失败返回null
+
+```flyux
+// 读取图片文件
+buffer :[obj]= readBytes("image.png")
+if buffer != null {
+    print(buffer)               // Buffer { size: 15234, type: "Buffer" }
+    print("文件大小:", buffer.size, "字节")
+    
+    // 检查PNG文件头
+    if buffer[0] == 0x89 && buffer[1] == 0x50 {
+        print("确认为PNG格式")
+    }
+}
+```
+
+#### writeBytes(path, data) -> bool
+写入二进制数据到文件。接受Buffer对象或数字数组。
+
+**参数**:
+- `path: str` - 文件路径
+- `data: Buffer | array<num>` - Buffer对象或0-255的数字数组
+
+```flyux
+// 写入数字数组
+bytes := [0x89, 0x50, 0x4E, 0x47]  // PNG头部
+writeBytes("test.png", bytes)
+
+// 写入Buffer对象
+buffer := readBytes("source.bin")
+writeBytes("backup.bin", buffer)
+```
+
+#### openFile(path, mode) -> FileHandle | null
+打开文件并返回FileHandle对象,支持流式读写。适合大文件或需要逐行/逐块处理的场景。
+
+**参数**:
+- `path: str` - 文件路径
+- `mode: str` - 打开模式:
+  - `"r"` - 只读模式(文本)
+  - `"w"` - 写入模式(文本,覆盖)
+  - `"a"` - 追加模式(文本)
+  - `"rb"` - 只读模式(二进制)
+  - `"wb"` - 写入模式(二进制,覆盖)
+
+**返回值**: 成功返回FileHandle对象,失败返回null
+
+```flyux
+// 流式读取大文件
+file :[obj]= openFile("large.log", "r")
+if file != null {
+    L> [10000] {  // 最多读10000行
+        line := file.readLine()
+        if line == null { break }
+        print(line)
+    }
+    file.close()
+}
+```
+
+#### fileExists(path) -> bool
+检查文件是否存在。
+
+```flyux
+if fileExists("config.json") {
+    config := readFile("config.json")
+} else {
+    print("配置文件不存在")
+}
+```
+
+#### deleteFile(path) -> bool
+删除文件。成功返回true,失败返回false。
+
+```flyux
+if deleteFile("temp.txt") {
+    print("删除成功")
+} else {
+    print("删除失败:", lastError())
+}
+```
+
+#### getFileSize(path) -> num
+获取文件大小(字节数)。文件不存在返回-1。
+
+```flyux
+size := getFileSize("data.txt")
+if size > 0 {
+    print("文件大小:", size, "字节")
+}
+```
+
+---
+
+### 🗂️ 目录操作
+
+#### listDir(path) -> array<string> | null
+列出目录中的所有文件和子目录名。返回名称数组,不包含完整路径。
+
+```flyux
+files :[str]= listDir("./testfx")
+if files != null {
+    L> (files : filename) {
+        print("文件:", filename)
+    }
+}
+```
+
+#### dirExists(path) -> bool
+检查目录是否存在。
+
+```flyux
+if !dirExists("output") {
+    makeDir("output")
+}
+```
+
+#### makeDir(path) -> bool
+创建单级目录。目录已存在返回false。
+
+```flyux
+if makeDir("logs") {
+    print("目录创建成功")
+}
+```
+
+#### removeDir(path) -> bool
+删除空目录。目录非空或不存在返回false。
+
+```flyux
+removeDir("temp_dir")
 ```
 
 ---
@@ -669,6 +850,254 @@ e := entries(object)           // [["a", 1], ["b", 2]]
 #### hasKey(obj, key)
 检查对象是否有指定键。
 ```flyux
+object := {name: "Alice", age: 30}
+has := hasKey(object, "name")  // true
+```
+
+#### deleteKey(obj, key)
+删除对象的指定键。
+```flyux
+object := {a: 1, b: 2, c: 3}
+deleteKey(object, "b")
+print(object)  // {a: 1, c: 3}
+```
+
+---
+
+## 🎁 扩展对象类型
+
+FLYUX的`obj`类型包含普通对象和扩展对象类型。扩展类型用于特殊用途(文件I/O、二进制数据等),具有以下特点:
+
+1. **本质是obj**: 扩展类型是obj的子类型,可以赋值给obj变量
+2. **安全输出**: `print()`时只显示元信息,不输出大量原始数据
+3. **属性访问**: 支持通过`.`或`[]`访问对象属性
+4. **类型识别**: `typeOf()`返回具体的扩展类型名(如"Buffer"、"FileHandle")
+
+### Buffer - 二进制缓冲区
+
+用于存储二进制数据(图片、音频、二进制文件等)。
+
+**创建方式**:
+```flyux
+// 从文件读取
+buffer := readBytes("image.png")
+
+// 从数组创建
+bytes := [0x48, 0x65, 0x6C, 0x6C, 0x6F]
+buffer := Buffer(bytes)
+```
+
+**属性**:
+```flyux
+buffer := readBytes("data.bin")
+print(buffer.size)         // 获取大小(字节)
+print(buffer.type)         // "Buffer"
+print(typeOf(buffer))      // "Buffer"
+```
+
+**索引访问**:
+```flyux
+// 访问单个字节(0-255)
+first_byte := buffer[0]
+second_byte := buffer[1]
+
+// 检查文件头
+if buffer[0] == 0xFF && buffer[1] == 0xD8 {
+    print("JPEG格式")
+}
+```
+
+**方法**:
+```flyux
+// slice(start, end?) - 切片缓冲区
+header := buffer.slice(0, 10)
+
+// toString(encoding?) - 转换为字符串
+text := buffer.toString("utf8")
+
+// toArray() - 转换为数字数组(仅小数据)
+if buffer.size < 100 {
+    arr := buffer.toArray()
+}
+```
+
+**print输出**:
+```flyux
+buffer := readBytes("large.bin")
+print(buffer)
+// 输出: Buffer { size: 5242880, type: "Buffer" }
+// 不会输出MB级数据,避免终端刷屏
+```
+
+### FileHandle - 文件句柄
+
+表示打开的文件,支持流式读写。
+
+**创建方式**:
+```flyux
+file := openFile("data.txt", "r")
+```
+
+**属性**:
+```flyux
+print(file.path)          // 文件路径
+print(file.mode)          // 打开模式 ("r"/"w"/"a")
+print(file.position)      // 当前读写位置
+print(file.isOpen)        // 是否打开
+print(typeOf(file))       // "FileHandle"
+```
+
+**方法**:
+```flyux
+// read(size?) - 读取数据
+content := file.read()       // 读取全部
+chunk := file.read(1024)     // 读取1KB
+
+// readLine() - 读取一行
+line := file.readLine()
+
+// write(content) - 写入数据
+file.write("Hello, FLYUX!\n")
+
+// seek(position) - 移动读写位置
+file.seek(0)  // 移到开头
+
+// close() - 关闭文件
+file.close()
+```
+
+**使用示例**:
+```flyux
+// 流式读取大文件
+file := openFile("large.log", "r")
+if file != null {
+    count := 0
+    L> [100000] {
+        line := file.readLine()
+        if line == null { break }
+        count = count + 1
+    }
+    print("总行数:", count)
+    file.close()
+}
+```
+
+**print输出**:
+```flyux
+file := openFile("test.txt", "r")
+print(file)
+// 输出: FileHandle { path: "test.txt", mode: "r", position: 0, isOpen: true }
+```
+
+### Error - 错误对象
+
+表示错误信息,由文件I/O等操作失败时自动创建。
+
+**获取方式**:
+```flyux
+content := readFile("missing.txt")
+if content == null {
+    err := lastErrorObj()
+    print(err)
+}
+```
+
+**属性**:
+```flyux
+err := lastErrorObj()
+print(err.message)        // 错误消息
+print(err.code)           // 错误代码
+print(err.errorType)      // 错误类型(Error/IOError/TypeError)
+```
+
+**print输出**:
+```flyux
+print(err)
+// 输出: Error { message: "文件未找到", code: 1001, errorType: "IOError" }
+```
+
+---
+
+## 💡 扩展对象使用模式
+
+### 模式1: 文本文件处理
+```flyux
+// 小文件 - 直接读取
+content :[str]= readFile("config.txt")
+if content != null {
+    lines := split(content, "\n")
+    print("行数:", length(lines))
+}
+
+// 大文件 - 流式处理
+file :[obj]= openFile("large.log", "r")
+if file != null {
+    L> [10000] {
+        line := file.readLine()
+        if line == null { break }
+        processLine(line)
+    }
+    file.close()
+}
+```
+
+### 模式2: 二进制文件处理
+```flyux
+// 读取图片
+buffer :[obj]= readBytes("photo.jpg")
+if buffer != null {
+    print("图片大小:", buffer.size)
+    
+    // 检查JPEG格式
+    if buffer[0] == 0xFF && buffer[1] == 0xD8 {
+        print("JPEG格式确认")
+    }
+    
+    // 处理数据...
+    processed := processImage(buffer)
+    writeBytes("output.jpg", processed)
+}
+```
+
+### 模式3: 错误处理
+```flyux
+result := readFile("data.txt")
+if result == null {
+    err := lastErrorObj()
+    if err.code == 1001 {
+        print("文件不存在:", err.message)
+    } else if err.code == 1002 {
+        print("权限不足:", err.message)
+    } else {
+        print("未知错误:", err)
+    }
+}
+```
+
+### 模式4: 批量文件处理
+```flyux
+files := listDir("./data")
+if files != null {
+    L> (files : filename) {
+        if endsWith(filename, ".txt") {
+            path := "./data/" + filename
+            content := readFile(path)
+            if content != null {
+                processFile(filename, content)
+            }
+        }
+    }
+}
+```
+
+---
+
+### 🗂️ 对象操作
+
+#### keys(obj)
+返回对象所有键的数组。
+检查对象是否有指定键。
+```flyux
 object := {a: 1, b: 2}
 has := hasKey(object, "a")     // true
 ```
@@ -891,5 +1320,23 @@ print("Result:", result)
 
 ---
 
-**文档版本**: 2.0  
-**最后更新**: 2025-11-17
+**文档版本**: 3.0  
+**最后更新**: 2025-11-20
+
+## 📝 更新历史
+
+### 版本 3.0 (2025-11-20)
+- ✅ 添加扩展对象类型系统 (Buffer、FileHandle、Error)
+- ✅ 完善文件I/O函数文档 (readFile/writeFile/readBytes/writeBytes/openFile)
+- ✅ 添加目录操作函数 (listDir/dirExists/makeDir/removeDir)
+- ✅ 添加扩展对象使用模式和最佳实践
+- ✅ 说明扩展对象的print输出特性
+
+### 版本 2.0 (2025-11-17)
+- 完善类型系统文档
+- 添加动态对象操作
+
+### 版本 1.0 (初始版本)
+- FLYUX基础语法规范
+- 变量定义、函数、控制流
+- 基础内置函数

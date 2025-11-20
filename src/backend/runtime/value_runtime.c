@@ -6,12 +6,16 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <errno.h>
 
 /* ANSI Color codes (JS console style) */
 #define COLOR_NUM      "\033[38;5;151m"      /* 数字 (浅青色) */
 #define ANSI_RED_BROWN  "\033[38;5;173m" /* 字符串 (红褐色) */
 #define ANSI_BLUE       "\033[34m"      /* 布尔值 */
 #define COLOR_GRAY      "\033[90m"      /* null/undefined */
+#define COLOR_GREEN     "\033[38;5;79m"      /* 对象/数组 (绿色) */
 #define COLOR_RESET     "\033[0m"
 
 /* Rainbow bracket colors (like VSCode) */
@@ -47,6 +51,12 @@ static int should_use_colors() {
 #define VALUE_BOOL 4
 #define VALUE_NULL 5
 #define VALUE_UNDEF 6
+
+/* Extended object type tags */
+#define EXT_TYPE_NONE      0  /* 普通obj */
+#define EXT_TYPE_BUFFER    1  /* Buffer类型 */
+#define EXT_TYPE_FILE      2  /* FileHandle类型 */
+#define EXT_TYPE_ERROR     3  /* Error类型 */
 
 /* ============================================================================
  * 运行时状态系统 (Runtime State System)
@@ -118,6 +128,7 @@ void flyux_clear_error() {
 typedef struct {
     int type;           /* 当前值的实际类型 */
     int declared_type;  /* 变量的声明类型（用于类型注解）*/
+    int ext_type;       /* 扩展对象类型标识 (仅当type==VALUE_OBJECT时有效) */
     union {
         double number;
         char *string;
@@ -133,11 +144,39 @@ typedef struct ObjectEntry {
     Value *value;
 } ObjectEntry;
 
+/* ============================================================================
+ * 扩展对象类型结构定义
+ * ============================================================================ */
+
+/* Buffer对象 - 二进制数据容器 */
+typedef struct {
+    unsigned char *data;  /* 原始二进制数据 */
+    size_t size;          /* 数据大小(字节) */
+    size_t capacity;      /* 分配容量 */
+} BufferObject;
+
+/* FileHandle对象 - 文件句柄 */
+typedef struct {
+    FILE *fp;             /* C文件指针 */
+    char *path;           /* 文件路径 */
+    char *mode;           /* 打开模式 */
+    int is_open;          /* 是否打开 */
+    long position;        /* 当前位置 */
+} FileHandleObject;
+
+/* Error对象 - 错误信息 */
+typedef struct {
+    char *message;        /* 错误消息 */
+    int code;             /* 错误代码 */
+    char *error_type;     /* 错误类型(Error/TypeError/IOError) */
+} ErrorObject;
+
 /* Box a number into a Value */
 Value* box_number(double num) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NUMBER;
     v->declared_type = VALUE_NUMBER;  /* 默认声明类型等于实际类型 */
+    v->ext_type = EXT_TYPE_NONE;
     v->data.number = num;
     return v;
 }
@@ -147,6 +186,7 @@ Value* box_string(char *str) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_STRING;
     v->declared_type = VALUE_STRING;
+    v->ext_type = EXT_TYPE_NONE;
     v->data.string = str;  // 不复制，直接使用全局常量
     v->string_length = str ? strlen(str) : 0;  // 保存长度，支持\0字符串
     return v;
@@ -157,6 +197,7 @@ Value* box_string_with_length(char *str, size_t len) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_STRING;
     v->declared_type = VALUE_STRING;
+    v->ext_type = EXT_TYPE_NONE;
     v->data.string = str;  // 不复制，直接使用全局常量
     v->string_length = len;  // 使用显式长度，支持包含\0的字符串
     return v;
@@ -167,6 +208,7 @@ Value* box_bool(int b) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_BOOL;
     v->declared_type = VALUE_BOOL;
+    v->ext_type = EXT_TYPE_NONE;
     v->data.number = b ? 1.0 : 0.0;
     return v;
 }
@@ -176,6 +218,7 @@ Value* box_null() {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NULL;
     v->declared_type = VALUE_NULL;  /* 默认声明类型为null */
+    v->ext_type = EXT_TYPE_NONE;
     return v;
 }
 
@@ -184,6 +227,7 @@ Value* box_undef() {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_UNDEF;
     v->declared_type = VALUE_UNDEF;
+    v->ext_type = EXT_TYPE_NONE;
     return v;
 }
 
@@ -192,6 +236,7 @@ Value* box_null_typed(int decl_type) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NULL;
     v->declared_type = decl_type;  /* 使用指定的声明类型 */
+    v->ext_type = EXT_TYPE_NONE;
     return v;
 }
 
@@ -206,6 +251,7 @@ Value* box_array(void *array_ptr, long size) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_ARRAY;
     v->declared_type = VALUE_ARRAY;
+    v->ext_type = EXT_TYPE_NONE;
     v->data.pointer = array_ptr;
     v->array_size = size;
     return v;
@@ -216,6 +262,7 @@ Value* box_object(void *entries_ptr, long count) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_OBJECT;
     v->declared_type = VALUE_OBJECT;
+    v->ext_type = EXT_TYPE_NONE;  /* 普通obj */
     v->data.pointer = entries_ptr;  /* ObjectEntry* */
     v->array_size = count;          /* number of properties */
     return v;
@@ -414,6 +461,7 @@ static void print_smart_number(double num, int use_colors) {
 /* 递归打印数组内容为JSON格式，支持嵌套层级的彩虹括号 */
 static void print_array_json_depth(Value **arr, long size, int depth);
 static void print_object_json_depth(ObjectEntry *entries, long count, int depth);
+static void print_extended_object_meta_depth(Value *v, int depth);
 
 static void print_value_json_depth(Value *v, int depth) {
     int use_colors = should_use_colors();
@@ -457,8 +505,13 @@ static void print_value_json_depth(Value *v, int depth) {
             break;
         }
         case VALUE_OBJECT: {
-            ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
-            print_object_json_depth(entries, v->array_size, depth);
+            /* 检查是否为扩展对象类型 */
+            if (v->ext_type != EXT_TYPE_NONE) {
+                print_extended_object_meta_depth(v, depth);
+            } else {
+                ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
+                print_object_json_depth(entries, v->array_size, depth);
+            }
             break;
         }
         default:
@@ -514,6 +567,69 @@ static void print_object_json_depth(ObjectEntry *entries, long count, int depth)
     if (use_colors) printf("%s", COLOR_RESET);
 }
 
+/* Print extended object meta information */
+static void print_extended_object_meta_depth(Value *v, int depth) {
+    int use_colors = should_use_colors();
+    const char* type_color = use_colors ? COLOR_GREEN : "";
+    const char* bracket_color = use_colors ? bracket_colors[depth % NUM_BRACKET_COLORS] : "";
+    const char* string_color = use_colors ? ANSI_RED_BROWN : "";
+    const char* number_color = use_colors ? COLOR_NUM : "";
+    const char* bool_color = use_colors ? ANSI_BLUE : "";
+    const char* reset = use_colors ? COLOR_RESET : "";
+    
+    switch (v->ext_type) {
+        case EXT_TYPE_BUFFER: {
+            BufferObject *buf = (BufferObject*)v->data.pointer;
+            printf("%sBuffer%s %s{%s size: %s%zu%s, type: %s\"Buffer\"%s %s}%s", 
+                   type_color, reset, bracket_color, reset,
+                   number_color, buf ? buf->size : 0, reset,
+                   string_color, reset,
+                   bracket_color, reset);
+            break;
+        }
+        case EXT_TYPE_FILE: {
+            FileHandleObject *file = (FileHandleObject*)v->data.pointer;
+            if (file) {
+                printf("%sFileHandle%s %s{%s path: %s\"%s\"%s, mode: %s\"%s\"%s, position: %s%ld%s, isOpen: %s%s%s %s}%s", 
+                       type_color, reset, bracket_color, reset,
+                       string_color, file->path ? file->path : "", reset,
+                       string_color, file->mode ? file->mode : "", reset,
+                       number_color, file->position, reset,
+                       bool_color, file->is_open ? "true" : "false", reset,
+                       bracket_color, reset);
+            } else {
+                printf("%sFileHandle%s %s{%s %s}%s", type_color, reset, bracket_color, reset, bracket_color, reset);
+            }
+            break;
+        }
+        case EXT_TYPE_ERROR: {
+            ErrorObject *err = (ErrorObject*)v->data.pointer;
+            if (err) {
+                printf("%sError%s %s{%s message: %s\"%s\"%s, code: %s%d%s, errorType: %s\"%s\"%s %s}%s",
+                       type_color, reset, bracket_color, reset,
+                       string_color, err->message ? err->message : "", reset,
+                       number_color, err->code, reset,
+                       string_color, err->error_type ? err->error_type : "Error", reset,
+                       bracket_color, reset);
+            } else {
+                printf("%sError%s %s{%s %s}%s", type_color, reset, bracket_color, reset, bracket_color, reset);
+            }
+            break;
+        }
+        default:
+            printf("%sExtendedObject%s %s{%s type: %s%d%s %s}%s", 
+                   type_color, reset, bracket_color, reset, 
+                   number_color, v->ext_type, reset,
+                   bracket_color, reset);
+            break;
+    }
+}
+
+/* Print extended object meta information (wrapper for depth 0) */
+static void print_extended_object_meta(Value *v) {
+    print_extended_object_meta_depth(v, 0);
+}
+
 /* Print a value */
 void value_print(Value *v) {
     int use_colors = should_use_colors();
@@ -553,17 +669,31 @@ void value_print(Value *v) {
             /* 输出JSON格式的数组 */
             Value **arr = (Value **)v->data.pointer;
             if (!arr || v->array_size == 0) {
+                int use_colors = should_use_colors();
+                const char* bracket_color = use_colors ? bracket_colors[0] : "";
+                if (use_colors) printf("%s", bracket_color);
                 printf("[]");
+                if (use_colors) printf("%s", COLOR_RESET);
             } else {
                 print_array_json(arr, v->array_size);
             }
             break;
         }
         case VALUE_OBJECT: {
-            /* 输出JSON格式的对象 */
+            /* 检查是否为扩展对象类型 */
+            if (v->ext_type != EXT_TYPE_NONE) {
+                print_extended_object_meta(v);  /* 顶层打印使用 depth=0 */
+                break;
+            }
+            
+            /* 输出JSON格式的普通对象 */
             ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
             if (!entries || v->array_size == 0) {
+                int use_colors = should_use_colors();
+                const char* bracket_color = use_colors ? bracket_colors[0] : "";
+                if (use_colors) printf("%s", bracket_color);
                 printf("{}");
+                if (use_colors) printf("%s", COLOR_RESET);
             } else {
                 print_object_json_depth(entries, v->array_size, 0);
             }
@@ -583,9 +713,39 @@ void value_println(Value *v) {
     printf("\n");
 }
 
+/* 打印致命错误并退出 */
+void value_fatal_error() {
+    fprintf(stderr, "\n\033[34mFLYUX 0.1.0\033[0m \033[31m[Err]\033[0m Fatal Error: %s\nAbort.\n", g_runtime_state.error_msg);
+    abort();
+}
+
 /* Get type of value as string */
 char* value_typeof(Value *v) {
     if (!v) return "undef";
+    
+    /* 检查扩展对象类型 */
+    if (v->declared_type == VALUE_OBJECT && v->ext_type != EXT_TYPE_NONE) {
+        static char type_buf[64];
+        const char *ext_name = NULL;
+        
+        switch (v->ext_type) {
+            case EXT_TYPE_BUFFER:
+                ext_name = "Buffer";
+                break;
+            case EXT_TYPE_FILE:
+                ext_name = "FileHandle";
+                break;
+            case EXT_TYPE_ERROR:
+                ext_name = "Error";
+                break;
+            default:
+                ext_name = "Extended";
+                break;
+        }
+        
+        snprintf(type_buf, sizeof(type_buf), "obj:%s", ext_name);
+        return type_buf;
+    }
     
     /* 返回声明类型而不是实际类型 */
     switch (v->declared_type) {
@@ -689,6 +849,21 @@ Value* value_index(Value *obj, Value *index) {
         Value **array = (Value **)obj->data.pointer;
         // Note: no bounds checking for now
         return array[idx];
+    }
+    
+    // For Buffer objects with numeric index
+    if (obj->type == VALUE_OBJECT && obj->ext_type == EXT_TYPE_BUFFER && index && index->type == VALUE_NUMBER) {
+        BufferObject *buf = (BufferObject*)obj->data.pointer;
+        int idx = (int)unbox_number(index);
+        
+        // 边界检查
+        if (idx < 0 || (size_t)idx >= buf->size) {
+            set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Buffer index out of bounds");
+            return box_null();
+        }
+        
+        // 返回字节值（0-255）
+        return box_number((double)buf->data[idx]);
     }
     
     // For objects with string index (inline implementation to avoid forward declaration)
@@ -1154,7 +1329,7 @@ Value* value_to_num(Value *v) {
         case VALUE_STRING: {
             if (!v->data.string || v->string_length == 0) {
                 set_runtime_status(FLYUX_TYPE_ERROR, "Empty string cannot be converted to number");
-                return box_number(0.0);
+                return box_null_typed(VALUE_NUMBER);
             }
             
             char *endptr;
@@ -1163,7 +1338,7 @@ Value* value_to_num(Value *v) {
             // 检查是否有无效字符
             if (endptr == v->data.string || *endptr != '\0') {
                 set_runtime_status(FLYUX_TYPE_ERROR, "Invalid number format");
-                return box_number(0.0);
+                return box_null_typed(VALUE_NUMBER);
             }
             
             return box_number(result);
@@ -1177,7 +1352,7 @@ Value* value_to_num(Value *v) {
             
         default:
             set_runtime_status(FLYUX_TYPE_ERROR, "Cannot convert array/object to number");
-            return box_number(0.0);
+            return box_null_typed(VALUE_NUMBER);
     }
 }
 
@@ -1363,7 +1538,61 @@ Value* value_get_field(Value *obj, Value *field_name) {
     // 获取字段名
     const char *key = (const char*)field_name->data.pointer;
     
-    // 遍历对象的所有字段
+    // 如果是扩展类型对象，先检查虚拟属性
+    if (obj->ext_type != EXT_TYPE_NONE) {
+        switch (obj->ext_type) {
+            case EXT_TYPE_BUFFER: {
+                BufferObject *buf = (BufferObject*)obj->data.pointer;
+                if (strcmp(key, "size") == 0) {
+                    return box_number((double)buf->size);
+                }
+                if (strcmp(key, "capacity") == 0) {
+                    return box_number((double)buf->capacity);
+                }
+                if (strcmp(key, "type") == 0) {
+                    return box_string("Buffer");
+                }
+                break;
+            }
+            case EXT_TYPE_FILE: {
+                FileHandleObject *file = (FileHandleObject*)obj->data.pointer;
+                if (strcmp(key, "path") == 0) {
+                    return box_string(file->path);
+                }
+                if (strcmp(key, "mode") == 0) {
+                    return box_string(file->mode);
+                }
+                if (strcmp(key, "isOpen") == 0) {
+                    return box_bool(file->is_open);
+                }
+                if (strcmp(key, "position") == 0) {
+                    return box_number((double)file->position);
+                }
+                if (strcmp(key, "type") == 0) {
+                    return box_string("FileHandle");
+                }
+                break;
+            }
+            case EXT_TYPE_ERROR: {
+                ErrorObject *err = (ErrorObject*)obj->data.pointer;
+                if (strcmp(key, "message") == 0) {
+                    return box_string(err->message);
+                }
+                if (strcmp(key, "code") == 0) {
+                    return box_number((double)err->code);
+                }
+                if (strcmp(key, "errorType") == 0) {
+                    return box_string(err->error_type);
+                }
+                if (strcmp(key, "type") == 0) {
+                    return box_string("Error");
+                }
+                break;
+            }
+        }
+    }
+    
+    // 遍历对象的所有字段（普通对象或扩展类型未匹配虚拟属性）
     ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
     for (size_t i = 0; i < obj->array_size; i++) {
         if (strcmp(entries[i].key, key) == 0) {
@@ -2219,8 +2448,912 @@ Value* value_concat(Value *arr1, Value *arr2) {
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
     
+    return result;
+}
+
+/* ============================================================================
+ * 文件I/O函数实现
+ * ============================================================================ */
+
+/* readFile(path) -> string | null - 读取文本文件 */
+Value* value_read_file(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "readFile: path必须是字符串");
+        return box_null_typed(VALUE_STRING);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    FILE *fp = fopen(filepath, "r");
+    
+    if (!fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        return box_null_typed(VALUE_STRING);
+    }
+    
+    // 获取文件大小
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    // 读取文件内容
+    char *content = (char*)malloc(size + 1);
+    size_t read_size = fread(content, 1, size, fp);
+    content[read_size] = '\0';
+    fclose(fp);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_string(content);
+}
+
+/* writeFile(path, content) -> bool - 写入文本文件 */
+Value* value_write_file(Value *path, Value *content) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "writeFile: path必须是字符串");
+        return box_bool(0);
+    }
+    if (!content || content->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "writeFile: content必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    const char *text = (const char*)content->data.pointer;
+    
+    FILE *fp = fopen(filepath, "w");
+    if (!fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot create file");
+        return box_bool(0);
+    }
+    
+    fputs(text, fp);
+    fclose(fp);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(1);
+}
+
+/* appendFile(path, content) -> bool - 追加到文件 */
+Value* value_append_file(Value *path, Value *content) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "appendFile: path必须是字符串");
+        return box_bool(0);
+    }
+    if (!content || content->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "appendFile: content必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    const char *text = (const char*)content->data.pointer;
+    
+    FILE *fp = fopen(filepath, "a");
+    if (!fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        return box_bool(0);
+    }
+    
+    fputs(text, fp);
+    fclose(fp);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(1);
+}
+
+/* fileExists(path) -> bool - 检查文件是否存在 */
+Value* value_file_exists(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        return box_bool(0);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    FILE *fp = fopen(filepath, "r");
+    
+    if (fp) {
+        fclose(fp);
+        return box_bool(1);
+    }
+    return box_bool(0);
+}
+
+/* deleteFile(path) -> bool - 删除文件 */
+Value* value_delete_file(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "deleteFile: path必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    int result = remove(filepath);
+    
+    if (result == 0) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(1);
+    } else {
+        set_runtime_status(FLYUX_IO_ERROR, "删除文件失败");
+        return box_bool(0);
+    }
+}
+
+/* getFileSize(path) -> num - 获取文件大小 */
+Value* value_get_file_size(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        return box_number(-1);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    FILE *fp = fopen(filepath, "r");
+    
+    if (!fp) {
+        return box_number(-1);
+    }
+    
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fclose(fp);
+    
+    return box_number((double)size);
+}
+
+/* readBytes(path) -> Buffer | null - 读取二进制文件 */
+Value* value_read_bytes(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "readBytes: path必须是字符串");
+        return box_null_typed(VALUE_OBJECT);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    FILE *fp = fopen(filepath, "rb");
+    
+    if (!fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        return box_null_typed(VALUE_OBJECT);
+    }
+    
+    // 获取文件大小
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    // 创建Buffer对象
+    BufferObject *buffer = (BufferObject*)malloc(sizeof(BufferObject));
+    buffer->data = (unsigned char*)malloc(size);
+    buffer->size = size;
+    buffer->capacity = size;
+    
+    size_t read_size = fread(buffer->data, 1, size, fp);
+    buffer->size = read_size;
+    fclose(fp);
+    
+    // 创建Value
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_OBJECT;
+    v->declared_type = VALUE_OBJECT;
+    v->ext_type = EXT_TYPE_BUFFER;
+    v->data.pointer = buffer;
+    v->array_size = 0;
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return v;
+}
+
+/* writeBytes(path, data) -> bool - 写入二进制文件 */
+Value* value_write_bytes(Value *path, Value *data) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "writeBytes: path必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    FILE *fp = fopen(filepath, "wb");
+    
+    if (!fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot create file");
+        return box_bool(0);
+    }
+    
+    if (data->type == VALUE_OBJECT && data->ext_type == EXT_TYPE_BUFFER) {
+        // Buffer对象
+        BufferObject *buf = (BufferObject*)data->data.pointer;
+        fwrite(buf->data, 1, buf->size, fp);
+    } else if (data->type == VALUE_ARRAY) {
+        // 数字数组
+        Value **arr = (Value **)data->data.pointer;
+        for (long i = 0; i < data->array_size; i++) {
+            unsigned char byte = (unsigned char)unbox_number(arr[i]);
+            fputc(byte, fp);
+        }
+    } else {
+        fclose(fp);
+        set_runtime_status(FLYUX_TYPE_ERROR, "writeBytes: data必须是Buffer或数组");
+        return box_bool(0);
+    }
+    
+    fclose(fp);
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(1);
+}
+
+/* ============================================================================
+ * Phase 1: 核心文件I/O扩展函数
+ * ============================================================================ */
+
+/* readLines(path) -> str[] - 逐行读取文本文件 */
+Value* value_read_lines(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "readLines: path必须是字符串");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    const char *filepath = (const char*)path->data.pointer;
+    FILE *fp = fopen(filepath, "r");
+    
+    if (!fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot open file");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    // 动态数组存储行
+    size_t capacity = 16;
+    size_t count = 0;
+    Value **lines = (Value **)malloc(capacity * sizeof(Value *));
+    
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    
+    while ((read = getline(&line, &len, fp)) != -1) {
+        // 移除换行符
+        if (read > 0 && line[read - 1] == '\n') {
+            line[read - 1] = '\0';
+            read--;
+        }
+        if (read > 0 && line[read - 1] == '\r') {
+            line[read - 1] = '\0';
+            read--;
+        }
+        
+        // 扩容
+        if (count >= capacity) {
+            capacity *= 2;
+            Value **new_lines = (Value **)realloc(lines, capacity * sizeof(Value *));
+            if (!new_lines) {
+                // 清理已分配的内存
+                for (size_t i = 0; i < count; i++) {
+                    free(lines[i]);
+                }
+                free(lines);
+                free(line);
+                fclose(fp);
+                set_runtime_status(FLYUX_ERROR, "内存分配失败");
+                return box_null_typed(VALUE_ARRAY);
+            }
+            lines = new_lines;
+        }
+        
+        // 复制行内容（需要strdup因为line会被重用）
+        char *line_copy = strdup(line);
+        lines[count++] = box_string(line_copy);
+    }
+    
+    free(line);
+    fclose(fp);
+    
+    // 创建数组Value
+    char *arr_ptr = (char*)lines;
+    Value *result = box_array(arr_ptr, count);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return result;
+}
+
+/* renameFile(oldPath, newPath) -> bool - 重命名/移动文件 */
+Value* value_rename_file(Value *old_path, Value *new_path) {
+    if (!old_path || old_path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "renameFile: oldPath必须是字符串");
+        return box_bool(0);
+    }
+    
+    if (!new_path || new_path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "renameFile: newPath必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *old_filepath = (const char*)old_path->data.pointer;
+    const char *new_filepath = (const char*)new_path->data.pointer;
+    
+    int result = rename(old_filepath, new_filepath);
+    
+    if (result == 0) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(1);
+    } else {
+        set_runtime_status(FLYUX_IO_ERROR, "重命名文件失败");
+        return box_bool(0);
+    }
+}
+
+/* copyFile(src, dest) -> bool - 复制文件 */
+Value* value_copy_file(Value *src_path, Value *dest_path) {
+    if (!src_path || src_path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "copyFile: src必须是字符串");
+        return box_bool(0);
+    }
+    
+    if (!dest_path || dest_path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "copyFile: dest必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *src = (const char*)src_path->data.pointer;
+    const char *dest = (const char*)dest_path->data.pointer;
+    
+    FILE *src_fp = fopen(src, "rb");
+    if (!src_fp) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot open source file");
+        return box_bool(0);
+    }
+    
+    FILE *dest_fp = fopen(dest, "wb");
+    if (!dest_fp) {
+        fclose(src_fp);
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot create destination file");
+        return box_bool(0);
+    }
+    
+    // 缓冲区复制
+    char buffer[8192];
+    size_t bytes;
+    
+    while ((bytes = fread(buffer, 1, sizeof(buffer), src_fp)) > 0) {
+        if (fwrite(buffer, 1, bytes, dest_fp) != bytes) {
+            fclose(src_fp);
+            fclose(dest_fp);
+            set_runtime_status(FLYUX_IO_ERROR, "写入目标文件失败");
+            return box_bool(0);
+        }
+    }
+    
+    fclose(src_fp);
+    fclose(dest_fp);
+    
+    // 复制文件权限
+    struct stat st;
+    if (stat(src, &st) == 0) {
+        chmod(dest, st.st_mode);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return box_bool(1);
+}
+
+/* createDir(path) -> bool - 创建目录 */
+Value* value_create_dir(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "createDir: path必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *dirpath = (const char*)path->data.pointer;
+    
+#ifdef _WIN32
+    int result = _mkdir(dirpath);
+#else
+    int result = mkdir(dirpath, 0755);
+#endif
+    
+    if (result == 0) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(1);
+    } else {
+        if (errno == EEXIST) {
+            set_runtime_status(FLYUX_IO_ERROR, "目录已存在");
+        } else {
+            set_runtime_status(FLYUX_IO_ERROR, "创建目录失败");
+        }
+        return box_bool(0);
+    }
+}
+
+/* removeDir(path) -> bool - 删除空目录 */
+Value* value_remove_dir(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "removeDir: path必须是字符串");
+        return box_bool(0);
+    }
+    
+    const char *dirpath = (const char*)path->data.pointer;
+    
+#ifdef _WIN32
+    int result = _rmdir(dirpath);
+#else
+    int result = rmdir(dirpath);
+#endif
+    
+    if (result == 0) {
+        set_runtime_status(FLYUX_OK, NULL);
+        return box_bool(1);
+    } else {
+        if (errno == ENOTEMPTY) {
+            set_runtime_status(FLYUX_IO_ERROR, "目录不为空");
+        } else if (errno == ENOENT) {
+            set_runtime_status(FLYUX_IO_ERROR, "目录不存在");
+        } else {
+            set_runtime_status(FLYUX_IO_ERROR, "删除目录失败");
+        }
+        return box_bool(0);
+    }
+}
+
+/* listDir(path) -> str[] - 列出目录内容 */
+Value* value_list_dir(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "listDir: path必须是字符串");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    const char *dirpath = (const char*)path->data.pointer;
+    DIR *dir = opendir(dirpath);
+    
+    if (!dir) {
+        set_runtime_status(FLYUX_IO_ERROR, "Cannot open directory");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    // 动态数组存储文件名
+    size_t capacity = 16;
+    size_t count = 0;
+    Value **entries = (Value **)malloc(capacity * sizeof(Value *));
+    
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // 跳过 "." 和 ".."
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        
+        // 扩容
+        if (count >= capacity) {
+            capacity *= 2;
+            Value **new_entries = (Value **)realloc(entries, capacity * sizeof(Value *));
+            if (!new_entries) {
+                for (size_t i = 0; i < count; i++) {
+                    free(entries[i]);
+                }
+                free(entries);
+                closedir(dir);
+                set_runtime_status(FLYUX_ERROR, "内存分配失败");
+                return box_null_typed(VALUE_ARRAY);
+            }
+            entries = new_entries;
+        }
+        
+        // 复制文件名（entry->d_name会被重用）
+        char *name_copy = strdup(entry->d_name);
+        entries[count++] = box_string(name_copy);
+    }
+    
+    closedir(dir);
+    
+    // 创建数组Value
+    char *arr_ptr = (char*)entries;
+    Value *result = box_array(arr_ptr, count);
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return result;
+}
+
+/* dirExists(path) -> bool - 检查目录是否存在 */
+Value* value_dir_exists(Value *path) {
+    if (!path || path->type != VALUE_STRING) {
+        return box_bool(0);
+    }
+    
+    const char *dirpath = (const char*)path->data.pointer;
+    struct stat st;
+    
+    if (stat(dirpath, &st) == 0 && S_ISDIR(st.st_mode)) {
+        return box_bool(1);
+    }
+    
+    return box_bool(0);
+}
+
+/* ============================================================================
+ * JSON 函数
+ * ============================================================================ */
+
+/* JSON 解析辅助函数 */
+static const char* skip_whitespace(const char* str) {
+    while (*str && (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r')) {
+        str++;
+    }
+    return str;
+}
+
+/* 解析 JSON 字符串 */
+static Value* parse_json_string(const char** ptr) {
+    const char* p = *ptr;
+    if (*p != '"') return NULL;
+    p++; // 跳过开头的 "
+    
+    // 找到字符串结尾
+    char buffer[4096];
+    int i = 0;
+    while (*p && *p != '"' && i < 4095) {
+        if (*p == '\\' && *(p+1)) {
+            p++; // 跳过反斜杠
+            switch (*p) {
+                case 'n': buffer[i++] = '\n'; break;
+                case 't': buffer[i++] = '\t'; break;
+                case 'r': buffer[i++] = '\r'; break;
+                case '"': buffer[i++] = '"'; break;
+                case '\\': buffer[i++] = '\\'; break;
+                default: buffer[i++] = *p; break;
+            }
+            p++;
+        } else {
+            buffer[i++] = *p++;
+        }
+    }
+    buffer[i] = '\0';
+    
+    if (*p == '"') p++; // 跳过结尾的 "
+    *ptr = p;
+    
+    return box_string(strdup(buffer));
+}
+
+/* 解析 JSON 数字 */
+static Value* parse_json_number(const char** ptr) {
+    const char* p = *ptr;
+    char* endptr;
+    double num = strtod(p, &endptr);
+    *ptr = endptr;
+    return box_number(num);
+}
+
+/* 前向声明 */
+static Value* parse_json_value(const char** ptr);
+
+/* 解析 JSON 数组 */
+static Value* parse_json_array(const char** ptr) {
+    const char* p = *ptr;
+    if (*p != '[') return NULL;
+    p++; // 跳过 [
+    
+    // 动态数组
+    size_t capacity = 8;
+    size_t count = 0;
+    Value** elements = (Value**)malloc(capacity * sizeof(Value*));
+    
+    p = skip_whitespace(p);
+    
+    if (*p != ']') {
+        while (1) {
+            p = skip_whitespace(p);
+            
+            Value* elem = parse_json_value(&p);
+            if (!elem) {
+                // 解析元素失败，清理并返回 NULL
+                free(elements);
+                return NULL;
+            }
+            
+            if (count >= capacity) {
+                capacity *= 2;
+                Value** new_elements = (Value**)realloc(elements, capacity * sizeof(Value*));
+                if (!new_elements) {
+                    free(elements);
+                    return box_array(NULL, 0);
+                }
+                elements = new_elements;
+            }
+            
+            elements[count++] = elem;
+            
+            p = skip_whitespace(p);
+            if (*p == ',') {
+                p++;
+            } else {
+                break;
+            }
+        }
+    }
+    
+    p = skip_whitespace(p);
+    if (*p == ']') p++; // 跳过 ]
+    *ptr = p;
+    
+    return box_array((char*)elements, count);
+}
+
+/* 解析 JSON 对象 */
+static Value* parse_json_object(const char** ptr) {
+    const char* p = *ptr;
+    if (*p != '{') return NULL;
+    p++; // 跳过 {
+    
+    // 动态数组存储键值对
+    size_t capacity = 8;
+    size_t count = 0;
+    ObjectEntry* entries = (ObjectEntry*)malloc(capacity * sizeof(ObjectEntry));
+    
+    p = skip_whitespace(p);
+    
+    if (*p != '}') {
+        while (1) {
+            p = skip_whitespace(p);
+            
+            // 解析键
+            if (*p != '"') break;
+            Value* key_val = parse_json_string(&p);
+            if (!key_val) break;
+            
+            char* key = strdup((const char*)key_val->data.pointer);
+            free(key_val);
+            
+            p = skip_whitespace(p);
+            if (*p != ':') {
+                free(key);
+                break;
+            }
+            p++; // 跳过 :
+            
+            p = skip_whitespace(p);
+            Value* value = parse_json_value(&p);
+            if (!value) {
+                // 解析值失败，清理并返回 NULL
+                free(key);
+                for (size_t i = 0; i < count; i++) {
+                    free(entries[i].key);
+                }
+                free(entries);
+                return NULL;
+            }
+            
+            if (count >= capacity) {
+                capacity *= 2;
+                ObjectEntry* new_entries = (ObjectEntry*)realloc(entries, capacity * sizeof(ObjectEntry));
+                if (!new_entries) {
+                    free(key);
+                    free(entries);
+                    return box_object(NULL, 0);
+                }
+                entries = new_entries;
+            }
+            
+            entries[count].key = key;
+            entries[count].value = value;
+            count++;
+            
+            p = skip_whitespace(p);
+            if (*p == ',') {
+                p++;
+            } else {
+                break;
+            }
+        }
+    }
+    
+    p = skip_whitespace(p);
+    if (*p == '}') p++; // 跳过 }
+    *ptr = p;
+    
+    return box_object((char*)entries, count);
+}
+
+/* 解析 JSON 值 */
+static Value* parse_json_value(const char** ptr) {
+    const char* p = skip_whitespace(*ptr);
+    
+    if (*p == '"') {
+        // 字符串
+        return parse_json_string(ptr);
+    } else if (*p == '[') {
+        // 数组
+        return parse_json_array(ptr);
+    } else if (*p == '{') {
+        // 对象
+        return parse_json_object(ptr);
+    } else if (*p == 't' && strncmp(p, "true", 4) == 0) {
+        // true
+        *ptr = p + 4;
+        return box_bool(1);
+    } else if (*p == 'f' && strncmp(p, "false", 5) == 0) {
+        // false
+        *ptr = p + 5;
+        return box_bool(0);
+    } else if (*p == 'n' && strncmp(p, "null", 4) == 0) {
+        // null
+        *ptr = p + 4;
+        return box_null();
+    } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
+        // 数字
+        return parse_json_number(ptr);
+    }
+    
+    // 无法识别的字符，返回 NULL 表示解析失败
+    return NULL;
+}
+
+/* parseJSON(str) -> obj - 解析 JSON 字符串 */
+Value* value_parse_json(Value* json_str) {
+    if (!json_str || json_str->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "parseJSON: argument must be a string");
+        return box_null_typed(VALUE_OBJECT);  // 返回 obj 类型的 null
+    }
+    
+    const char* str = (const char*)json_str->data.pointer;
+    const char* ptr = str;
+    ptr = skip_whitespace(ptr);
+    
+    // 检查是否为空或无效起始字符
+    if (*ptr == '\0' || (*ptr != '{' && *ptr != '[' && *ptr != '"' &&
+        *ptr != 't' && *ptr != 'f' && *ptr != 'n' && *ptr != '-' &&
+        !(*ptr >= '0' && *ptr <= '9'))) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "parseJSON: invalid JSON format");
+        return box_null_typed(VALUE_OBJECT);  // 返回 obj 类型的 null
+    }
+    
+    Value* result = parse_json_value(&ptr);
+    
+    if (!result) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "parseJSON: parse error");
+        return box_null_typed(VALUE_OBJECT);  // 返回 obj 类型的 null
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    return result;
+}
+
+/* JSON 序列化辅助函数 */
+static void append_string(char** buffer, size_t* size, size_t* capacity, const char* str) {
+    size_t len = strlen(str);
+    while (*size + len >= *capacity) {
+        *capacity *= 2;
+        char* new_buffer = (char*)realloc(*buffer, *capacity);
+        if (!new_buffer) return;
+        *buffer = new_buffer;
+    }
+    strcpy(*buffer + *size, str);
+    *size += len;
+}
+
+static void append_char(char** buffer, size_t* size, size_t* capacity, char c) {
+    if (*size + 1 >= *capacity) {
+        *capacity *= 2;
+        char* new_buffer = (char*)realloc(*buffer, *capacity);
+        if (!new_buffer) return;
+        *buffer = new_buffer;
+    }
+    (*buffer)[*size] = c;
+    (*size)++;
+    (*buffer)[*size] = '\0';
+}
+
+/* 前向声明 */
+static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_t* capacity);
+
+/* 将值序列化为 JSON */
+static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_t* capacity) {
+    if (!v) {
+        append_string(buffer, size, capacity, "null");
+        return;
+    }
+    
+    switch (v->type) {
+        case VALUE_NUMBER: {
+            char num_buf[64];
+            if (isinf(v->data.number)) {
+                strcpy(num_buf, "null");
+            } else if (isnan(v->data.number)) {
+                strcpy(num_buf, "null");
+            } else {
+                snprintf(num_buf, sizeof(num_buf), "%.16g", v->data.number);
+            }
+            append_string(buffer, size, capacity, num_buf);
+            break;
+        }
+        case VALUE_STRING: {
+            append_char(buffer, size, capacity, '"');
+            const char* str = (const char*)v->data.pointer;
+            while (*str) {
+                if (*str == '"') {
+                    append_string(buffer, size, capacity, "\\\"");
+                } else if (*str == '\\') {
+                    append_string(buffer, size, capacity, "\\\\");
+                } else if (*str == '\n') {
+                    append_string(buffer, size, capacity, "\\n");
+                } else if (*str == '\t') {
+                    append_string(buffer, size, capacity, "\\t");
+                } else if (*str == '\r') {
+                    append_string(buffer, size, capacity, "\\r");
+                } else {
+                    append_char(buffer, size, capacity, *str);
+                }
+                str++;
+            }
+            append_char(buffer, size, capacity, '"');
+            break;
+        }
+        case VALUE_BOOL:
+            append_string(buffer, size, capacity, v->data.number != 0 ? "true" : "false");
+            break;
+        case VALUE_NULL:
+            append_string(buffer, size, capacity, "null");
+            break;
+        case VALUE_UNDEF:
+            append_string(buffer, size, capacity, "null");
+            break;
+        case VALUE_ARRAY: {
+            append_char(buffer, size, capacity, '[');
+            Value** arr = (Value**)v->data.pointer;
+            for (long i = 0; i < v->array_size; i++) {
+                if (i > 0) append_char(buffer, size, capacity, ',');
+                serialize_value_to_json(arr[i], buffer, size, capacity);
+            }
+            append_char(buffer, size, capacity, ']');
+            break;
+        }
+        case VALUE_OBJECT: {
+            // 检查是否为扩展对象类型
+            if (v->ext_type != EXT_TYPE_NONE) {
+                // 扩展类型显示为类型名字符串
+                append_char(buffer, size, capacity, '"');
+                switch (v->ext_type) {
+                    case EXT_TYPE_BUFFER:
+                        append_string(buffer, size, capacity, "Buffer");
+                        break;
+                    case EXT_TYPE_FILE:
+                        append_string(buffer, size, capacity, "FileHandle");
+                        break;
+                    case EXT_TYPE_ERROR:
+                        append_string(buffer, size, capacity, "Error");
+                        break;
+                    default:
+                        append_string(buffer, size, capacity, "ExtendedObject");
+                        break;
+                }
+                append_char(buffer, size, capacity, '"');
+            } else {
+                // 普通对象
+                append_char(buffer, size, capacity, '{');
+                ObjectEntry* entries = (ObjectEntry*)v->data.pointer;
+                for (long i = 0; i < v->array_size; i++) {
+                    if (i > 0) append_char(buffer, size, capacity, ',');
+                    
+                    // 键
+                    append_char(buffer, size, capacity, '"');
+                    append_string(buffer, size, capacity, entries[i].key);
+                    append_char(buffer, size, capacity, '"');
+                    append_char(buffer, size, capacity, ':');
+                    
+                    // 值
+                    serialize_value_to_json(entries[i].value, buffer, size, capacity);
+                }
+                append_char(buffer, size, capacity, '}');
+            }
+            break;
+        }
+        default:
+            append_string(buffer, size, capacity, "null");
+    }
+}
+
+/* toJSON(obj) -> str - 将值转换为 JSON 字符串 */
+Value* value_to_json(Value* obj) {
+    size_t capacity = 256;
+    size_t size = 0;
+    char* buffer = (char*)malloc(capacity);
+    buffer[0] = '\0';
+    
+    serialize_value_to_json(obj, &buffer, &size, &capacity);
+    
+    Value* result = box_string(buffer);
+    set_runtime_status(FLYUX_OK, NULL);
     return result;
 }

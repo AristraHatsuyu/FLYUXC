@@ -27,6 +27,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->objects = NULL;
     gen->symbols = NULL;
     gen->current_var_name = NULL;
+    gen->in_try_catch = 0;  /* 初始不在 Try-Catch 块中 */
     
     return gen;
 }
@@ -204,7 +205,11 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_last_status()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_last_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n");
+    fprintf(gen->output, "declare void @value_fatal_error()\n\n");
+    
+    fprintf(gen->output, ";; External C library functions\n");
+    fprintf(gen->output, "declare void @abort() noreturn\n\n");
     
     fprintf(gen->output, ";; Type conversion functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_to_num(%%struct.Value*)\n");
@@ -232,6 +237,25 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_unshift(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_slice(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_concat(%%struct.Value*, %%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; File I/O functions (Extended Object Types)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_read_file(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_write_file(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_append_file(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_file_exists(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_delete_file(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_file_size(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_read_bytes(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_write_bytes(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_read_lines(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_rename_file(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_copy_file(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_create_dir(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_remove_dir(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_list_dir(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_dir_exists(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_parse_json(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_to_json(%%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");

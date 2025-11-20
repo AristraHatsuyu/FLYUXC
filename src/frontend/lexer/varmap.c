@@ -75,8 +75,14 @@ static int is_reserved_identifier(const char* name, size_t len) {
  * 最后更新: 2025-11-19
  */
 static const char* BUILTIN_IDENTIFIERS[] = {
-    /* 输入输出 (6) */
-    "print", "println", "printf", "input", "readFile", "writeFile",
+    /* 输入输出 & 文件I/O (6 -> 23) */
+    "print", "println", "printf", "input", 
+    "readFile", "writeFile", "appendFile",
+    "readBytes", "writeBytes",
+    "fileExists", "deleteFile", "getFileSize",
+    "readLines", "renameFile", "copyFile",
+    "createDir", "removeDir", "listDir", "dirExists",
+    "parseJSON", "toJSON",
     
     /* 字符串操作 (17) */
     "length", "substr", "indexOf", "replace", "split", "join",

@@ -215,14 +215,16 @@ static bool link_object_files(
     const char* runtime_obj,
     const char* output_file
 ) {
-    // 使用 clang 作为链接器前端（更简单可靠）
+    // 使用 clang 作为链接器前端,启用 dead code elimination
     std::string cmd = "clang -o \"";
     cmd += output_file;
     cmd += "\" \"";
     cmd += main_obj;
     cmd += "\" \"";
     cmd += runtime_obj;
-    cmd += "\" 2>&1";
+    // macOS: -Wl,-dead_strip 移除未使用的函数和数据
+    // Linux: -Wl,--gc-sections 配合 -ffunction-sections 使用
+    cmd += "\" -Wl,-dead_strip 2>&1";
     
     int result = system(cmd.c_str());
     

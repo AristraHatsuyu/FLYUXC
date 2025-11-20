@@ -40,10 +40,10 @@ set(RUNTIME_OBJECT "${CMAKE_SOURCE_DIR}/src/backend/runtime_object.o")
 set(RUNTIME_OBJECT_EMBEDDED "${CMAKE_SOURCE_DIR}/src/backend/runtime_object_embedded.h")
 set(RUNTIME_SOURCE_EMBEDDED "${CMAKE_SOURCE_DIR}/src/backend/runtime_embedded.h")
 
-# 步骤 1: 编译 runtime 对象文件
+# 步骤 1: 编译 runtime 对象文件 (优化:函数分段+代码大小优化)
 add_custom_command(
     OUTPUT ${RUNTIME_OBJECT}
-    COMMAND ${CMAKE_C_COMPILER} -c -o ${RUNTIME_OBJECT} ${RUNTIME_SOURCE}
+    COMMAND ${CMAKE_C_COMPILER} -c -Os -ffunction-sections -fdata-sections -o ${RUNTIME_OBJECT} ${RUNTIME_SOURCE}
     DEPENDS ${RUNTIME_SOURCE}
     COMMENT "编译 runtime 对象文件..."
 )

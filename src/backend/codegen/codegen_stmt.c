@@ -260,6 +260,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_TRY_STMT: {
             ASTTryStmt *try_stmt = (ASTTryStmt *)node->data;
             
+            // 标记进入 Try-Catch 块
+            int old_in_try_catch = gen->in_try_catch;
+            gen->in_try_catch = 1;
+            
             // catch参数应该已经在函数开头alloca过了（通过预扫描）
             // 这里只需要确保它被注册到符号表
             if (try_stmt->catch_param && try_stmt->catch_block) {
@@ -392,6 +396,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             
             // 结束标签
             fprintf(gen->code_buf, "%s:\n", end_label);
+            
+            // 恢复 Try-Catch 标志
+            gen->in_try_catch = old_in_try_catch;
             
             free(catch_label);
             free(finally_label);

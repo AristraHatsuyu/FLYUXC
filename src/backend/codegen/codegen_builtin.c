@@ -432,6 +432,84 @@ char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, 
         return result;
     }
     
+    // readFile - 读取文本文件
+    if (strcmp(func_name, "readFile") == 0 && arg_count == 1) {
+        char *path = codegen_expr(gen, args[0]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_read_file(%%struct.Value* %s)\n", result, path);
+        free(path);
+        return result;
+    }
+    
+    // writeFile - 写入文本文件
+    if (strcmp(func_name, "writeFile") == 0 && arg_count == 2) {
+        char *path = codegen_expr(gen, args[0]);
+        char *content = codegen_expr(gen, args[1]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_write_file(%%struct.Value* %s, %%struct.Value* %s)\n", result, path, content);
+        free(path);
+        free(content);
+        return result;
+    }
+    
+    // appendFile - 追加到文本文件
+    if (strcmp(func_name, "appendFile") == 0 && arg_count == 2) {
+        char *path = codegen_expr(gen, args[0]);
+        char *content = codegen_expr(gen, args[1]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_append_file(%%struct.Value* %s, %%struct.Value* %s)\n", result, path, content);
+        free(path);
+        free(content);
+        return result;
+    }
+    
+    // readBytes - 读取二进制文件（返回Buffer对象）
+    if (strcmp(func_name, "readBytes") == 0 && arg_count == 1) {
+        char *path = codegen_expr(gen, args[0]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_read_bytes(%%struct.Value* %s)\n", result, path);
+        free(path);
+        return result;
+    }
+    
+    // writeBytes - 写入二进制文件（接受Buffer或数组）
+    if (strcmp(func_name, "writeBytes") == 0 && arg_count == 2) {
+        char *path = codegen_expr(gen, args[0]);
+        char *data = codegen_expr(gen, args[1]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_write_bytes(%%struct.Value* %s, %%struct.Value* %s)\n", result, path, data);
+        free(path);
+        free(data);
+        return result;
+    }
+    
+    // fileExists - 检查文件是否存在
+    if (strcmp(func_name, "fileExists") == 0 && arg_count == 1) {
+        char *path = codegen_expr(gen, args[0]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_file_exists(%%struct.Value* %s)\n", result, path);
+        free(path);
+        return result;
+    }
+    
+    // deleteFile - 删除文件
+    if (strcmp(func_name, "deleteFile") == 0 && arg_count == 1) {
+        char *path = codegen_expr(gen, args[0]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_delete_file(%%struct.Value* %s)\n", result, path);
+        free(path);
+        return result;
+    }
+    
+    // getFileSize - 获取文件大小
+    if (strcmp(func_name, "getFileSize") == 0 && arg_count == 1) {
+        char *path = codegen_expr(gen, args[0]);
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_file_size(%%struct.Value* %s)\n", result, path);
+        free(path);
+        return result;
+    }
+    
     // 不是内置函数，返回NULL表示需要普通函数调用
     return NULL;
 }

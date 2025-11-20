@@ -182,11 +182,12 @@ typedef struct ASTUnaryExpr {
     bool is_postfix;         /* true: i++, false: ++i */
 } ASTUnaryExpr;
 
-/* 函数调用: f(a, b, c) */
+/* 函数调用: f(a, b, c) 或 f(a, b, c)! */
 typedef struct ASTCallExpr {
     ASTNode *callee;         /* 被调用的函数（通常是IDENTIFIER） */
     ASTNode **args;          /* 参数数组 */
     size_t arg_count;        /* 参数数量 */
+    int throw_on_error;      /* ! 后缀：1表示出错抛异常，0表示出错返回带类型的null */
 } ASTCallExpr;
 
 /* 成员访问: obj.prop */
@@ -329,7 +330,7 @@ ASTNode *ast_unary_expr_create(TokenKind op, ASTNode *operand, SourceLocation lo
 
 /* 创建函数调用节点 */
 ASTNode *ast_call_expr_create(ASTNode *callee, ASTNode **args, size_t arg_count,
-                               SourceLocation loc);
+                               int throw_on_error, SourceLocation loc);
 
 /* 创建成员访问节点 */
 ASTNode *ast_member_expr_create(ASTNode *object, char *property, bool is_computed,

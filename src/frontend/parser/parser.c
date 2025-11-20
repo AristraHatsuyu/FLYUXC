@@ -508,7 +508,13 @@ static ASTNode *parse_primary(Parser *p) {
                 error_at(p, current_token(p), "Expected ')' after arguments");
             }
             
-            return ast_call_expr_create(id, args, arg_count, token_to_loc(t));
+            // 检测 ! 后缀（表示错误时抛出异常）
+            int throw_on_error = 0;
+            if (match(p, TK_BANG)) {  // ! 是 TK_BANG
+                throw_on_error = 1;
+            }
+            
+            return ast_call_expr_create(id, args, arg_count, throw_on_error, token_to_loc(t));
         }
         
         return id;
@@ -702,6 +708,12 @@ static ASTNode *parse_postfix(Parser *p) {
                     error_at(p, current_token(p), "Expected ')' after arguments");
                 }
                 
+                // 检测 ! 后缀（表示错误时抛出异常）
+                int throw_on_error = 0;
+                if (match(p, TK_BANG)) {  // ! 是 TK_BANG
+                    throw_on_error = 1;
+                }
+                
                 // 创建方法调用: method(obj, args...)
                 size_t total_args = arg_count + 1;
                 ASTNode **all_args = (ASTNode **)malloc(total_args * sizeof(ASTNode *));
@@ -712,7 +724,7 @@ static ASTNode *parse_postfix(Parser *p) {
                 if (args) free(args);
                 
                 ASTNode *callee = ast_identifier_create(method_name, expr->loc);
-                expr = ast_call_expr_create(callee, all_args, total_args, expr->loc);
+                expr = ast_call_expr_create(callee, all_args, total_args, throw_on_error, expr->loc);
             } else {
                 // 无括号 - 属性访问: obj.>property (等同于 obj.property)
                 expr = ast_member_expr_create(expr, method_name, false, expr->loc);

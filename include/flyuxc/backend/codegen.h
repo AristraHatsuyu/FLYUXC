@@ -44,6 +44,7 @@ typedef struct CodeGen {
     ObjectMetadata *objects; /* 对象元数据链表 */
     SymbolEntry *symbols;   /* 符号表 - 已定义的变量 */
     const char *current_var_name;  /* 当前正在赋值的变量名（用于数组/对象跟踪） */
+    int in_try_catch;       /* 是否在 Try-Catch 块中 */
 } CodeGen;
 
 /* 创建代码生成器 */
