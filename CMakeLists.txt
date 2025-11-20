@@ -15,21 +15,44 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
+# macOS上尽量使用静态库,但系统库保持动态链接
+# Apple不支持完全静态链接,但我们可以静态链接第三方库
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".dylib" ".tbd")
+
 # 添加 LLVM 定义和头文件路径
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-# LLVM 组件 - 精简配置
-# 使用 REMOVE_DUPLICATES 自动去重，避免警告
-llvm_map_components_to_libnames(llvm_libs
-    Core
-    IRReader
-    Passes
-    AllTargetsCodeGens
-    AllTargetsAsmParsers
+# LLVM 组件 - 精简配置,只使用本地目标
+# 使用 --link-static 确保使用静态 LLVM 库
+execute_process(
+    COMMAND llvm-config --link-static --libs core irreader passes native
+    OUTPUT_VARIABLE LLVM_STATIC_LIBS_RAW
+    OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-list(REMOVE_DUPLICATES llvm_libs)
+execute_process(
+    COMMAND llvm-config --libdir
+    OUTPUT_VARIABLE LLVM_LIB_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+# 将 -lLibName 转换为绝对路径 /path/to/libLibName.a
+string(REPLACE " " ";" LLVM_LIB_LIST ${LLVM_STATIC_LIBS_RAW})
+set(llvm_libs "")
+foreach(lib ${LLVM_LIB_LIST})
+    string(REGEX REPLACE "^-l(.+)$" "${LLVM_LIB_DIR}/lib\\1.a" lib_path ${lib})
+    list(APPEND llvm_libs ${lib_path})
+endforeach()
+
+message(STATUS "Using ${LLVM_LIB_DIR} for LLVM static libraries")
+
+# 查找静态版本的第三方依赖库
+find_library(ZSTD_STATIC NAMES libzstd.a PATHS /opt/homebrew/opt/zstd/lib REQUIRED)
+
+message(STATUS "Using static library:")
+message(STATUS "  ZSTD: ${ZSTD_STATIC}")
+message(STATUS "Note: System libraries (libz, libSystem, libc++) are dynamically linked (macOS requirement)")
 
 # ============================================
 # 自动生成嵌入的 Runtime 文件
@@ -91,12 +114,25 @@ add_executable(${PROJECT_NAME}
 # 确保在编译前生成 runtime 文件
 add_dependencies(${PROJECT_NAME} generate_runtime)
 
-# 链接 LLVM 库
-target_link_libraries(${PROJECT_NAME} ${llvm_libs})
+# 链接 LLVM 库和依赖库
+target_link_libraries(${PROJECT_NAME} 
+    ${llvm_libs}
+    ${ZSTD_STATIC}  # 静态链接 zstd
+    -lz             # 系统 zlib(动态)
+    # 不链接 z3 和 xml2,编译器不需要它们
+)
 
-# 抑制重复库警告（这是 LLVM 库之间依赖关系导致的正常现象）
+# macOS 特定设置
 if(APPLE)
-    target_link_options(${PROJECT_NAME} PRIVATE -Wl,-w)
+    target_link_libraries(${PROJECT_NAME}
+        "-framework CoreFoundation"
+    )
+    
+    # 链接选项:抑制警告,优先使用静态库
+    target_link_options(${PROJECT_NAME} PRIVATE 
+        -Wl,-w
+        -Wl,-search_paths_first
+    )
 endif()
 
 # ============================================

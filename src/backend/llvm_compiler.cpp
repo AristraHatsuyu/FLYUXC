@@ -44,17 +44,21 @@ static void set_error(const std::string& error) {
     g_last_error = error;
 }
 
-// 初始化 LLVM 目标
+// 初始化 LLVM 目标 - 只初始化本地目标以加快启动速度
 static void initialize_llvm_targets() {
     static bool initialized = false;
     if (!initialized) {
-        llvm::InitializeAllTargetInfos();
-        llvm::InitializeAllTargets();
-        llvm::InitializeAllTargetMCs();
-        llvm::InitializeAllAsmPrinters();
-        llvm::InitializeAllAsmParsers();
+        // 只初始化本地目标,而不是所有目标 (加快启动速度)
+        llvm::InitializeNativeTarget();
+        llvm::InitializeNativeTargetAsmPrinter();
+        llvm::InitializeNativeTargetAsmParser();
         initialized = true;
     }
+}
+
+// 提前初始化 LLVM
+extern "C" void llvm_initialize() {
+    initialize_llvm_targets();
 }
 
 // 将嵌入的运行时对象文件写入临时文件

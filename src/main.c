@@ -29,6 +29,12 @@ static double get_time_ms(void) {
 
 int main(int argc, char *argv[])
 {
+    // 尽早输出,用于测量启动时间
+    double t_init_start = get_time_ms();
+    
+    // 提前初始化 LLVM 以减少首次编译时的延迟
+    llvm_initialize();
+    
     CliOptions options = parse_arguments(argc, argv);
 
     if (argc == 1 || options.help)

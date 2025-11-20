@@ -44,6 +44,11 @@ int llvm_compile_string_to_executable(
  */
 const char* llvm_get_last_error(void);
 
+/**
+ * 提前初始化 LLVM （可选，用于减少首次编译的启动延迟）
+ */
+void llvm_initialize(void);
+
 #ifdef __cplusplus
 }
 #endif
