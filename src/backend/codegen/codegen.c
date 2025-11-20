@@ -98,7 +98,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
             }
         }
         
-        // 生成 main 函数（如果有）
+        // 生成 main 函数包装器
+        // 如果用户定义了main函数,调用它;否则执行顶层语句
         bool has_main = false;
         for (size_t i = 0; i < prog->stmt_count; i++) {
             ASTNode *stmt = prog->statements[i];
@@ -111,10 +112,13 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
             }
         }
         
-        // 如果没有 main 函数，创建一个包装器
-        if (!has_main) {
-            fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
-            
+        // 始终创建 i32 @main() 作为程序入口
+        fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
+        
+        if (has_main) {
+            // 调用用户定义的main函数 (重命名为_flyux_main)
+            fprintf(gen->code_buf, "  %%user_main_result = call %%struct.Value* @_flyux_main()\n");
+        } else {
             // 预扫描：收集所有需要在entry块alloca的变量（catch参数等）
             FILE *entry_alloca_buf = tmpfile();
             for (size_t i = 0; i < prog->stmt_count; i++) {
@@ -137,10 +141,19 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                     codegen_stmt(gen, prog->statements[i]);
                 }
             }
-            
-            fprintf(gen->code_buf, "  ret i32 0\n");
-            fprintf(gen->code_buf, "}\n");
         }
+        
+        // 在程序结束前条件性输出换行,防止shell提示符与输出混在一起
+        // 只有当最后输出不是换行时才添加换行
+        fprintf(gen->code_buf, "  %%needs_newline = call i32 @value_needs_final_newline()\n");
+        fprintf(gen->code_buf, "  %%should_print_newline = icmp ne i32 %%needs_newline, 0\n");
+        fprintf(gen->code_buf, "  br i1 %%should_print_newline, label %%print_newline, label %%skip_newline\n");
+        fprintf(gen->code_buf, "print_newline:\n");
+        fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0))\n");
+        fprintf(gen->code_buf, "  br label %%skip_newline\n");
+        fprintf(gen->code_buf, "skip_newline:\n");
+        fprintf(gen->code_buf, "  ret i32 0\n");
+        fprintf(gen->code_buf, "}\n");
     }
     
     // 现在按正确顺序写入最终输出文件
@@ -155,7 +168,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "@str_code = private unnamed_addr constant [5 x i8] c\"code\\00\"\n");
     fprintf(gen->output, "@str_type = private unnamed_addr constant [5 x i8] c\"type\\00\"\n");
     fprintf(gen->output, "@str_type_error = private unnamed_addr constant [10 x i8] c\"TypeError\\00\"\n");
-    fprintf(gen->output, "@str_error = private unnamed_addr constant [6 x i8] c\"Error\\00\"\n\n");
+    fprintf(gen->output, "@str_error = private unnamed_addr constant [6 x i8] c\"Error\\00\"\n");
+    fprintf(gen->output, "@.str.newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n\n");
     
     // 2. Value 结构体定义
     fprintf(gen->output, ";; Mixed-type value system\n");
@@ -206,7 +220,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_last_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n");
-    fprintf(gen->output, "declare void @value_fatal_error()\n\n");
+    fprintf(gen->output, "declare void @value_fatal_error()\n");
+    fprintf(gen->output, "declare i32 @value_needs_final_newline()\n\n");
     
     fprintf(gen->output, ";; External C library functions\n");
     fprintf(gen->output, "declare void @abort() noreturn\n\n");

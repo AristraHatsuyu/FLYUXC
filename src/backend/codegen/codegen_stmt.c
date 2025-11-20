@@ -706,8 +706,14 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_FUNC_DECL: {
             ASTFuncDecl *func = (ASTFuncDecl *)node->data;
             
+            // 特殊处理: main函数需要重命名为_flyux_main,避免与LLVM入口冲突
+            const char *func_llvm_name = func->name;
+            if (strcmp(func->name, "main") == 0) {
+                func_llvm_name = "_flyux_main";
+            }
+            
             // 函数签名 - 使用 Value* 类型
-            fprintf(gen->code_buf, "\ndefine %%struct.Value* @%s(", func->name);
+            fprintf(gen->code_buf, "\ndefine %%struct.Value* @%s(", func_llvm_name);
             
             for (size_t i = 0; i < func->param_count; i++) {
                 if (i > 0) fprintf(gen->code_buf, ", ");

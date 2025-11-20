@@ -89,12 +89,14 @@ typedef struct {
     int last_status;        /* 最后一次操作的状态码 */
     char error_msg[256];    /* 错误消息 */
     int error_line;         /* 错误行号（供调试用）*/
+    int last_output_was_newline;  /* 最后输出是否以换行符结尾 */
 } RuntimeState;
 
 static RuntimeState g_runtime_state = {
     .last_status = FLYUX_OK,
     .error_msg = "",
-    .error_line = 0
+    .error_line = 0,
+    .last_output_was_newline = 1  /* 初始假设为true */
 };
 
 /* 设置运行时状态 */
@@ -707,6 +709,9 @@ void value_print(Value *v) {
             if (use_colors) printf("%sunknown%s", COLOR_GRAY, COLOR_RESET);
             else printf("unknown");
     }
+    
+    // 标记最后输出不是换行
+    g_runtime_state.last_output_was_newline = 0;
 }
 
 /* Print value with newline */
@@ -715,6 +720,14 @@ void value_println(Value *v) {
         value_print(v);
     }
     printf("\n");
+    
+    // 标记最后输出是换行
+    g_runtime_state.last_output_was_newline = 1;
+}
+
+/* 检查最后输出是否需要换行 (供程序结束时使用) */
+int value_needs_final_newline() {
+    return !g_runtime_state.last_output_was_newline;
 }
 
 /* 打印致命错误并退出 */
