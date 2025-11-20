@@ -302,7 +302,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_is_nan(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_is_finite(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_clamp(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n\n");
-    
+
+    // Error object creation and field access
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_get_field(%%struct.Value*, %%struct.Value*)\n");

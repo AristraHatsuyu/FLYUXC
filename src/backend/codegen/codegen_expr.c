@@ -688,29 +688,6 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 特殊处理 length 函数（保留向后兼容）
-            if (strcmp(callee->name, "length") == 0 && call->arg_count == 1) {
-                // length(arr) 应该返回数组的长度
-                // 参数应该是 IDENTIFIER
-                if (call->args[0]->kind == AST_IDENTIFIER) {
-                    ASTIdentifier *arr_ident = (ASTIdentifier *)call->args[0]->data;
-                    ArrayMetadata *meta = find_array(gen, arr_ident->name);
-                    
-                    if (meta) {
-                        // 返回数组长度作为 Value*
-                        char *result = new_temp(gen);
-                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %zu.0)  ; length of %s\n",
-                                result, meta->elem_count, arr_ident->name);
-                        return result;
-                    }
-                }
-                
-                // 如果不是数组，返回 0
-                char *result = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 0.0)  ; length of non-array\n", result);
-                return result;
-            }
-            
             // 文件I/O函数 - readFile
             if (strcmp(callee->name, "readFile") == 0 && call->arg_count == 1) {
                 char *path = codegen_expr(gen, call->args[0]);

@@ -84,8 +84,8 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     "createDir", "removeDir", "listDir", "dirExists",
     "parseJSON", "toJSON",
     
-    /* 字符串操作 (18) */
-    "length", "substr", "indexOf", "replace", "split", "join",
+    /* 字符串操作 (17) */
+    "substr", "indexOf", "replace", "split", "join",
     "toUpper", "toLower", "trim", "startsWith", "endsWith", "contains",
     "len", "charAt", "upper", "lower",
     

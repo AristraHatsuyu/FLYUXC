@@ -673,7 +673,7 @@ static ASTNode *parse_postfix(Parser *p) {
             }
             expr = ast_member_expr_create(expr, strdup(prop_token->lexeme), false, expr->loc);
         }
-                // 链式调用: obj.>method(args) 或 obj.>property
+                // 链式调用: obj.>method(args) 或 obj.>function
         else if (match(p, TK_DOT_CHAIN)) {
             Token *method_token = current_token(p);
             if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC)) {
@@ -682,9 +682,9 @@ static ASTNode *parse_postfix(Parser *p) {
             }
             char *method_name = strdup(method_token->lexeme);
             
-            // 检查是否有参数（有括号才是方法调用）
+            // 检查是否有参数（有括号）
             if (match(p, TK_L_PAREN)) {
-                // 有括号 - 方法调用: obj.>method(args)
+                // 有括号 - 方法调用: obj.>method(args) → method(obj, args)
                 ASTNode **args = NULL;
                 size_t arg_count = 0;
                 size_t arg_capacity = 0;
@@ -726,8 +726,13 @@ static ASTNode *parse_postfix(Parser *p) {
                 ASTNode *callee = ast_identifier_create(method_name, expr->loc);
                 expr = ast_call_expr_create(callee, all_args, total_args, throw_on_error, expr->loc);
             } else {
-                // 无括号 - 属性访问: obj.>property (等同于 obj.property)
-                expr = ast_member_expr_create(expr, method_name, false, expr->loc);
+                // 无括号 - 零参数函数调用: obj.>func → func(obj)
+                // 根据 FLYUX_SYNTAX.md: array.>length.>🐮🐴(2)  # 链式调用,左边作为第一个参数
+                ASTNode **all_args = (ASTNode **)malloc(1 * sizeof(ASTNode *));
+                all_args[0] = expr;  // 左边的值作为唯一参数
+                
+                ASTNode *callee = ast_identifier_create(method_name, expr->loc);
+                expr = ast_call_expr_create(callee, all_args, 1, 0, expr->loc);
             }
         }
         // 后缀 ++ 和 --
@@ -1426,8 +1431,43 @@ static ASTNode *parse_statement(Parser *p) {
         return parse_if_statement(p);
     }
     
-    // 代码块
+    // 代码块 或 对象字面量表达式
+    // 需要区分: { stmt } 是代码块, { key: value } 是对象字面量
     if (check(p, TK_L_BRACE)) {
+        // 使用lookahead判断是否为对象字面量
+        // 对象字面量: { } 或 { key: value } 或 { "key": value }
+        // 代码块: { stmt; } 或 { var := value }
+        Token *next = peek(p, 1);
+        
+        // 空花括号 - 可能是空对象或空代码块,优先当作对象字面量
+        if (next->kind == TK_R_BRACE) {
+            ASTNode *expr = parse_expression(p);
+            if (expr) {
+                ASTNode *node = ast_node_create(AST_EXPR_STMT, expr->loc);
+                ASTExprStmt *stmt = (ASTExprStmt *)malloc(sizeof(ASTExprStmt));
+                stmt->expr = expr;
+                node->data = stmt;
+                return node;
+            }
+        }
+        
+        // 检查 { identifier/string : ... } 模式 - 对象字面量
+        if ((next->kind == TK_IDENT || next->kind == TK_STRING || next->kind == TK_BUILTIN_FUNC)) {
+            Token *after_key = peek(p, 2);
+            if (after_key && after_key->kind == TK_COLON) {
+                // 这是对象字面量
+                ASTNode *expr = parse_expression(p);
+                if (expr) {
+                    ASTNode *node = ast_node_create(AST_EXPR_STMT, expr->loc);
+                    ASTExprStmt *stmt = (ASTExprStmt *)malloc(sizeof(ASTExprStmt));
+                    stmt->expr = expr;
+                    node->data = stmt;
+                    return node;
+                }
+            }
+        }
+        
+        // 否则是代码块
         return parse_block(p);
     }
     
@@ -1522,6 +1562,17 @@ static ASTNode *parse_statement(Parser *p) {
             node->data = stmt;
             return node;
         }
+    }
+    
+    // 处理其他类型开头的表达式语句 (例如: 字符串字面量.>方法)
+    // 包括: TK_NUM, TK_STRING, TK_TRUE, TK_FALSE, TK_NULL, TK_UNDEF, TK_L_PAREN, TK_L_BRACKET, TK_L_BRACE
+    ASTNode *expr = parse_expression(p);
+    if (expr) {
+        ASTNode *node = ast_node_create(AST_EXPR_STMT, expr->loc);
+        ASTExprStmt *stmt = (ASTExprStmt *)malloc(sizeof(ASTExprStmt));
+        stmt->expr = expr;
+        node->data = stmt;
+        return node;
     }
     
     return NULL;

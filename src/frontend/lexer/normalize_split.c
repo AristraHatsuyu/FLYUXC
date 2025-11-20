@@ -143,16 +143,45 @@ Statement* normalize_split_statements(const char* input, int* stmt_count) {
     
     size_t len = strlen(input);
     
+    // 跳过前导空白
+    while (len > 0 && (input[0] == ' ' || input[0] == '\t' || input[0] == '\n')) {
+        input++;
+        len--;
+    }
+    
+    // 跳过尾部空白
+    while (len > 0 && (input[len-1] == ' ' || input[len-1] == '\t' || input[len-1] == '\n')) {
+        len--;
+    }
+    
+    // 如果输入为空,返回
+    if (len == 0) {
+        *stmt_count = 0;
+        return NULL;
+    }
+    
     // 第一遍：计数分隔符
+    // 注意：最后如果有非空内容且没有分隔符,也算一个语句
     int count = 0;
+    int has_content_after_last_separator = 0;
     
     for (int i = 0; i < len; i++) {
         // 检查分隔符（;或换行）且不在括号/字符串内
         if (!is_in_string_split(input, i) && get_bracket_depth(input, i) == 0) {
             if (input[i] == ';' || input[i] == '\n') {
                 count++;
+                has_content_after_last_separator = 0;
+            } else if (input[i] != ' ' && input[i] != '\t') {
+                has_content_after_last_separator = 1;
             }
+        } else if (input[i] != ' ' && input[i] != '\t' && input[i] != '\n') {
+            has_content_after_last_separator = 1;
         }
+    }
+    
+    // 如果最后有内容但没有分隔符,也算一个语句
+    if (has_content_after_last_separator) {
+        count++;
     }
     
     if (count == 0) {
