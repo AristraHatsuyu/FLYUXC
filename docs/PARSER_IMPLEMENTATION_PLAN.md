@@ -202,7 +202,7 @@ f(a, b).result
 {name: "Alice", age: 30, nested: {x: 1}}
 
 // 链式调用
-arr.>length
+arr.>len
 object.>toString.>toUpperCase
 🐶.>🐮🐴(2)
 ```
@@ -464,8 +464,8 @@ valgrind --leak-check=full ./build/flyuxc testfx/demo.fx --parse-only
 
 示例：
 ```flyux
-arr.>length.>foo(2)
-// 等价于: foo(length(arr), 2)
+arr.>len.>foo(2)
+// 等价于: foo(len(arr), 2)
 ```
 
 解决：构建ChainExpr节点，记录链式调用序列

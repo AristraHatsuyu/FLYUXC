@@ -101,7 +101,6 @@ src/backend/codegen/
 - builtin_unshift()    // unshift
 - builtin_slice()      // slice
 - builtin_concat()     // concat
-- builtin_length()     // length (兼容)
 
 // 主入口
 char* codegen_builtin_call(CodeGen *gen, const char *func_name, 

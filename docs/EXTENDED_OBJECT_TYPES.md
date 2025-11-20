@@ -895,11 +895,11 @@ loadConfig := () {
     lines := split(content, "\n")
     
     L> (lines : line) {
-        if length(line) == 0 { continue }
-        if charAt(line, 0) == "#" { continue }
+        if(len(line) == 0) { continue }
+        if(charAt(line, 0) == "#") { continue }
         
         parts := split(line, "=")
-        if length(parts) == 2 {
+        if(len(parts) == 2) {
             key := trim(parts[0])
             value := trim(parts[1])
             config[key] = value

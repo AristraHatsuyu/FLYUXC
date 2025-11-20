@@ -727,7 +727,7 @@ static ASTNode *parse_postfix(Parser *p) {
                 expr = ast_call_expr_create(callee, all_args, total_args, throw_on_error, expr->loc);
             } else {
                 // 无括号 - 零参数函数调用: obj.>func → func(obj)
-                // 根据 FLYUX_SYNTAX.md: array.>length.>🐮🐴(2)  # 链式调用,左边作为第一个参数
+                // 根据 FLYUX_SYNTAX.md: array.>len.>🐮🐴(2)  # 链式调用,左边作为第一个参数
                 ASTNode **all_args = (ASTNode **)malloc(1 * sizeof(ASTNode *));
                 all_args[0] = expr;  // 左边的值作为唯一参数
                 

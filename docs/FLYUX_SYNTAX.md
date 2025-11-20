@@ -143,7 +143,7 @@ R>          // 返回 undef (隐式)
 
 #### 方法链调用（.>）
 ```flyux
-array.>length.>🐮🐴(2)       // 函数🐮🐴具有两个参数，.>左边作为第一个参数
+array.>len.>🐮🐴(2)       // 函数🐮🐴具有两个参数，.>左边作为第一个参数
 object.>toString.>toUpperCase
 ```
 
@@ -583,11 +583,11 @@ removeDir("temp_dir")
 
 ### 🔤 字符串操作
 
-#### length(str)
+#### len(str)
 返回字符串长度或数组长度。
 ```flyux
-len := length("Hello")      // 5
-len := length([1, 2, 3])    // 3
+length := len("Hello")      // 5
+length := len([1, 2, 3])    // 3
 ```
 
 #### substr(str, start, length?)
@@ -1026,7 +1026,7 @@ print(err)
 content :[str]= readFile("config.txt")
 if content != null {
     lines := split(content, "\n")
-    print("行数:", length(lines))
+    print("行数:", len(lines))
 }
 
 // 大文件 - 流式处理

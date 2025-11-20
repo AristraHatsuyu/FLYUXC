@@ -367,7 +367,7 @@ char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, 
     
     // length - 获取数组长度（向后兼容）
     if (strcmp(func_name, "length") == 0 && arg_count == 1) {
-        // length(arr) 应该返回数组的长度
+        // len(arr) 应该返回数组的长度
         // 参数应该是 IDENTIFIER
         if (args[0]->kind == AST_IDENTIFIER) {
             ASTIdentifier *arr_ident = (ASTIdentifier *)args[0]->data;

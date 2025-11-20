@@ -2062,18 +2062,6 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 ASTIdentifier *obj_ident = (ASTIdentifier *)member->object->data;
                 obj_name = obj_ident->name;
                 
-                // 检查是否是数组的 length 属性
-                if (strcmp(member->property, "length") == 0) {
-                    ArrayMetadata *arr_meta = find_array(gen, obj_name);
-                    if (arr_meta) {
-                        // 返回数组长度
-                        char *result = new_temp(gen);
-                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %zu.0)  ; %s.length\n",
-                                result, arr_meta->elem_count, obj_name);
-                        return result;
-                    }
-                }
-                
                 // 加载对象
                 obj_value = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",

@@ -489,7 +489,7 @@ object.property
 object.nested.deep
 
 // 9. 方法链
-arr.>length
+arr.>len
 str.>toUpper.>trim
 
 // 10. 数组字面量
@@ -631,7 +631,7 @@ fibonacci := (n) {
 
 // 快速排序
 quicksort := (arr) {
-    if (length(arr) <= 1) {
+    if (len(arr) <= 1) {
         R> arr
     }
     

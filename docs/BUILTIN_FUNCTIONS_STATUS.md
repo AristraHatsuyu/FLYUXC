@@ -10,7 +10,7 @@
 - ✅ `printf(format, ...args)` - 格式化输出
 - ✅ `input(prompt?)` - 读取用户输入 **[新增]**
 - ✅ `typeOf(value)` - 获取类型字符串
-- ✅ `length(array)` - 获取数组长度
+- ✅ `len(array)` - 获取数组长度
 
 #### 运行时状态系统 (新增)
 - ✅ `lastStatus()` - 获取最后操作状态码
@@ -27,7 +27,7 @@
 - ⬜ `writeFile(path, content)` - 写入文件
 
 #### 字符串操作 (1/11)
-- ✅ `length` (部分支持数组)
+- ✅ `len` (部分支持数组)
 - ⬜ `substr(str, start, length?)`
 - ⬜ `indexOf(str, search, start?)`
 - ⬜ `replace(str, old, new)`

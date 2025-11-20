@@ -17,7 +17,7 @@ clang full_demo.ll -o full_demo
 - 数组字面量: `[1, 2, 3]`
 - 索引读取: `arr[0]`
 - 索引赋值: `arr[0] = 10`
-- 数组长度: `arr.>length`
+- 数组长度: `arr.>len`
 
 #### 2. ✅ 对象操作（100%）
 - 对象字面量: `{age: 25, score: 95}`
@@ -40,8 +40,8 @@ clang full_demo.ll -o full_demo
 - 自增: `i++`, `++i`
 
 #### 6. ✅ 高级特性（100%）
-- 方法链: `arr.>length.>func(x)`
-- 内置函数: `print()`, `length()`
+- 方法链: `arr.>len.>func(x)`
+- 内置函数: `print()`, `len()`
 
 ### 测试结果
 
@@ -61,7 +61,7 @@ clang full_demo.ll -o full_demo
 100.000000      ← arr[0]
 3.000000        ← arr[1]
 10.000000       ← arr[0] = 10
-4.000000        ← arr.>length
+4.000000        ← arr.>len
 25.000000       ← person.age
 26.000000       ← person.age = 26
 30.000000       ← calculate(10, 2)
