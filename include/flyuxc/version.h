@@ -5,7 +5,7 @@
 #define FLYUXC_VERSION_MINOR 1
 #define FLYUXC_VERSION_PATCH 0
 
-#define FLYUXC_VERSION "0.1.0"
+#define FLYUXC_VERSION "0.1"
 #define FLYUXC_COMPILER_NAME "FLYUXC"
 #define FLYUXC_TARGET "arm64-apple-darwin"
 #define FLYUXC_THREAD_MODEL "posix"

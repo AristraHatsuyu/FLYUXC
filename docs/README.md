@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1-blue.svg)
 ![C Standard](https://img.shields.io/badge/C-C11-green.svg)
 ![CMake](https://img.shields.io/badge/CMake-3.10+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)

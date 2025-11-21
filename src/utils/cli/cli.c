@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "flyuxc/version.h"
 
 void print_help(void) {
-    printf("FLYUXC AOT Compiler\n");
     printf("Usage: flyuxc [options] <input file>\n\n");
     printf("Options:\n");
     printf("  -h, --help            Display this help message\n");
@@ -14,7 +14,7 @@ void print_help(void) {
 }
 
 void print_version(void) {
-    printf("FLYUXC AOT Compiler version 0.1.0\n");
+    printf(FLYUXC_VERSION "\n");
 }
 
 CliOptions parse_arguments(int argc, char *argv[]) {

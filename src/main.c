@@ -32,13 +32,15 @@ int main(int argc, char *argv[])
     // 尽早输出,用于测量启动时间
     double t_init_start = get_time_ms();
     
-    // 提前初始化 LLVM 以减少首次编译时的延迟
-    llvm_initialize();
-    
     CliOptions options = parse_arguments(argc, argv);
 
+    /* 打印编译器信息 */
     if (argc == 1 || options.help)
     {
+        printf("%s%s %s%s%s\n", COLOR_BLUE, FLYUXC_COMPILER_NAME, COLOR_CYAN, FLYUXC_VERSION, COLOR_RESET);
+        printf("%sTarget: %s%s\n", COLOR_CYAN, COLOR_RESET, FLYUXC_TARGET);
+        printf("%sThread model: %s%s\n", COLOR_CYAN, COLOR_RESET, FLYUXC_THREAD_MODEL);
+        printf("-----------------------------------\n");
         print_help();
         return options.help ? 0 : 1;
     }
@@ -48,16 +50,18 @@ int main(int argc, char *argv[])
         print_version();
         return 0;
     }
+    
 
     if (options.input) {
+        // 提前初始化 LLVM 以减少首次编译时的延迟
+        llvm_initialize();
+        
         double t_start = get_time_ms();
         
-        /* 打印编译器信息 */
         printf("%s%s %s%s%s\n", COLOR_BLUE, FLYUXC_COMPILER_NAME, COLOR_CYAN, FLYUXC_VERSION, COLOR_RESET);
         printf("%sTarget: %s%s\n", COLOR_CYAN, COLOR_RESET, FLYUXC_TARGET);
         printf("%sThread model: %s%s\n", COLOR_CYAN, COLOR_RESET, FLYUXC_THREAD_MODEL);
         printf("-----------------------------------\n");
-        
         printf("%s⚡ Compiling %s%s\n\n", COLOR_GREEN, options.input, COLOR_RESET);
         
         /* 读取源文件 */
@@ -250,7 +254,6 @@ int main(int argc, char *argv[])
                     if (options.emit_ir) {
                         printf("%sLLIR: %s%s.ll\n", COLOR_CYAN, COLOR_RESET, executable_name);
                     }
-                    printf("%sBinary: %s%s\n", COLOR_CYAN, COLOR_RESET, executable_name);
                 }
             }
         }

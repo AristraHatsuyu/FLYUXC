@@ -118,7 +118,7 @@ print(1, 2, 3)
 ```bash
 $ ./build/flyuxc testfx/test_warnings.fx
 
-FLYUXC 0.1.0
+FLYUXC 0.1
 -----------------------------------
 ⚡ Compiling testfx/test_warnings.fx
 
@@ -241,7 +241,7 @@ if (c < 0x80) {
 
 ## 版本历史
 
-- **v0.1.0** (当前版本)
+- **v0.1** (当前版本)
   - ✅ 实现基础警告系统框架
   - ✅ 添加尾随逗号警告（数组、对象、函数调用）
   - ✅ 黄色 ANSI 颜色显示

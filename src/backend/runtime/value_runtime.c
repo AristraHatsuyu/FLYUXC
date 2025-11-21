@@ -11,7 +11,7 @@
 #include <dirent.h>
 #include <errno.h>
 
-#define FLYUXC_VERSION "0.1.0"
+#define FLYUXC_VERSION "0.1"
 
 /* ANSI Color codes (JS console style) */
 #define COLOR_NUM      "\033[38;5;151m"      /* 数字 (浅青色) */
