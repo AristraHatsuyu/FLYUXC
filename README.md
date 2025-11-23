@@ -1,4 +1,4 @@
-# FLYUX Compiler (FLYUXC)
+# FLYUX Compiler (FLYUXC AOT)
 
 <div align="center">
 
@@ -86,9 +86,7 @@ cmake --build build
 Create `hello.fx`:
 
 ```flyux
-main := () {
-    print("Hello, FLYUX! 🎉");
-};
+"Hello, FLYUX! 🎉".print;
 ```
 
 Compile:

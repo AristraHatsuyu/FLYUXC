@@ -1,4 +1,4 @@
-# FLYUX 编译器 (FLYUXC)
+# FLYUX 编译器 (FLYUXC AOT)
 
 <div align="center">
 
@@ -86,9 +86,7 @@ cmake --build build
 创建 `hello.fx`:
 
 ```flyux
-main := () {
-    print("Hello, FLYUX! 🎉");
-};
+"Hello, FLYUX! 🎉".print;
 ```
 
 编译:
