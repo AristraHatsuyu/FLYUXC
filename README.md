@@ -1,32 +1,34 @@
-# FLYUX 编译器 (FLYUXC)
+# FLYUX Compiler (FLYUXC)
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1-blue.svg)
 ![C Standard](https://img.shields.io/badge/C-C11-green.svg)
 ![CMake](https://img.shields.io/badge/CMake-3.10+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-**一个支持 Unicode/Emoji 变量名的现代编程语言编译器**
+**A Modern Programming Language Compiler with Unicode/Emoji Variable Names**
 
-[快速开始](#快速开始) • [文档](#文档) • [特性](#特性) • [架构](#架构) • [贡献](#贡献)
+[Quick Start](#-quick-start) • [Documentation](#-documentation) • [Features](#-features) • [Architecture](#-architecture) • [Contributing](#-contributing)
+
+[🇨🇳 中文](README_CN.md) | 🇺🇸 **English**
 
 </div>
 
 ---
 
-## 🌟 亮点特性
+## 🌟 Highlights
 
-### 🎨 Unicode/Emoji 变量名
+### 🎨 Unicode/Emoji Variable Names
 
-FLYUX
+FLYUX fully supports Unicode and Emoji as identifiers!
 
 ```flyux
-// 用 Emoji 与Unicode编程！
+// Programming with Emojis!
 🚀 := "rocket";
 🎯 := 100;
 
-🤪🫵:<num> = (🐙, 🍄) {
+🤪🫵:<num>=(🐙, 🍄) {
     R> 🐙 + 🍄 * 🐙;
 };
 
@@ -36,52 +38,52 @@ main := () {
 };
 ```
 
-### ⚡ 高性能编译器
+### ⚡ High-Performance Compiler
 
-- **词法分析**: >100 KB/s
-- **内存使用**: ~74KB / 2KB 源码
-- **Token 生成**: 183 tokens / 5ms
+- **Compilation Speed**: ~600ms (first run), ~500ms (subsequent)
+- **Binary Size**: 76MB (statically linked LLVM)
+- **Zero External Dependencies**: Only system libraries, fully portable
 
-### 🔍 精确错误定位
+### 🔍 Precise Error Location
 
 ```
 ERROR: Type mismatch at line 15, column 10
-       x:[num]= "string";
-                  ^^^^^^^^^
+       x:[num]= "string"
+                ^^^^^^^^
        Expected: num
        Got:      str
 ```
 
-精确到**字节级别**的错误位置，支持多字节 UTF-8 字符。
+**Byte-level** precise error location, supporting multi-byte UTF-8 characters.
 
-### 🧠 智能类型推断
+### 🧠 Intelligent Type Inference
 
 ```flyux
-x := 42;              // 自动推断为 num
-name := "Alice";      // 自动推断为 str
-active := true;       // 自动推断为 bl
+x := 42;              // Automatically inferred as num
+name := "Alice";      // Automatically inferred as str
+active := true;       // Automatically inferred as bl
 ```
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 安装
+### Installation
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/your-org/flyuxc.git
+# 1. Clone the repository
+git clone https://github.com/AristraHatsuyu/flyuxc.git
 cd flyuxc
 
-# 2. 构建
+# 2. Build
 cmake -B build
 cmake --build build
 
-# 3. 运行测试
-./build/flyuxc testfx/demo.fx
+# 3. Run tests
+./build/flyuxc testfx/valid/basic/demo.fx
 ```
 
-### 第一个程序
+### Your First Program
 
-创建 `hello.fx`:
+Create `hello.fx`:
 
 ```flyux
 main := () {
@@ -89,279 +91,263 @@ main := () {
 };
 ```
 
-编译:
+Compile:
 
 ```bash
 ./build/flyuxc hello.fx
 ```
 
-查看 **[QUICKSTART.md](QUICKSTART.md)** 了解更多示例。
+See **[docs/guides/QUICKSTART.md](docs/guides/QUICKSTART.md)** for more examples.
 
-## 📚 文档
+## 📚 Documentation
 
-### 📖 主要文档
+### 📖 Main Documents
 
-| 文档 | 说明 |
-|------|------|
-| **[docs/INDEX.md](docs/INDEX.md)** | 📑 **完整文档索引** - 所有文档的导航入口 |
-| **[docs/QUICKSTART.md](docs/QUICKSTART.md)** | 快速上手指南，5分钟入门 |
-| **[docs/FLYUX_SYNTAX.md](docs/FLYUX_SYNTAX.md)** | 完整语法规范 |
-| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 编译器架构设计详解 |
+| Document | Description |
+|----------|-------------|
+| **[docs/INDEX.md](docs/INDEX.md)** | 📑 **Complete Documentation Index** - Navigation hub for all docs |
+| **[docs/guides/QUICKSTART.md](docs/guides/QUICKSTART.md)** | Quick start guide, get started in 5 minutes |
+| **[docs/reference/FLYUX_SYNTAX.md](docs/reference/FLYUX_SYNTAX.md)** | Complete syntax specification |
+| **[docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)** | Compiler architecture design details |
 
-> 💡 更多文档（词法分析、语法分析、类型系统等）请查看 **[docs/INDEX.md](docs/INDEX.md)**
+> 💡 More docs (lexical analysis, parser, type system, etc.) at **[docs/INDEX.md](docs/INDEX.md)**
 
-## ✨ 特性
+## ✨ Features
 
-### 已实现 ✅
+### Core Features ✅
 
-- [x] **词法分析器**
-  - [x] 支持 Unicode/Emoji 标识符
-  - [x] 精确位置追踪（行、列、字节长度）
-  - [x] 代码规范化（注释移除、行合并）
-  - [x] 变量名映射（Unicode → ASCII）
+- [x] **Complete Compilation Pipeline**
+  - [x] Lexical Analysis (Lexer) - Unicode/Emoji support
+  - [x] Syntax Analysis (Parser) - Complete AST construction
+  - [x] Code Generation (CodeGen) - LLVM IR generation
+  - [x] Binary Generation - Native executable files
 
-- [x] **内存管理**
-  - [x] Arena 分配器（64KB 初始块，倍增扩展）
-  - [x] 字符串池（FNV-1a 哈希，O(1) 查找）
-  - [x] 零碎片内存管理
+- [x] **Language Features**
+  - [x] Variable declaration and assignment (`x := 10`, `x = 20`)
+  - [x] Function definition and calls (`func:<num>=(a,b) { R> a+b }`)
+  - [x] Array operations (`[1,2,3]`, `arr[0]`, `arr.>len`)
+  - [x] Object operations (`{key: value}`, `obj.key`)
+  - [x] Control flow (`if`, `L>` loop, `T>` try-catch)
+  - [x] Operators (arithmetic, comparison, logical, bitwise)
+  - [x] Method chaining (`.>` operator)
 
-- [x] **语义分析**
-  - [x] 函数声明检测
-  - [x] 变量声明统计
-  - [x] 控制流分析
-  - [x] 类型推断（字面量）
-  - [x] 作用域深度追踪
+- [x] **Built-in Functions**
+  - [x] `print()` / `println()` - Output functions
+  - [x] `len()` - Unified length function (string/array/object)
+  - [x] Type checking functions
 
-- [x] **错误检测**
-  - [x] 括号匹配检查
-  - [x] 语法错误检测
-  - [x] 详细错误报告
+- [x] **Optimization Features**
+  - [x] LLVM Static Linking - Zero Homebrew dependencies
+  - [x] Embedded Runtime - Single-file distribution
+  - [x] Fast Startup - Only native target initialization
+  - [x] Fully Portable - Runs on any macOS system
 
-- [x] **输出格式**
-  - [x] Token 列表
-  - [x] JSON AST
-  - [x] 语义分析报告
-  - [x] 编译总结
+### Technical Highlights 🌟
 
-### 开发中 🚧
+- **Static Linking**: Single executable with embedded LLVM
+- **Zero Dependencies**: Only system libraries (libz, libc++, libSystem, CoreFoundation)
+- **Cross-Platform**: macOS (ARM64) native support
+- **Modern**: Full Unicode/Emoji identifier support
 
-- [ ] **完整语法分析器**
-  - [ ] AST 构建
-  - [ ] 运算符优先级
-  - [ ] 错误恢复
+## 🏗️ Architecture
 
-- [ ] **高级语义分析**
-  - [ ] 完整类型检查
-  - [ ] 符号表管理
-  - [ ] 类型推断增强
-
-### 规划中 📋
-
-- [ ] **LLVM IR 生成**
-- [ ] **优化器**
-  - [ ] 常量折叠
-  - [ ] 死代码消除
-  - [ ] 循环优化
-- [ ] **代码生成**
-- [ ] **标准库**
-- [ ] **包管理器**
-- [ ] **LSP 支持**（IDE 集成）
-
-## 🏗️ 架构
-
-FLYUX 编译器采用经典的多阶段编译器架构：
+FLYUXC adopts a classic multi-stage compiler architecture based on LLVM:
 
 ```
 ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│ 规范化    │ →  │ 变量映射  │ →  │ 词法分析  │ →  │ 语法分析  │
-│ Normalize│    │  VarMap  │    │  Lexer   │    │  Parser  │
+│ Normalize│ →  │  VarMap  │ →  │  Lexer   │ →  │  Parser  │
 └──────────┘    └──────────┘    └──────────┘    └──────────┘
                                                        ↓
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│ 代码生成  │ ←  │  优化器   │ ←  │ IR 生成  │ ←  │ 语义分析  │
-│ CodeGen  │    │ Optimizer│    │  IR Gen  │    │ Semantic │
-└──────────┘    └──────────┘    └──────────┘    └──────────┘
+┌──────────┐    ┌──────────┐    ┌──────────┐
+│  Binary  │ ←  │   LLVM   │ ←  │ CodeGen  │
+│          │    │  Backend │    │          │
+└──────────┘    └──────────┘    └──────────┘
 ```
 
-### 模块化设计
+### Tech Stack
+
+- **Frontend**: Pure C11 implementation of lexer and parser
+- **Backend**: LLVM 20.1.6 (statically linked)
+- **Runtime**: Embedded pre-compiled runtime objects
+- **Build**: CMake 3.13+
+
+### Static Linking Architecture
 
 ```
-src/
-├── frontend/          # 编译器前端
-│   ├── lexer/         # 词法分析 ✅
-│   ├── parser/        # 语法分析 🚧
-│   └── semantic/      # 语义分析 🚧
-├── middle/            # 中间层
-│   ├── ir/            # IR 生成 📋
-│   └── optimizer/     # 优化器 📋
-├── backend/           # 后端
-│   └── codegen/       # 代码生成 📋
-└── utils/             # 工具库 ✅
-    ├── memory/        # Arena 分配器
-    ├── string/        # 字符串池
-    ├── io/            # 文件 IO
-    └── cli/           # 命令行接口
+flyuxc (76MB)
+├── LLVM Static Libraries (~70MB)
+│   ├── Core, IRReader, Passes
+│   └── AArch64 Native Target
+├── Compiler Code (~5MB)
+└── Runtime Objects (~1MB, embedded)
+
+Dynamic Dependencies (System only):
+├── /usr/lib/libz.1.dylib
+├── /usr/lib/libc++.1.dylib
+├── /usr/lib/libSystem.B.dylib
+└── CoreFoundation.framework
 ```
 
-查看 **[ARCHITECTURE.md](ARCHITECTURE.md)** 了解详细设计。
+## 🔧 Development
 
-## 📊 性能指标
+### System Requirements
 
-| 指标 | 目标 | 当前 (demo.fx) | 状态 |
-|------|------|---------------|------|
-| 词法分析速度 | >100 KB/s | ~4KB/5ms ≈ 800 KB/s | ✅ |
-| 内存使用 | <1MB/100KB | 74KB/2KB | ✅ |
-| Token 生成 | <10ms/1000行 | 183 tokens/5ms | ✅ |
-| AST 构建 | <20ms/1000行 | 待测试 | 🚧 |
-| 总编译时间 | <100ms/1000行 | 待测试 | 🚧 |
+- **OS**: macOS (ARM64/x86_64) / Linux / Windows (WSL)
+- **Runtime**: No external dependencies (macOS pre-built binary)
+- **Build Requirements** (developers only):
+  - CMake 3.13+
+  - C11 compiler (Clang/GCC)
+  - C++17 compiler
+  - LLVM 20.x (Homebrew)
 
-## 🔧 开发
-
-### 系统要求
-
-- **操作系统**: macOS / Linux / Windows (WSL)
-- **编译器**: GCC 4.8+ / Clang 3.5+ / MSVC 2015+
-- **构建工具**: CMake 3.10+
-- **C 标准**: C11
-
-### 构建
+### Building
 
 ```bash
-# 配置
+# Configure
 cmake -B build
 
-# 编译
+# Compile
 cmake --build build
 
-# 清理
+# Clean
 rm -rf build
 ```
 
-### VS Code 任务
+### VS Code Tasks
 
-项目配置了便捷的 VS Code 任务：
+Convenient VS Code tasks are configured:
 
-- **Cmd+Shift+B**: 构建项目
-- **Tasks: Run Task** → "run": 运行测试
+- **Cmd+Shift+B**: Build project
+- **Tasks: Run Task** → "run": Run tests
 
-### 测试
+### Testing
 
 ```bash
-# 运行所有测试用例
-./build/flyuxc testfx/demo.fx
-./build/flyuxc testfx/simple_obj.fx
-./build/flyuxc testfx/types_test.fx
+# Run test cases
+./build/flyuxc testfx/valid/basic/demo.fx
 ```
 
-## 📖 语法示例
+## 📖 Syntax Examples
 
-### 变量和类型
+### Variables and Types
 
 ```flyux
-// 隐式类型
+// Implicit types
 name := "Alice";
 age := 25;
 active := true;
 
-// 显式类型
-score:[num] := 95;
-username:[str] := "Bob";
+// Explicit types
+score:[num]= 95;
+username:[str]= "Bob";
 ```
 
-### 函数
+### Functions
 
 ```flyux
-// 类型标注函数
-add:<num> = (x, y) {
+// Type-annotated function
+add:<num>=(x, y) {
     R> x + y;  // R> = return
 };
 
-// 调用
+// Call
 result := add(10, 20);
+
+// Method chaining
+[1, 2, 3].>len.>println;  // Output: 3
+"Hello".>println;          // Output: Hello
 ```
 
-### 数组和对象
+### Arrays and Objects
 
 ```flyux
-// 数组
+// Array
 fruits := ["apple", "banana", "orange"];
 
-// 对象
+// Object
 person := {
     name: "Charlie",
     age: 30,
     hobbies: ["reading", "coding"]
 };
 
-// 访问
+// Access
 print(person.name);
 print(fruits[0]);
 ```
 
-### 控制流
+### Control Flow
 
 ```flyux
-// If 语句
+// If statement
 if (x > 10) {
-    print("大于10");
+    print("Greater than 10");
 } {
-    print("小于等于10");
+    print("Less than or equal to 10");
 };
 
-// 循环
+// Loop
 L> (i := 0; i < 10; i++) {  // L> = loop
     print(i);
 };
+
+// Error handling
+T> {
+    content := readFile("data.txt")!
+    print(content)
+} (err) {
+    println("Error:", err.message)
+}
 ```
 
-查看 **[FLYUX_SYNTAX.md](FLYUX_SYNTAX.md)** 了解完整语法。
+See **[docs/reference/FLYUX_SYNTAX.md](docs/reference/FLYUX_SYNTAX.md)** for complete syntax.
 
-## 🤝 贡献
+## 🤝 Contributing
 
-欢迎贡献代码、报告 Bug 或提出建议！
+Contributions, bug reports, and suggestions are welcome!
 
-### 贡献流程
+### Contribution Workflow
 
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/amazing`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing`)
-5. 创建 Pull Request
+1. Fork the project
+2. Create a feature branch (`git checkout -b feature/amazing`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing`)
+5. Create a Pull Request
 
-### 开发指南
+### Development Guidelines
 
-- 遵循 C11 标准
-- 代码风格：使用 `clang-format`
-- 文档：更新相关 `.md` 文件
-- 测试：添加测试用例到 `testfx/`
+- Follow C11/C++17 standards
+- Code style: 4-space indentation, clear naming
+- Documentation: Update relevant `.md` files
+- Testing: Add test cases to `testfx/valid/`
 
-查看 **[REFACTORING.md](REFACTORING.md)** 了解项目最佳实践。
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for detailed guidelines.
 
-## 📜 许可证
+## 📜 License
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 致谢
+## 🙏 Acknowledgments
 
-FLYUX 编译器的设计受到以下项目启发：
+FLYUXC's design is inspired by:
 
-- **Rust Compiler** (rustc) - 模块化架构
-- **LLVM** - 编译器基础设施
-- **Go** - 简洁语法设计
-- **TypeScript** - 类型推断系统
+- **Rust Compiler** (rustc) - Modular architecture
+- **LLVM** - Compiler infrastructure
+- **Go** - Clean syntax design
+- **TypeScript** - Type inference system
 
-## 📞 联系
+## 📞 Contact
 
-- **文档**: 项目根目录的 `*.md` 文件
-- **Bug 报告**: [GitHub Issues](https://github.com/AristraHatsuyu/FLYUXC/issues)
-- **讨论**: [GitHub Discussions](https://github.com/AristraHatsuyu/FLYUXC/discussions)
+- **Documentation**: `*.md` files in project root
+- **Bug Reports**: [GitHub Issues](https://github.com/AristraHatsuyu/FLYUXC/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/AristraHatsuyu/FLYUXC/discussions)
 
 ---
 
 <div align="center">
 
-**用 ❤️ 和 ☕ 制作**
+**Made with ❤️ and ☕**
 
-[⬆ 回到顶部](#flyux-编译器-flyuxc)
+[⬆ Back to Top](#flyux-compiler-flyuxc)
 
 </div>

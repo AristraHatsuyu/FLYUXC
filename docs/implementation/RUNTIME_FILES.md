@@ -67,7 +67,7 @@ case VALUE_NUMBER:
 
 ```bash
 # 一键重新生成所有 runtime 文件
-cd /Users/flyour/Desktop/Project/FLYUXC
+cd /Users/userfolder/Desktop/Project/FLYUXC
 
 # 编译对象文件
 clang -c -o src/backend/runtime_object.o src/backend/runtime/value_runtime.c

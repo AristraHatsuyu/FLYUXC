@@ -139,6 +139,37 @@ R> value    // 返回值
 R>          // 返回 undef (隐式)
 ```
 
+#### T> 错误捕获（Try-Catch）
+```flyux
+// 格式: T> { 代码块 } (错误变量) { 错误处理 }
+T> {
+    result := dangerousOperation()!  // 使用 ! 后缀抛出错误
+    print(result)
+} (err) {
+    // 捕获错误对象
+    print("Error:", err.message)
+    print("Code:", err.code)
+}
+
+// 示例：文件读取错误处理
+T> {
+    content := readFile("/nonexistent/file.txt")!
+    print(content)
+} (error) {
+    println("文件读取失败:", error.message)
+}
+```
+
+**错误对象 (Error) 属性**:
+- `message: str` - 错误消息
+- `code: num` - 错误代码
+- `type: str` - 固定为 "Error"
+
+**注意**:
+- 只有带 `!` 后缀的函数调用才会抛出可捕获的错误
+- 不带 `!` 的调用失败时返回 `null` 或错误对象
+- `T>` 块必须有错误处理分支 `(err) { ... }`
+
 ### 6. 方法调用与属性访问
 
 #### 方法链调用（.>）
@@ -244,10 +275,12 @@ a ^ b      // 位异或
 - `if` - 条件语句
 - `L>` - 循环
 - `R>` - 返回
+- `T>` - 错误捕获 (Try-Catch)
 - `:=` - 变量/常量定义（推断或显式类型）
 - `=` - 赋值
 - `.>` - 方法链调用
 - `.` - 属性访问
+- `!` - 错误抛出后缀（用于函数调用）
 - `:` - 对象键分隔符
 
 #### 保留类型（不能用作变量名）

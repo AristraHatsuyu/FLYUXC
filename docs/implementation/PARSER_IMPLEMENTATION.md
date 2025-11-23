@@ -1,6 +1,6 @@
-# FLYUX Parser 实现计划 V2.0
+# FLYUX Parser 实现计划
 
-**基于**: PARSER_DESIGN_V2.md  
+**基于**: PARSER_DESIGN.md  
 **目标**: 生产级Parser，对标Rust/Go编译器  
 **预计时间**: 14-21天
 

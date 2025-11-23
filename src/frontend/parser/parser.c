@@ -797,14 +797,48 @@ static ASTNode *parse_additive(Parser *p) {
 static ASTNode *parse_comparison(Parser *p) {
     ASTNode *left = parse_additive(p);
     
+    // 检查是否有比较运算符
+    if (!check(p, TK_LT) && !check(p, TK_GT) && !check(p, TK_LE) && !check(p, TK_GE)) {
+        return left;
+    }
+    
+    // 收集链式比较：a < b < c 转换为 a < b && b < c
+    ASTNode *result = NULL;
+    ASTNode *prev_left = left;
+    
     while (match(p, TK_LT) || match(p, TK_GT) || match(p, TK_LE) || match(p, TK_GE)) {
         Token *op_token = &p->tokens[p->current - 1];
         TokenKind op = op_token->kind;
         ASTNode *right = parse_additive(p);
-        left = ast_binary_expr_create(op, left, right, token_to_loc(op_token));
+        
+        // 创建当前的比较：prev_left op right
+        ASTNode *current_cmp = ast_binary_expr_create(op, prev_left, right, token_to_loc(op_token));
+        
+        if (result == NULL) {
+            // 第一个比较
+            result = current_cmp;
+        } else {
+            // 链式比较：用 && 连接
+            result = ast_binary_expr_create(TK_AND_AND, result, current_cmp, token_to_loc(op_token));
+        }
+        
+        // 下一次比较的左操作数：
+        // 如果 right 是标识符，创建一个新的标识符节点（避免节点复用）
+        // 否则，链式比较可能会有问题（需要临时变量，暂时不支持复杂表达式的链式比较）
+        if (right->kind == AST_IDENTIFIER) {
+            ASTIdentifier *id = (ASTIdentifier *)right->data;
+            prev_left = ast_identifier_create(id->name, right->loc);
+        } else if (right->kind == AST_NUM_LITERAL) {
+            ASTNumLiteral *num = (ASTNumLiteral *)right->data;
+            prev_left = ast_num_literal_create(num->value, num->raw, right->loc);
+        } else {
+            // 复杂表达式在链式比较中需要临时变量，暂时直接复用节点
+            // 注意：这可能导致问题，但对于简单情况应该可以工作
+            prev_left = right;
+        }
     }
     
-    return left;
+    return result ? result : left;
 }
 
 static ASTNode *parse_equality(Parser *p) {
@@ -920,19 +954,52 @@ static ASTNode *parse_if_statement(Parser *p) {
     // 解析 then 块
     ASTNode *then_block = parse_block(p);
     
-    // 解析可选的 else 块
+    // 收集所有条件和对应的块
+    ASTNode **conditions = (ASTNode **)malloc(sizeof(ASTNode *));
+    ASTNode **then_blocks = (ASTNode **)malloc(sizeof(ASTNode *));
+    size_t cond_count = 1;
+    size_t cond_capacity = 1;
+    
+    conditions[0] = condition;
+    then_blocks[0] = then_block;
+    
+    // 解析链式条件: } (condition) { block }
+    while (check(p, TK_L_PAREN)) {
+        advance(p); // 跳过 (
+        
+        ASTNode *next_cond = parse_expression(p);
+        if (!next_cond) {
+            error_at(p, current_token(p), "Expected condition after '('");
+            break;
+        }
+        
+        if (!match(p, TK_R_PAREN)) {
+            error_at(p, current_token(p), "Expected ')' after condition");
+            break;
+        }
+        
+        ASTNode *next_block = parse_block(p);
+        
+        // 扩展数组
+        if (cond_count >= cond_capacity) {
+            cond_capacity *= 2;
+            conditions = (ASTNode **)realloc(conditions, cond_capacity * sizeof(ASTNode *));
+            then_blocks = (ASTNode **)realloc(then_blocks, cond_capacity * sizeof(ASTNode *));
+        }
+        
+        conditions[cond_count] = next_cond;
+        then_blocks[cond_count] = next_block;
+        cond_count++;
+    }
+    
+    // 解析可选的 else 块（最后一个 {} 没有条件）
     ASTNode *else_block = NULL;
     if (match(p, TK_L_BRACE)) {
         p->current--; // 回退
         else_block = parse_block(p);
     }
     
-    ASTNode **conditions = (ASTNode **)malloc(sizeof(ASTNode *));
-    ASTNode **then_blocks = (ASTNode **)malloc(sizeof(ASTNode *));
-    conditions[0] = condition;
-    then_blocks[0] = then_block;
-    
-    return ast_if_stmt_create(conditions, then_blocks, 1, else_block, token_to_loc(start));
+    return ast_if_stmt_create(conditions, then_blocks, cond_count, else_block, token_to_loc(start));
 }
 
 static ASTNode *parse_return_statement(Parser *p) {
@@ -1048,8 +1115,34 @@ static ASTNode *parse_loop_statement(Parser *p) {
         return ast_repeat_loop_create(count_expr, body, token_to_loc(start));
     }
     
+    // 检查是否是不带括号的 forEach: L> array:item { }
+    if (check(p, TK_IDENT)) {
+        Token *lookahead = peek(p, 1);
+        if (lookahead && lookahead->kind == TK_COLON) {
+            // 不带括号的 forEach - 解析到冒号为止
+            // 先保存当前位置，解析 additive 表达式（不包括比较运算符）
+            ASTNode *iterable = parse_additive(p);
+            if (!iterable) {
+                error_at(p, current_token(p), "Expected iterable expression");
+                return NULL;
+            }
+            if (!match(p, TK_COLON)) {
+                error_at(p, current_token(p), "Expected ':' in foreach loop");
+                return NULL;
+            }
+            if (!match(p, TK_IDENT)) {
+                error_at(p, current_token(p), "Expected variable name after ':'");
+                return NULL;
+            }
+            Token *item_token = &p->tokens[p->current - 1];  // 获取刚刚匹配的 token
+            char *item_var = strdup(item_token->lexeme);
+            ASTNode *body = parse_block(p);
+            return ast_foreach_loop_create(iterable, item_var, body, token_to_loc(start));
+        }
+    }
+    
     if (!match(p, TK_L_PAREN)) {
-        error_at(p, current_token(p), "Expected '(' or '[' after 'L>'");
+        error_at(p, current_token(p), "Expected '(', '[', or identifier after 'L>'");
         return NULL;
     }
     

@@ -411,34 +411,43 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             ASTIfStmt *ifstmt = (ASTIfStmt *)node->data;
             
             if (ifstmt->cond_count > 0) {
-                char *cond = codegen_expr(gen, ifstmt->conditions[0]);
-                
-                // 使用 value_is_truthy 将 Value* 转换为 i32
-                char *truthy = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
-                        truthy, cond);
-                
-                // 转换为 i1
-                char *cond_bool = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", cond_bool, truthy);
-                
-                char *then_label = new_label(gen);
-                char *else_label = new_label(gen);
                 char *end_label = new_label(gen);
                 
-                // 条件跳转
-                fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n",
-                        cond_bool, then_label, else_label);
-                
-                // Then 块
-                fprintf(gen->code_buf, "\n%s:\n", then_label);
-                if (ifstmt->then_blocks[0]) {
-                    codegen_stmt(gen, ifstmt->then_blocks[0]);
+                // 处理每个条件（else-if 链）
+                for (size_t i = 0; i < ifstmt->cond_count; i++) {
+                    // 评估条件
+                    char *cond = codegen_expr(gen, ifstmt->conditions[i]);
+                    char *truthy = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                            truthy, cond);
+                    char *cond_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", cond_bool, truthy);
+                    
+                    char *then_label = new_label(gen);
+                    char *next_label = new_label(gen);
+                    
+                    // 如果条件为真，跳转到 then 块，否则跳转到下一个条件
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n",
+                            cond_bool, then_label, next_label);
+                    
+                    // Then 块
+                    fprintf(gen->code_buf, "\n%s:\n", then_label);
+                    if (ifstmt->then_blocks[i]) {
+                        codegen_stmt(gen, ifstmt->then_blocks[i]);
+                    }
+                    fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+                    
+                    // 下一个条件标签（else-if 或 else）
+                    fprintf(gen->code_buf, "\n%s:\n", next_label);
+                    
+                    free(cond);
+                    free(truthy);
+                    free(cond_bool);
+                    free(then_label);
+                    free(next_label);
                 }
-                fprintf(gen->code_buf, "  br label %%%s\n", end_label);
                 
-                // Else 块
-                fprintf(gen->code_buf, "\n%s:\n", else_label);
+                // 如果有 else 块，在这里执行
                 if (ifstmt->else_block) {
                     codegen_stmt(gen, ifstmt->else_block);
                 }
@@ -447,11 +456,6 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // End 标签
                 fprintf(gen->code_buf, "\n%s:\n", end_label);
                 
-                free(cond);
-                free(truthy);
-                free(cond_bool);
-                free(then_label);
-                free(else_label);
                 free(end_label);
             }
             break;

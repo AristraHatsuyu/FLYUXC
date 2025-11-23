@@ -1,4 +1,4 @@
-# FLYUX Parser 设计文档 V2.0 - 现代化生产级实现
+# FLYUX Parser 设计文档 - 现代化生产级实现
 
 **设计理念**: 参考 Rust Compiler (rustc) 和 Go Compiler (gc) 的现代架构  
 **更新日期**: 2025-11-17  
