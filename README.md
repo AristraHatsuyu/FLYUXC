@@ -86,7 +86,7 @@ cmake --build build
 Create `hello.fx`:
 
 ```flyux
-"Hello, FLYUX! 🎉".print;
+"Hello, FLYUX! 🎉".>print
 ```
 
 Compile:

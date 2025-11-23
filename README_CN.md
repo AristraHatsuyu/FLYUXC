@@ -86,7 +86,7 @@ cmake --build build
 创建 `hello.fx`:
 
 ```flyux
-"Hello, FLYUX! 🎉".print;
+"Hello, FLYUX! 🎉".>print
 ```
 
 编译:
