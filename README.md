@@ -11,7 +11,7 @@
 
 [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Features](#-features) • [Architecture](#-architecture) • [Contributing](#-contributing)
 
-[🇨🇳 中文](README_CN.md) | 🇺🇸 **English**
+[中文](README_CN.md) |  **English**
 
 </div>
 
@@ -302,7 +302,7 @@ T> {
 
 See **[docs/reference/FLYUX_SYNTAX.md](docs/reference/FLYUX_SYNTAX.md)** for complete syntax.
 
-## 🤝 Contributing
+## Contributing
 
 Contributions, bug reports, and suggestions are welcome!
 
@@ -323,11 +323,11 @@ Contributions, bug reports, and suggestions are welcome!
 
 See **[CONTRIBUTING.md](CONTRIBUTING.md)** for detailed guidelines.
 
-## 📜 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 FLYUXC's design is inspired by:
 
@@ -336,7 +336,7 @@ FLYUXC's design is inspired by:
 - **Go** - Clean syntax design
 - **TypeScript** - Type inference system
 
-## 📞 Contact
+## Contact
 
 - **Documentation**: `*.md` files in project root
 - **Bug Reports**: [GitHub Issues](https://github.com/AristraHatsuyu/FLYUXC/issues)
@@ -345,8 +345,6 @@ FLYUXC's design is inspired by:
 ---
 
 <div align="center">
-
-**Made with ❤️ and ☕**
 
 [⬆ Back to Top](#flyux-compiler-flyuxc)
 
