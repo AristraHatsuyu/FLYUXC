@@ -383,21 +383,30 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
                 int is_object_key = 0;
                 if (after == ':') {
                     /* 区分类型注解/变量定义、对象 key、以及 foreach 循环中的迭代变量 */
-                    // 检查是否是 foreach: L> (arr : item)
-                    // 向前搜索，看是否有 "L>" 跟着 "("
+                    // 检查是否是 foreach: L> (arr : item) 或 L>arr:item
+                    // 向前搜索，看是否有 "L>" 后面跟 "(" 或直接跟标识符
                     int is_foreach = 0;
-                    if (start >= 3) {
+                    if (start >= 2) {
                         // 向前搜索 L> (，允许中间有空格
                         size_t k = start - 1;
                         while (k > 0 && (normalized_source[k] == ' ' || normalized_source[k] == '\t')) {
                             k--;
                         }
+                        
+                        // 情况1: L> (arr:item)
                         if (k > 0 && normalized_source[k] == '(') {
                             k--;
                             while (k > 0 && (normalized_source[k] == ' ' || normalized_source[k] == '\t')) {
                                 k--;
                             }
                             if (k >= 1 && normalized_source[k] == '>' && normalized_source[k-1] == 'L') {
+                                is_foreach = 1;
+                            }
+                        }
+                        // 情况2: L>arr:item (不带括号)
+                        // k 此时指向 arr 的前一个字符（应该是 >）
+                        else if (k >= 1 && normalized_source[k] == '>') {
+                            if (k >= 1 && normalized_source[k-1] == 'L') {
                                 is_foreach = 1;
                             }
                         }
