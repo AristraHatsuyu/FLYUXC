@@ -11,7 +11,7 @@
 
 [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Features](#-features) • [Architecture](#-architecture) • [Contributing](#-contributing)
 
-[中文](README_CN.md) |  **English**
+[中文](/docs/README_CN.md) |  **English**
 
 </div>
 
