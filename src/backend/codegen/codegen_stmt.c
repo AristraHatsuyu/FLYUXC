@@ -69,7 +69,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             if (!already_defined) {
                 // 首次定义：注册变量并分配栈空间
                 register_symbol(gen, decl->name);
-                fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", decl->name);
+                
+                // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
+                FILE *alloca_target = gen->entry_alloca_buf ? gen->entry_alloca_buf : gen->code_buf;
+                fprintf(alloca_target, "  %%%s = alloca %%struct.Value*\n", decl->name);
             }
             // 如果已定义，则变成重新赋值（只更新值，不重新 alloca）
             
@@ -127,7 +130,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 如果变量未定义，先分配空间并注册
                 if (!is_symbol_defined(gen, target->name)) {
                     register_symbol(gen, target->name);
-                    fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", target->name);
+                    
+                    // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
+                    FILE *alloca_target = gen->entry_alloca_buf ? gen->entry_alloca_buf : gen->code_buf;
+                    fprintf(alloca_target, "  %%%s = alloca %%struct.Value*\n", target->name);
                 }
                 
                 // 如果赋值的是null，需要保持变量的declared_type
@@ -262,6 +268,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             
             // 标记进入 Try-Catch 块
             int old_in_try_catch = gen->in_try_catch;
+            char *old_try_catch_label = gen->try_catch_label;
             gen->in_try_catch = 1;
             
             // catch参数应该已经在函数开头alloca过了（通过预扫描）
@@ -279,6 +286,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             char *catch_label = new_label(gen);
             char *finally_label = new_label(gen);
             char *end_label = new_label(gen);
+            
+            // 设置当前的catch标签，供表达式代码生成使用
+            gen->try_catch_label = catch_label;
             
             // 执行try块（需要在每条语句后检查错误）
             if (try_stmt->try_block && try_stmt->try_block->kind == AST_BLOCK) {
@@ -397,8 +407,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             // 结束标签
             fprintf(gen->code_buf, "%s:\n", end_label);
             
-            // 恢复 Try-Catch 标志
+            // 恢复 Try-Catch 标志和标签
             gen->in_try_catch = old_in_try_catch;
+            gen->try_catch_label = old_try_catch_label;
             
             free(catch_label);
             free(finally_label);
@@ -551,7 +562,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 注册循环变量
                 if (!is_symbol_defined(gen, item_var)) {
                     register_symbol(gen, item_var);
-                    fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", item_var);
+                    
+                    // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
+                    FILE *alloca_target = gen->entry_alloca_buf ? gen->entry_alloca_buf : gen->code_buf;
+                    fprintf(alloca_target, "  %%%s = alloca %%struct.Value*\n", item_var);
                 }
                 
                 // 获取数组长度

@@ -37,6 +37,7 @@ typedef struct CodeGen {
     FILE *output;           /* 最终输出文件 */
     FILE *globals_buf;      /* 全局声明缓冲区 */
     FILE *code_buf;         /* 代码缓冲区 */
+    FILE *entry_alloca_buf; /* 函数入口alloca缓冲区 */
     int temp_count;         /* 临时变量计数器 */
     int label_count;        /* 标签计数器 */
     int string_count;       /* 字符串常量计数器 */
@@ -45,6 +46,7 @@ typedef struct CodeGen {
     SymbolEntry *symbols;   /* 符号表 - 已定义的变量 */
     const char *current_var_name;  /* 当前正在赋值的变量名（用于数组/对象跟踪） */
     int in_try_catch;       /* 是否在 Try-Catch 块中 */
+    char *try_catch_label;  /* 当前 Try-Catch 的 catch 标签 */
 } CodeGen;
 
 /* 创建代码生成器 */

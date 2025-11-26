@@ -728,11 +728,18 @@ static ASTNode *parse_postfix(Parser *p) {
             } else {
                 // 无括号 - 零参数函数调用: obj.>func → func(obj)
                 // 根据 FLYUX_SYNTAX.md: array.>len.>🐮🐴(2)  # 链式调用,左边作为第一个参数
+                
+                // 检测 ! 后缀（表示错误时抛出异常）
+                int throw_on_error = 0;
+                if (match(p, TK_BANG)) {  // ! 是 TK_BANG
+                    throw_on_error = 1;
+                }
+                
                 ASTNode **all_args = (ASTNode **)malloc(1 * sizeof(ASTNode *));
                 all_args[0] = expr;  // 左边的值作为唯一参数
                 
                 ASTNode *callee = ast_identifier_create(method_name, expr->loc);
-                expr = ast_call_expr_create(callee, all_args, 1, 0, expr->loc);
+                expr = ast_call_expr_create(callee, all_args, 1, throw_on_error, expr->loc);
             }
         }
         // 后缀 ++ 和 --

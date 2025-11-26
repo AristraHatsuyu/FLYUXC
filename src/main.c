@@ -80,6 +80,12 @@ int main(int argc, char *argv[])
 
         /* Step 1: 规范化代码 */
         double t3 = get_time_ms();
+        
+        // DEBUG: 输出原始代码
+        if (getenv("DEBUG_NORM")) {
+            fprintf(stderr, "=== SOURCE CODE ===\n%s\n=== END SOURCE ===\n", source_code);
+        }
+        
         NormalizeResult norm_result = flyux_normalize(source_code);
         free(source_code);
 
@@ -88,6 +94,11 @@ int main(int argc, char *argv[])
                     norm_result.error_msg ? norm_result.error_msg : "Unknown error");
             normalize_result_free(&norm_result);
             return 1;
+        }
+
+        // DEBUG: 输出normalize结果
+        if (getenv("DEBUG_NORM")) {
+            fprintf(stderr, "=== NORMALIZED CODE ===\n%s\n=== END ===\n", norm_result.normalized);
         }
 
         /* Step 2: 变量名映射 */
@@ -235,9 +246,24 @@ int main(int argc, char *argv[])
                 } else {
                     // 从内存中的 IR 字符串编译
                     if (ir_buffer) {
+                        // 如果有DEBUG_NORM，输出IR以便调试
+                        if (getenv("DEBUG_NORM")) {
+                            fprintf(stderr, "\n=== GENERATED IR (first 5000 chars) ===\n");
+                            fprintf(stderr, "%.5000s\n", ir_buffer);
+                            fprintf(stderr, "=== END IR ===\n\n");
+                        }
+                        
                         if (llvm_compile_string_to_executable(ir_buffer, NULL, executable_name, opt_level) != 0) {
                             fprintf(stderr, "%sLLVM compilation failed:%s %s\n", 
                                     COLOR_RED, COLOR_RESET, llvm_get_last_error());
+                            
+                            // 验证失败时输出更多IR以便调试
+                            if (getenv("DEBUG_NORM")) {
+                                fprintf(stderr, "\n=== FULL IR ===\n");
+                                fprintf(stderr, "%s\n", ir_buffer);
+                                fprintf(stderr, "=== END FULL IR ===\n");
+                            }
+                            
                             has_errors = true;
                         }
                         free(ir_buffer);

@@ -274,7 +274,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     fprintf(gen->code_buf, "  call void @value_print(%%struct.Value* %s)\n", arg);
                     free(arg);
                 }
-                return NULL;
+                // 返回 true 表示成功输出
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 1)\n", result);
+                return result;
             }
             
             // 特殊处理 println 函数（每个参数后换行）
@@ -293,7 +296,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                         free(arg);
                     }
                 }
-                return NULL;
+                // 返回 true 表示成功输出
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 1)\n", result);
+                return result;
             }
             
             // 特殊处理 printf 函数（格式化输出）
@@ -337,7 +343,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
                 
                 free(fmt_arg);
-                return NULL;
+                // 返回 true 表示成功输出
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 1)\n", result);
+                return result;
             }
             
             // 特殊处理 typeOf 函数
@@ -385,9 +394,65 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 
                 // 处理错误
                 if (call->throw_on_error == 0) {
-                    // 无 ! 后缀：清除错误状态
+                    // 无 ! 后缀：检查错误，如果有错误则返回null并清除错误状态
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    
+                    char *ok_label = new_label(gen);
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, ok_label);
+                    
+                    // OK分支：保持原结果
+                    fprintf(gen->code_buf, "%s:\n", ok_label);
+                    fprintf(gen->code_buf, "  br label %%%s\n", continue_label);
+                    
+                    // 错误分支：清除错误并返回null
+                    fprintf(gen->code_buf, "%s:\n", error_label);
                     fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
-                } else if (!gen->in_try_catch) {
+                    char *null_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_val);
+                    fprintf(gen->code_buf, "  br label %%%s\n", continue_label);
+                    
+                    // 继续执行 - 使用PHI选择值
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    char *result_phi = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = phi %%struct.Value* [ %s, %%%s ], [ %s, %%%s ]\n", 
+                            result_phi, result, ok_label, null_val, error_label);
+                    
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(ok_label);
+                    free(error_label);
+                    free(continue_label);
+                    
+                    return result_phi;
+                } else if (gen->in_try_catch) {
+                    // 有 ! 后缀且在 Try-Catch 中：检查错误并跳转到catch标签
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    
+                    // 继续执行
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(continue_label);
+                } else {
                     // 有 ! 后缀且不在 Try-Catch 中：检查错误并终止
                     char *is_ok = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
@@ -414,7 +479,6 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     free(error_label);
                     free(continue_label);
                 }
-                // 如果在 Try-Catch 中，什么都不做（让 Try-Catch 处理）
                 
                 return result;
             }
@@ -463,6 +527,50 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_len(%%struct.Value* %s)\n", result, arg);
                 free(arg);
+                
+                // 错误处理
+                if (call->throw_on_error == 0) {
+                    fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
+                } else if (gen->in_try_catch) {
+                    // 有 ! 后缀且在 Try-Catch 中：检查错误并跳转到catch标签
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(continue_label);
+                } else {
+                    // 有 ! 后缀且不在 Try-Catch 中：检查错误并终止
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(error_label);
+                    free(continue_label);
+                }
+                
                 return result;
             }
             
@@ -1262,7 +1370,26 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 
                 if (call->throw_on_error == 0) {
                     fprintf(gen->code_buf, "  call %%struct.Value* @value_clear_error()\n");
-                } else if (!gen->in_try_catch) {
+                } else if (gen->in_try_catch) {
+                    // 有 ! 后缀且在 Try-Catch 中：检查错误并跳转到catch标签
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(continue_label);
+                } else {
+                    // 有 ! 后缀且不在 Try-Catch 中：检查错误并终止
                     char *is_ok = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
                     char *ok_bool = new_temp(gen);

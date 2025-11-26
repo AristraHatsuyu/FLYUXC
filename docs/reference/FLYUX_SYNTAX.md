@@ -445,9 +445,9 @@ FLYUX提供三类文件操作函数:
 
 ```flyux
 content := readFile("config.txt")
-if content != null {
+if (content != null) {
     print("文件内容:", content)
-} else {
+} {
     print("读取失败:", lastError())
 }
 ```
@@ -463,7 +463,7 @@ if content != null {
 
 ```flyux
 success := writeFile("output.txt", "Hello, FLYUX!")
-if success {
+if (success) {
     print("写入成功")
 }
 ```
@@ -484,12 +484,12 @@ appendFile("log.txt", "2025-11-20: 处理完成\n")
 ```flyux
 // 读取图片文件
 buffer :[obj]= readBytes("image.png")
-if buffer != null {
+if (buffer != null) {
     print(buffer)               // Buffer { size: 15234, type: "Buffer" }
     print("文件大小:", buffer.size, "字节")
     
     // 检查PNG文件头
-    if buffer[0] == 0x89 && buffer[1] == 0x50 {
+    if (buffer[0] == 0x89 && buffer[1] == 0x50) {
         print("确认为PNG格式")
     }
 }
@@ -529,10 +529,10 @@ writeBytes("backup.bin", buffer)
 ```flyux
 // 流式读取大文件
 file :[obj]= openFile("large.log", "r")
-if file != null {
+if (file != null) {
     L> [10000] {  // 最多读10000行
         line := file.readLine()
-        if line == null { break }
+        if (line == null) { break }
         print(line)
     }
     file.close()
@@ -543,9 +543,9 @@ if file != null {
 检查文件是否存在。
 
 ```flyux
-if fileExists("config.json") {
+if (fileExists("config.json")) {
     config := readFile("config.json")
-} else {
+} {
     print("配置文件不存在")
 }
 ```
@@ -554,9 +554,9 @@ if fileExists("config.json") {
 删除文件。成功返回true,失败返回false。
 
 ```flyux
-if deleteFile("temp.txt") {
+if (deleteFile("temp.txt")) {
     print("删除成功")
-} else {
+} {
     print("删除失败:", lastError())
 }
 ```
@@ -566,7 +566,7 @@ if deleteFile("temp.txt") {
 
 ```flyux
 size := getFileSize("data.txt")
-if size > 0 {
+if (size > 0) {
     print("文件大小:", size, "字节")
 }
 ```
@@ -580,7 +580,7 @@ if size > 0 {
 
 ```flyux
 files :[str]= listDir("./testfx")
-if files != null {
+if (files != null) {
     L> (files : filename) {
         print("文件:", filename)
     }
@@ -591,7 +591,7 @@ if files != null {
 检查目录是否存在。
 
 ```flyux
-if !dirExists("output") {
+if (!dirExists("output")) {
     makeDir("output")
 }
 ```
@@ -600,7 +600,7 @@ if !dirExists("output") {
 创建单级目录。目录已存在返回false。
 
 ```flyux
-if makeDir("logs") {
+if (makeDir("logs")) {
     print("目录创建成功")
 }
 ```
@@ -935,7 +935,7 @@ first_byte := buffer[0]
 second_byte := buffer[1]
 
 // 检查文件头
-if buffer[0] == 0xFF && buffer[1] == 0xD8 {
+if (buffer[0] == 0xFF && buffer[1] == 0xD8) {
     print("JPEG格式")
 }
 ```
@@ -949,7 +949,7 @@ header := buffer.slice(0, 10)
 text := buffer.toString("utf8")
 
 // toArray() - 转换为数字数组(仅小数据)
-if buffer.size < 100 {
+if (buffer.size < 100) {
     arr := buffer.toArray()
 }
 ```
@@ -1003,11 +1003,11 @@ file.close()
 ```flyux
 // 流式读取大文件
 file := openFile("large.log", "r")
-if file != null {
+if (file != null) {
     count := 0
     L> [100000] {
         line := file.readLine()
-        if line == null { break }
+        if (line == null) { break }
         count = count + 1
     }
     print("总行数:", count)
@@ -1029,7 +1029,7 @@ print(file)
 **获取方式**:
 ```flyux
 content := readFile("missing.txt")
-if content == null {
+if (content == null) {
     err := lastErrorObj()
     print(err)
 }
@@ -1057,17 +1057,17 @@ print(err)
 ```flyux
 // 小文件 - 直接读取
 content :[str]= readFile("config.txt")
-if content != null {
+if (content != null) {
     lines := split(content, "\n")
     print("行数:", len(lines))
 }
 
 // 大文件 - 流式处理
 file :[obj]= openFile("large.log", "r")
-if file != null {
+if (file != null) {
     L> [10000] {
         line := file.readLine()
-        if line == null { break }
+        if (line == null) { break }
         processLine(line)
     }
     file.close()
@@ -1078,11 +1078,11 @@ if file != null {
 ```flyux
 // 读取图片
 buffer :[obj]= readBytes("photo.jpg")
-if buffer != null {
+if (buffer != null) {
     print("图片大小:", buffer.size)
     
     // 检查JPEG格式
-    if buffer[0] == 0xFF && buffer[1] == 0xD8 {
+    if (buffer[0] == 0xFF && buffer[1] == 0xD8) {
         print("JPEG格式确认")
     }
     
@@ -1095,13 +1095,13 @@ if buffer != null {
 ### 模式3: 错误处理
 ```flyux
 result := readFile("data.txt")
-if result == null {
+if (result == null) {
     err := lastErrorObj()
-    if err.code == 1001 {
+    if (err.code) == 1001 {
         print("文件不存在:", err.message)
-    } else if err.code == 1002 {
+    } (err.code == 1002) {
         print("权限不足:", err.message)
-    } else {
+    } {
         print("未知错误:", err)
     }
 }
@@ -1110,12 +1110,12 @@ if result == null {
 ### 模式4: 批量文件处理
 ```flyux
 files := listDir("./data")
-if files != null {
+if (files != null) {
     L> (files : filename) {
-        if endsWith(filename, ".txt") {
+        if (endsWith(filename, ".txt")) {
             path := "./data/" + filename
             content := readFile(path)
-            if content != null {
+            if (content != null) {
                 processFile(filename, content)
             }
         }

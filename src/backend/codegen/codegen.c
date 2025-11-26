@@ -113,34 +113,55 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
         }
         
         // 始终创建 i32 @main() 作为程序入口
-        fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
-        
         if (has_main) {
             // 调用用户定义的main函数 (重命名为_flyux_main)
+            fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
             fprintf(gen->code_buf, "  %%user_main_result = call %%struct.Value* @_flyux_main()\n");
         } else {
             // 预扫描：收集所有需要在entry块alloca的变量（catch参数等）
             FILE *entry_alloca_buf = tmpfile();
+            FILE *main_body_buf = tmpfile();  // 单独的缓冲区保存main body
+            
+            // 暂时将code_buf指向main_body_buf，这样codegen_stmt写入的代码会到这个缓冲区
+            FILE *old_code_buf = gen->code_buf;
+            gen->code_buf = main_body_buf;
+            gen->entry_alloca_buf = entry_alloca_buf;  // 保存到gen中供codegen_stmt使用
+            
             for (size_t i = 0; i < prog->stmt_count; i++) {
                 if (prog->statements[i]->kind != AST_FUNC_DECL) {
                     collect_catch_params(gen, prog->statements[i], entry_alloca_buf);
                 }
             }
             
-            // 写入entry块的alloca语句
-            rewind(entry_alloca_buf);
-            char buffer[1024];
-            while (fgets(buffer, sizeof(buffer), entry_alloca_buf)) {
-                fputs(buffer, gen->code_buf);
-            }
-            fclose(entry_alloca_buf);
-            
-            // 执行所有顶层语句
+            // 执行所有顶层语句（这时候新变量的alloca会写入entry_alloca_buf，代码写入main_body_buf）
             for (size_t i = 0; i < prog->stmt_count; i++) {
                 if (prog->statements[i]->kind != AST_FUNC_DECL) {
                     codegen_stmt(gen, prog->statements[i]);
                 }
             }
+            
+            // 恢复code_buf
+            gen->code_buf = old_code_buf;
+            gen->entry_alloca_buf = NULL;
+            
+            // 现在开始写入main函数
+            fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
+            
+            // 1. 先写入所有alloca
+            rewind(entry_alloca_buf);
+            char buffer[1024];
+            while (fgets(buffer, sizeof(buffer), entry_alloca_buf)) {
+                fputs(buffer, gen->code_buf);
+            }
+            
+            // 2. 再写入函数体代码
+            rewind(main_body_buf);
+            while (fgets(buffer, sizeof(buffer), main_body_buf)) {
+                fputs(buffer, gen->code_buf);
+            }
+            
+            fclose(entry_alloca_buf);
+            fclose(main_body_buf);
         }
         
         // 在程序结束前条件性输出换行,防止shell提示符与输出混在一起

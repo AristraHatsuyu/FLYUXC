@@ -15,7 +15,10 @@ char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, 
             fprintf(gen->code_buf, "  call void @value_print(%%struct.Value* %s)\n", arg);
             free(arg);
         }
-        return NULL;  // void return
+        // 返回 true 表示成功输出
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 1)\n", result);
+        return result;
     }
     
     // println - 每个参数后换行
@@ -33,7 +36,10 @@ char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, 
                 free(arg);
             }
         }
-        return NULL;  // void return
+        // 返回 true 表示成功输出
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 1)\n", result);
+        return result;
     }
     
     // printf - 格式化输出
@@ -77,7 +83,10 @@ char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, 
         }
         
         free(fmt_arg);
-        return NULL;  // void return
+        // 返回 true 表示成功输出
+        char *result = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 1)\n", result);
+        return result;
     }
     
     // typeOf - 获取值的类型

@@ -891,8 +891,14 @@ Value* value_power(Value *a, Value *b) {
 /* Value comparison */
 Value* value_equals(Value *a, Value *b) {
     if (!a || !b) return box_bool(a == b);
+    
+    // Handle null comparisons explicitly
+    if (a->type == VALUE_NULL || b->type == VALUE_NULL) {
+        return box_bool(a->type == VALUE_NULL && b->type == VALUE_NULL);
+    }
+    
     if (a->type != b->type) {
-        // Type coercion comparison
+        // Type coercion comparison (for non-null types)
         return box_bool(unbox_number(a) == unbox_number(b));
     }
     
@@ -1430,7 +1436,8 @@ Value* value_to_num(Value *v) {
             return box_number(v->data.number != 0 ? 1.0 : 0.0);
             
         case VALUE_NULL:
-            return box_number(0.0);
+            // null 传递：toNum(null) 返回 null，不设置错误
+            return box_null_typed(VALUE_NUMBER);
             
         default:
             set_runtime_status(FLYUX_TYPE_ERROR, "(toNum) Cannot convert array/object to number");
@@ -1985,8 +1992,9 @@ Value* value_to_float(Value *v) {
 Value* value_len(Value *v) {
     set_runtime_status(FLYUX_OK, NULL);
     
-    if (!v) {
-        return box_number(0);
+    if (!v || v->type == VALUE_NULL) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(len) argument must be a string, array, or object");
+        return box_null_typed(VALUE_NUMBER);
     }
     
     switch (v->type) {
@@ -1996,7 +2004,8 @@ Value* value_len(Value *v) {
         case VALUE_OBJECT:
             return box_number((double)v->array_size);
         default:
-            return box_number(0);
+            set_runtime_status(FLYUX_TYPE_ERROR, "(len) argument must be a string, array, or object");
+            return box_null_typed(VALUE_NUMBER);
     }
 }
 

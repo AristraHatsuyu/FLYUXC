@@ -289,15 +289,19 @@ static char* normalize_internal_newlines(const char* stmt) {
             unsigned char is_block = 0;
             if (last >= 0) {
                 char prev = result[last];
-                // 经验规则：出现在 ) / } / ] 之后的 { 是代码块；其他多为对象字面量场景（:=, =, (, [, , 等）
+                // 经验规则：出现在 ) / } / ] 之后的 { 是代码块
+                // 出现在 = / := / , / : / [ / ( 之后的 { 是对象字面量
                 if (prev == ')' || prev == '}' || prev == ']') {
                     is_block = 1;
-                } else {
+                } else if (prev == '=' || prev == ',' || prev == ':' || prev == '[' || prev == '(') {
                     is_block = 0;
+                } else {
+                    // 其他情况（如操作符、标识符后），默认为代码块
+                    is_block = 1;
                 }
             } else {
-                // 行首独立的 { ，保守视为对象字面量（几乎不会出现独立代码块从 { 开始的情况）
-                is_block = 0;
+                // 行首或文件开头的 { ，视为代码块（顶层代码块）
+                is_block = 1;
             }
 
             // 入栈（下一个深度）
@@ -350,6 +354,10 @@ static char* normalize_internal_newlines(const char* stmt) {
             // 检查当前是否在代码块中（而不是对象字面量中）
             unsigned char is_block = brace_is_block[brace_depth];
             
+            if (getenv("DEBUG_NORM")) {
+                fprintf(stderr, "[DEBUG] Newline at i=%d, brace_depth=%d, is_block=%d\n", i, brace_depth, is_block);
+            }
+            
             // 只在代码块中添加分号，对象字面量中保留换行
             if (is_block) {
                 int j = i + 1;
@@ -357,18 +365,38 @@ static char* normalize_internal_newlines(const char* stmt) {
                     j++;
                 }
                 if (j < (int)len && stmt[j] != '}') {
-                    // 检查当前输出末尾是否已经有 ';' / '{' / '('
+                    // 检查当前输出末尾（去除空格后）的最后字符
                     int last = out_idx - 1;
                     while (last >= 0 && (result[last] == ' ' || result[last] == '\t')) {
                         last--;
                     }
-                    if (last >= 0 && result[last] != ';' && result[last] != '{' && result[last] != '(') {
-                        result[out_idx++] = ';';
+                    
+                    if (getenv("DEBUG_NORM")) {
+                        fprintf(stderr, "[DEBUG] last=%d, last_char='%c', next_char='%c'\n", 
+                                last, last >= 0 ? result[last] : '?', stmt[j]);
                     }
+                    
+                    // 如果已经有分号、或者是开括号，则不添加
+                    if (last >= 0 && (result[last] == ';' || result[last] == '{' || result[last] == '(')) {
+                        // 跳过换行
+                        if (getenv("DEBUG_NORM")) {
+                            fprintf(stderr, "[DEBUG] Skipping semicolon (already have delimiter)\n");
+                        }
+                        continue;
+                    }
+                    
+                    // 否则添加分号
+                    if (getenv("DEBUG_NORM")) {
+                        fprintf(stderr, "[DEBUG] Adding semicolon\n");
+                    }
+                    result[out_idx++] = ';';
                     // 跳过该换行
                     continue;
                 } else {
                     // 块的结尾（后续是 '}'），跳过该换行，交由 '}' 分支统一补 ';'
+                    if (getenv("DEBUG_NORM")) {
+                        fprintf(stderr, "[DEBUG] Skipping newline before '}'\n");
+                    }
                     continue;
                 }
             } else {
@@ -407,6 +435,11 @@ NormalizeResult flyux_normalize(const char* source_code) {
         return result;
     }
     
+    // DEBUG
+    if (getenv("DEBUG_NORM")) {
+        fprintf(stderr, "=== AFTER REMOVE COMMENTS ===\n%s\n=== END ===\n", no_comments);
+    }
+    
     // Step 1.3: 验证变量声明（检查 := 左侧是否为有效标识符）
     char* validation_error = validate_variable_declarations(no_comments);
     if (validation_error) {
@@ -423,6 +456,11 @@ NormalizeResult flyux_normalize(const char* source_code) {
         result.error_msg = "Failed to normalize newlines";
         result.error_code = -1;
         return result;
+    }
+    
+    // DEBUG
+    if (getenv("DEBUG_NORM")) {
+        fprintf(stderr, "=== AFTER NORMALIZE NEWLINES ===\n%s\n=== END ===\n", normalized_newlines);
     }
     
     // Step 2: 分割语句
