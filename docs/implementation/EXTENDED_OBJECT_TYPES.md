@@ -216,15 +216,8 @@ outFile.close()
 
 **创建方式**:
 ```flyux
-// 手动创建错误
-err := createError("文件未找到", 404)
-
-// 系统自动创建(文件操作失败时)
-content := readFile("missing.txt")
-if content == null {
-    err := lastErrorObj()  // 获取Error对象
-    print(err)
-}
+// 系统创建(文件操作失败时)
+content := readFile("missing.txt")!
 ```
 
 **内部结构**:
@@ -247,20 +240,6 @@ typedef struct {
 **print输出**:
 ```
 Error { message: "文件未找到", code: 1001, errorType: "IOError" }
-```
-
-**示例**:
-```flyux
-// 错误处理
-result := readFile("config.json")
-if result == null {
-    err := lastErrorObj()
-    if err.code == 1001 {
-        print("文件不存在:", err.message)
-    } else {
-        print("未知错误:", err)
-    }
-}
 ```
 
 ---
@@ -323,9 +302,6 @@ print(typeOf(buffer))        // "Buffer"
 
 file := openFile("test.txt", "r")
 print(typeOf(file))          // "FileHandle"
-
-err := createError("test", 1)
-print(typeOf(err))           // "Error"
 
 normal := { a: 1, b: 2 }
 print(typeOf(normal))        // "obj"
@@ -613,9 +589,7 @@ if dir != null {
 
 ### Phase 5: Error类型实现
 1. 定义 `ErrorObject` 结构
-2. 实现 `createError(message, code)`
-3. 实现 `lastErrorObj()` - 获取Error对象
-4. 集成到文件I/O错误处理
+2. 集成到文件I/O错误处理
 
 ### Phase 6: 其他扩展类型(可选)
 1. Directory类型
@@ -737,10 +711,6 @@ print("Buffer对象:", buffer)  // 不会输出MB级数据
 file := openFile("test.txt", "r")
 print("FileHandle对象:", file)
 file.close()
-
-// Error - 仅元信息
-err := createError("测试错误", 999)
-print("Error对象:", err)
 ```
 
 ### 测试5: 属性访问
