@@ -24,7 +24,7 @@ c :[num]= 123.456           // 显式 num 类型的变量
 d :[str]= "Hello"           // 显式 str 类型的变量
 e :[bl]= true               // 显式 bl 类型的变量
 f :[obj]= {aaa: "bbb", ccc: ["ddd", "eee"]}  // 显式 obj 类型
-arr :[num]= [1, 2, 3]       // num 类型数组
+arr :[obj]= [1, 2, 3]       // obj 类型数组
 ```
 
 #### 支持的类型
