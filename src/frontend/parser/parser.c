@@ -1024,6 +1024,20 @@ static ASTNode *parse_return_statement(Parser *p) {
     return ast_return_stmt_create(value, token_to_loc(start));
 }
 
+static ASTNode *parse_break_statement(Parser *p) {
+    Token *start = current_token(p);
+    
+    if (!match(p, TK_KW_BREAK)) {
+        return NULL;
+    }
+    
+    // break 不需要任何参数
+    ASTNode *node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->kind = AST_BREAK_STMT;
+    node->loc = token_to_loc(start);
+    return node;
+}
+
 static ASTNode *parse_try_statement(Parser *p) {
     Token *start = current_token(p);
     
@@ -1514,6 +1528,11 @@ static ASTNode *parse_statement(Parser *p) {
     // Return 语句
     if (check(p, TK_KW_RETURN)) {
         return parse_return_statement(p);
+    }
+    
+    // Break 语句
+    if (check(p, TK_KW_BREAK)) {
+        return parse_break_statement(p);
     }
     
     // Try 语句

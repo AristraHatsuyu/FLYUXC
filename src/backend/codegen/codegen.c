@@ -28,6 +28,8 @@ CodeGen *codegen_create(FILE *output) {
     gen->symbols = NULL;
     gen->current_var_name = NULL;
     gen->in_try_catch = 0;  /* 初始不在 Try-Catch 块中 */
+    gen->try_catch_label = NULL;
+    gen->loop_end_label = NULL;  /* 初始不在循环中 */
     
     return gen;
 }

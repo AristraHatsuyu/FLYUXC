@@ -47,6 +47,7 @@ typedef struct CodeGen {
     const char *current_var_name;  /* 当前正在赋值的变量名（用于数组/对象跟踪） */
     int in_try_catch;       /* 是否在 Try-Catch 块中 */
     char *try_catch_label;  /* 当前 Try-Catch 的 catch 标签 */
+    char *loop_end_label;   /* 当前循环的结束标签（用于 break） */
 } CodeGen;
 
 /* 创建代码生成器 */

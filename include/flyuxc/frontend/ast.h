@@ -26,6 +26,7 @@ typedef enum ASTNodeKind {
     AST_IF_STMT,         /* if语句 */
     AST_LOOP_STMT,       /* L>循环语句 */
     AST_RETURN_STMT,     /* R>返回语句 */
+    AST_BREAK_STMT,      /* break语句 */
     AST_TRY_STMT,        /* T>异常处理语句 */
     AST_BLOCK,           /* 代码块: { ... } */
     

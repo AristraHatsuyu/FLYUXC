@@ -263,6 +263,16 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             break;
         }
         
+        case AST_BREAK_STMT: {
+            if (gen->loop_end_label) {
+                // 跳转到循环结束标签
+                fprintf(gen->code_buf, "  br label %%%s\n", gen->loop_end_label);
+            } else {
+                fprintf(stderr, "Error: break statement outside of loop\n");
+            }
+            break;
+        }
+        
         case AST_TRY_STMT: {
             ASTTryStmt *try_stmt = (ASTTryStmt *)node->data;
             
@@ -526,9 +536,17 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 
                 // 循环体
                 fprintf(gen->code_buf, "\n%s:\n", loop_body);
+                
+                // 保存并设置 loop_end_label 用于 break
+                char *old_loop_end_repeat = gen->loop_end_label;
+                gen->loop_end_label = loop_end;
+                
                 if (loop->body) {
                     codegen_stmt(gen, loop->body);
                 }
+                
+                // 恢复 loop_end_label
+                gen->loop_end_label = old_loop_end_repeat;
                 
                 // i++
                 char *old_val = new_temp(gen);
@@ -615,10 +633,17 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 free(index_value);
                 free(element);
                 
+                // 保存并设置 loop_end_label 用于 break
+                char *old_loop_end_foreach = gen->loop_end_label;
+                gen->loop_end_label = loop_end;
+                
                 // 执行循环体
                 if (loop->body) {
                     codegen_stmt(gen, loop->body);
                 }
+                
+                // 恢复 loop_end_label
+                gen->loop_end_label = old_loop_end_foreach;
                 
                 // index++
                 char *old_index = new_temp(gen);
@@ -682,9 +707,18 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 
                 // 循环体
                 fprintf(gen->code_buf, "\n%s:\n", loop_body);
+                
+                // 保存并设置 loop_end_label 用于 break
+                char *old_loop_end_for = gen->loop_end_label;
+                gen->loop_end_label = loop_end;
+                
                 if (loop->body) {
                     codegen_stmt(gen, loop->body);
                 }
+                
+                // 恢复 loop_end_label
+                gen->loop_end_label = old_loop_end_for;
+                
                 fprintf(gen->code_buf, "  br label %%%s\n", loop_update);
                 
                 // 更新

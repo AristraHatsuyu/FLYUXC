@@ -46,6 +46,9 @@ static int is_reserved_identifier(const char* name, size_t len) {
     /* 关键字 if */
     if (len == 2 && name[0]=='i' && name[1]=='f') return 1;
 
+    /* break 关键字 */
+    if (len == 5 && name[0]=='b' && name[1]=='r' && name[2]=='e' && name[3]=='a' && name[4]=='k') return 1;
+
     /* L / R / T 用于 L> / R> / T>，简单起见直接视为保留 */
     if (len == 1 && (name[0] == 'L' || name[0] == 'R' || name[0] == 'T')) return 1;
 

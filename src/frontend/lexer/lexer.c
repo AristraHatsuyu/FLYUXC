@@ -249,7 +249,8 @@ static int is_builtin_func_name(const char* name) {
 /* 关键字 / 类型 / 布尔字面量检查 */
 static TokenKind classify_identifier(const char* lexeme) {
     /* 关键字 */
-    if (strcmp(lexeme, "if") == 0)   return TK_KW_IF;
+    if (strcmp(lexeme, "if") == 0)    return TK_KW_IF;
+    if (strcmp(lexeme, "break") == 0) return TK_KW_BREAK;
 
     /* 类型 */
     if (strcmp(lexeme, "num") == 0)  return TK_TYPE_NUM;
@@ -322,6 +323,7 @@ static const char* token_kind_name(TokenKind kind) {
         case TK_KW_IF:          return "KW_IF";
         case TK_KW_LOOP:        return "KW_LOOP";
         case TK_KW_RETURN:      return "KW_RETURN";
+        case TK_KW_BREAK:       return "KW_BREAK";
         case TK_KW_TRY:         return "KW_TRY";
 
         case TK_TYPE_NUM:       return "TYPE_NUM";
