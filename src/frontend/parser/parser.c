@@ -368,6 +368,7 @@ static ASTNode *parse_comparison(Parser *p);
 static ASTNode *parse_logical_and(Parser *p);
 static ASTNode *parse_logical_or(Parser *p);
 static ASTNode *parse_var_declaration(Parser *p);
+static ASTNode *parse_block(Parser *p);
 
 /* ============================================================================
  * Parser创建和销毁
@@ -520,8 +521,84 @@ static ASTNode *parse_primary(Parser *p) {
         return id;
     }
     
-    // 括号表达式
+    // 括号表达式或匿名函数
     if (match(p, TK_L_PAREN)) {
+        Token *lparen = &p->tokens[p->current - 1];
+        
+        // 检查是否是匿名函数: (params) { body }
+        // 通过向前查看来判断
+        size_t saved_pos = p->current;
+        bool is_anonymous_func = false;
+        
+        // 尝试跳过参数列表
+        int paren_depth = 1;
+        while (paren_depth > 0 && !check(p, TK_EOF)) {
+            if (match(p, TK_L_PAREN)) paren_depth++;
+            else if (match(p, TK_R_PAREN)) paren_depth--;
+            else advance(p);
+        }
+        
+        // 如果 ) 后面紧跟 {，那就是匿名函数
+        if (check(p, TK_L_BRACE)) {
+            is_anonymous_func = true;
+        }
+        
+        // 回溯到 ( 后面
+        p->current = saved_pos;
+        
+        if (is_anonymous_func) {
+            // 解析匿名函数: (a, b, c) { body }
+            char **params = NULL;
+            size_t param_count = 0;
+            size_t param_capacity = 0;
+            
+            while (!check(p, TK_R_PAREN) && !check(p, TK_EOF)) {
+                if (!check(p, TK_IDENT)) {
+                    error_at(p, current_token(p), "Expected parameter name");
+                    break;
+                }
+                
+                if (param_count >= param_capacity) {
+                    param_capacity = param_capacity == 0 ? 4 : param_capacity * 2;
+                    params = (char **)realloc(params, param_capacity * sizeof(char *));
+                }
+                
+                params[param_count++] = strdup(current_token(p)->lexeme);
+                advance(p);
+                
+                if (!match(p, TK_COMMA)) {
+                    break;
+                }
+            }
+            
+            if (!match(p, TK_R_PAREN)) {
+                error_at(p, current_token(p), "Expected ')' after parameters");
+                for (size_t i = 0; i < param_count; i++) free(params[i]);
+                free(params);
+                return NULL;
+            }
+            
+            // 解析函数体
+            ASTNode *body = parse_block(p);
+            
+            // 创建匿名函数节点 - 使用空名称
+            static int anon_func_counter = 0;
+            char anon_name[64];
+            snprintf(anon_name, sizeof(anon_name), "_anon_%d", anon_func_counter++);
+            
+            ASTNode *func_node = ast_node_create(AST_FUNC_DECL, token_to_loc(lparen));
+            ASTFuncDecl *func = (ASTFuncDecl *)malloc(sizeof(ASTFuncDecl));
+            func->name = strdup(anon_name);
+            func->params = params;
+            func->param_count = param_count;
+            func->return_type = NULL;
+            func->body = body;
+            func_node->data = func;
+            
+            return func_node;
+        }
+        
+        // 普通括号表达式
         ASTNode *expr = parse_expression(p);
         if (!match(p, TK_R_PAREN)) {
             error_at(p, current_token(p), "Expected ')' after expression");

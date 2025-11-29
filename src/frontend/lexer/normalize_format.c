@@ -76,12 +76,27 @@ static int is_call_paren(const char* s, int open_pos){
     return 0;
 }
 
-/* '(' 是否为函数定义的参数列表：左侧是 '='（或 ':=' 的 '='），右侧紧跟 '{' */
+/* '(' 是否为函数定义的参数列表：
+ * 1. 左侧是 '='（或 ':=' 的 '='），右侧紧跟 '{'  - 传统函数定义
+ * 2. 右侧紧跟 '{'，左侧是 ',' 或 '(' - 匿名函数作为参数
+ * 3. 右侧紧跟 '{'，没有左侧字符（开头） - 匿名函数在表达式开始位置
+ */
 static int is_function_param_list(const char* s, int open_pos, int close_pos){
-    int prev = prev_nonspace_idx(s, open_pos-1);
-    if (prev < 0 || s[prev] != '=') return 0;
     int next = next_nonspace_idx(s, close_pos+1);
-    return (s[next] == '{');
+    if (s[next] != '{') return 0;  // 右侧必须是 {
+    
+    int prev = prev_nonspace_idx(s, open_pos-1);
+    
+    // 没有左侧字符（匿名函数在开头）
+    if (prev < 0) return 1;
+    
+    // 传统函数定义：左侧是 '='
+    if (s[prev] == '=') return 1;
+    
+    // 匿名函数作为参数：左侧是 ',' 或 '('
+    if (s[prev] == ',' || s[prev] == '(') return 1;
+    
+    return 0;
 }
 
 /* ---------------- 优先级与操作符 ---------------- */

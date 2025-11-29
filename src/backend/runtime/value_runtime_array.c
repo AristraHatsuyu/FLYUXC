@@ -21,23 +21,16 @@ Value* value_push(Value *arr, Value *val) {
     }
     
     size_t new_size = arr->array_size + 1;
-    Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
+    Value **new_elements = (Value**)realloc(arr->data.pointer, new_size * sizeof(Value*));
     
-    // 复制旧元素
-    Value **old_elements = (Value**)arr->data.pointer;
-    for (size_t i = 0; i < arr->array_size; i++) {
-        new_elements[i] = old_elements[i];
-    }
+    // 添加新元素
     new_elements[arr->array_size] = val;
     
-    // 创建新数组
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->data.pointer = new_elements;
-    result->array_size = new_size;
+    // 原地修改数组
+    arr->data.pointer = new_elements;
+    arr->array_size = new_size;
     
-    return result;
+    return arr;  // 返回同一个数组
 }
 
 /*
@@ -214,4 +207,196 @@ Value* value_concat(Value *arr1, Value *arr2) {
     
     return result;
 }
+
+/*
+ * reverse(array) - 反转数组
+ * 返回新数组，不修改原数组
+ */
+Value* value_reverse(Value *arr) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!arr || arr->type != VALUE_ARRAY) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(reverse) requires array");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    size_t size = arr->array_size;
+    Value **new_elements = (Value**)malloc(size * sizeof(Value*));
+    Value **old_elements = (Value**)arr->data.pointer;
+    
+    for (size_t i = 0; i < size; i++) {
+        new_elements[i] = old_elements[size - 1 - i];
+    }
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->ext_type = EXT_TYPE_NONE;
+    result->data.pointer = new_elements;
+    result->array_size = size;
+    
+    return result;
+}
+
+/*
+ * indexOf(array, value) - 查找元素在数组中的索引
+ * 返回索引（从0开始），未找到返回 -1
+ */
+Value* value_index_of_array(Value *arr, Value *val) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!arr || arr->type != VALUE_ARRAY) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(indexOf) requires array");
+        return box_number(-1);
+    }
+    
+    Value **elements = (Value**)arr->data.pointer;
+    
+    for (size_t i = 0; i < arr->array_size; i++) {
+        Value *eq = value_equals(elements[i], val);
+        if (eq && eq->type == VALUE_BOOL && eq->data.number != 0) {
+            return box_number((double)i);
+        }
+    }
+    
+    return box_number(-1);
+}
+
+/*
+ * includes(array, value) - 检查数组是否包含某元素
+ * 返回 true/false
+ */
+Value* value_includes(Value *arr, Value *val) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!arr || arr->type != VALUE_ARRAY) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(includes) requires array");
+        return box_bool(0);
+    }
+    
+    Value **elements = (Value**)arr->data.pointer;
+    
+    for (size_t i = 0; i < arr->array_size; i++) {
+        Value *eq = value_equals(elements[i], val);
+        if (eq && eq->type == VALUE_BOOL && eq->data.number != 0) {
+            return box_bool(1);
+        }
+    }
+    
+    return box_bool(0);
+}
+
+/*
+ * value_create_array(size) - 创建指定大小的数组
+ * 元素初始化为 null
+ */
+Value* value_create_array(int64_t size) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    Value **elements = NULL;
+    if (size > 0) {
+        elements = (Value**)malloc((size_t)size * sizeof(Value*));
+        for (int64_t i = 0; i < size; i++) {
+            elements[i] = box_null();
+        }
+    }
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->data.pointer = elements;
+    result->array_size = (size_t)size;
+    
+    return result;
+}
+
+/*
+ * 比较函数类型，用于 sort
+ */
+typedef Value* (*CompareFunc)(Value*, Value*);
+
+/*
+ * 默认比较函数：数字比较或字符串比较
+ */
+static int default_compare(const void *a, const void *b) {
+    Value *va = *(Value**)a;
+    Value *vb = *(Value**)b;
+    
+    // 数字比较
+    if (va->type == VALUE_NUMBER && vb->type == VALUE_NUMBER) {
+        double diff = va->data.number - vb->data.number;
+        if (diff < 0) return -1;
+        if (diff > 0) return 1;
+        return 0;
+    }
+    
+    // 字符串比较
+    if (va->type == VALUE_STRING && vb->type == VALUE_STRING) {
+        return strcmp(va->data.string, vb->data.string);
+    }
+    
+    // 类型不同，按类型排序
+    return (int)va->type - (int)vb->type;
+}
+
+/* 全局比较函数指针，用于自定义排序 */
+static CompareFunc g_compare_func = NULL;
+
+static int custom_compare(const void *a, const void *b) {
+    Value *va = *(Value**)a;
+    Value *vb = *(Value**)b;
+    
+    Value *result = g_compare_func(va, vb);
+    if (result && result->type == VALUE_NUMBER) {
+        double r = result->data.number;
+        if (r < 0) return -1;
+        if (r > 0) return 1;
+        return 0;
+    }
+    return 0;
+}
+
+/*
+ * sort(array, compare?) - 排序数组
+ * compare 是可选的比较函数，返回负数/0/正数
+ */
+Value* value_sort(Value *arr, CompareFunc compare) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!arr || arr->type != VALUE_ARRAY) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(sort) requires array");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    size_t size = arr->array_size;
+    if (size <= 1) {
+        // 返回数组副本
+        return value_reverse(value_reverse(arr));  // 简单方式创建副本
+    }
+    
+    // 创建新数组副本
+    Value **new_elements = (Value**)malloc(size * sizeof(Value*));
+    Value **old_elements = (Value**)arr->data.pointer;
+    for (size_t i = 0; i < size; i++) {
+        new_elements[i] = old_elements[i];
+    }
+    
+    // 排序
+    if (compare) {
+        g_compare_func = compare;
+        qsort(new_elements, size, sizeof(Value*), custom_compare);
+        g_compare_func = NULL;
+    } else {
+        qsort(new_elements, size, sizeof(Value*), default_compare);
+    }
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->data.pointer = new_elements;
+    result->array_size = size;
+    
+    return result;
+}
+
 

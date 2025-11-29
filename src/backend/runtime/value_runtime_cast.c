@@ -530,6 +530,68 @@ Value* value_keys(Value *obj) {
 }
 
 /*
+ * value_values - 获取对象的所有值
+ * 
+ * 参数：
+ *   obj: 对象Value
+ * 
+ * 返回：
+ *   包含所有值的数组Value
+ */
+Value* value_values(Value *obj) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!obj || obj->type != VALUE_OBJECT) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(values) requires object");
+        return box_array(NULL, 0);  // 返回空数组
+    }
+    
+    ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+    size_t count = obj->array_size;
+    
+    // 创建值数组
+    Value **values = (Value**)malloc(sizeof(Value*) * count);
+    for (size_t i = 0; i < count; i++) {
+        values[i] = entries[i].value;
+    }
+    
+    return box_array(values, count);
+}
+
+/*
+ * value_entries - 获取对象的所有键值对
+ * 
+ * 参数：
+ *   obj: 对象Value
+ * 
+ * 返回：
+ *   包含 [key, value] 数组的数组（二维数组）
+ */
+Value* value_entries(Value *obj) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    if (!obj || obj->type != VALUE_OBJECT) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(entries) requires object");
+        return box_array(NULL, 0);  // 返回空数组
+    }
+    
+    ObjectEntry *obj_entries = (ObjectEntry*)obj->data.pointer;
+    size_t count = obj->array_size;
+    
+    // 创建二维数组
+    Value **entries_arr = (Value**)malloc(sizeof(Value*) * count);
+    for (size_t i = 0; i < count; i++) {
+        // 每个元素是 [key, value] 数组
+        Value **pair = (Value**)malloc(sizeof(Value*) * 2);
+        pair[0] = box_string(obj_entries[i].key);
+        pair[1] = obj_entries[i].value;
+        entries_arr[i] = box_array(pair, 2);
+    }
+    
+    return box_array(entries_arr, count);
+}
+
+/*
  * value_set_index - 设置数组或对象的索引值
  * 
  * 参数：

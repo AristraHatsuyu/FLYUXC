@@ -741,6 +741,14 @@ Value* value_power(Value *a, Value *b) {
     return box_number(pow(unbox_number(a), unbox_number(b)));
 }
 
+Value* value_modulo(Value *a, Value *b) {
+    double divisor = unbox_number(b);
+    if (divisor == 0) {
+        return box_number(0.0 / 0.0);  // NaN for mod by zero
+    }
+    return box_number(fmod(unbox_number(a), divisor));
+}
+
 /* Value comparison */
 Value* value_equals(Value *a, Value *b) {
     if (!a || !b) return box_bool(a == b);

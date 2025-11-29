@@ -228,6 +228,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_multiply(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_divide(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_power(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_modulo(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_equals(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_less_than(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_greater_than(%%struct.Value*, %%struct.Value*)\n");
@@ -334,7 +335,20 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_delete_field(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_has_field(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_keys(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_values(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_entries(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_set_index(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n\n");
+    
+    // Array extension functions
+    fprintf(gen->output, ";; Array extension functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_reverse(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_index_of_array(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_includes(%%struct.Value*, %%struct.Value*)\n");
+    
+    // Higher-order array functions
+    fprintf(gen->output, "\n;; Higher-order array functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_create_array(i64)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_sort(%%struct.Value*, %%struct.Value* (%%struct.Value*, %%struct.Value*)*)\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

@@ -116,13 +116,27 @@ Value* value_substr(Value *str, Value *start, Value *length) {
 }
 
 /*
- * indexOf(str, substr) - 查找子字符串位置
+ * indexOf(str/arr, substr/value) - 查找子字符串位置或数组元素索引
+ * 支持字符串和数组两种类型
  */
 Value* value_index_of(Value *str, Value *substr) {
     set_runtime_status(FLYUX_OK, NULL);
     
+    // 如果是数组，查找元素索引
+    if (str && str->type == VALUE_ARRAY) {
+        Value **elements = (Value**)str->data.pointer;
+        for (size_t i = 0; i < str->array_size; i++) {
+            Value *eq = value_equals(elements[i], substr);
+            if (eq && eq->type == VALUE_BOOL && eq->data.number != 0) {
+                return box_number((double)i);
+            }
+        }
+        return box_number(-1);
+    }
+    
+    // 否则作为字符串处理
     if (!str || str->type != VALUE_STRING || !substr || substr->type != VALUE_STRING) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "(indexOf) requires two strings");
+        set_runtime_status(FLYUX_TYPE_ERROR, "(indexOf) requires two strings or array and value");
         return box_number(-1);
     }
     
