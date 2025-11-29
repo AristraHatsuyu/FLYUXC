@@ -48,13 +48,6 @@ int is_symbol_defined(CodeGen *gen, const char *var_name);
 char *codegen_expr(CodeGen *gen, ASTNode *node);
 
 /* ============================================================================
- * 内置函数处理声明 - codegen_builtin.c
- * ============================================================================ */
-
-/* 处理内置函数调用，返回结果值的临时变量名（或NULL表示void）*/
-char *codegen_builtin_call(CodeGen *gen, const char *func_name, ASTNode **args, size_t arg_count);
-
-/* ============================================================================
  * 语句代码生成声明 - codegen_stmt.c
  * ============================================================================ */
 

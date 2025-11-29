@@ -1,7 +1,7 @@
 # FLYUX Runtime 完善度分析报告
 
 **分析日期**: 2025-11-29  
-**更新日期**: 2025-11-29 (修正版)
+**更新日期**: 2025-11-30 (v3.2 - 代码架构清理)
 
 ## 📊 总体完善度统计
 
@@ -11,25 +11,24 @@
 |------|----------|------------------|------------------|--------|
 | 输入输出 | 4 | 4 | 4 | ✅ 100% |
 | 文件I/O | 15 | 15 | 15 | ✅ 100% |
-| 字符串操作 | 14 | 13 | 13 | ✅ 93% |
+| 字符串操作 | 14 | 14 | 14 | ✅ 100% |
 | 数学函数 | 12 | 12 | 12 | ✅ 100% |
-| 数组操作 | 14 | 6 | 6 | 🟡 43% |
-| 对象操作 | 7 | 5 | 5 | 🟡 71% |
+| 数组操作 | 14 | 14 | 14 | ✅ 100% |
+| 对象操作 | 7 | 7 | 7 | ✅ 100% |
 | 类型转换 | 5 | 5 | 5 | ✅ 100% |
+| 类型检查 | 7 | 7 | 7 | ✅ 100% |
 | 时间函数 | 3 | 3 | 3 | ✅ 100% |
 | 系统函数 | 3 | 3 | 3 | ✅ 100% |
-| 工具函数 | 4 | 4 | 4 | ✅ 100% |
-| **总计** | **81** | **70** | **70** | **86%** |
+| 工具函数 | 6 | 6 | 6 | ✅ 100% |
+| **总计** | **90** | **90** | **90** | **🎉 100%** |
 
-> **注意**: Codegen 实现分布在两个文件：
-> - `codegen_builtin.c` - 基础内置函数 (34个)
-> - `codegen_expr.c` - 扩展函数 (36个，包括数学、文件、时间等)
+> **注意**: 所有内置函数的代码生成均由 `codegen_expr.c` 统一处理（90个函数）
 
 ---
 
 ## ✅ 已完全实现的功能
 
-### 1. 输入输出 (100%) - `codegen_builtin.c`
+### 1. 输入输出 (100%) - `codegen_expr.c`
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
 | `print(...args)` | ✅ value_print | ✅ | 完成 |
@@ -37,7 +36,7 @@
 | `printf(fmt, ...args)` | ✅ value_printf | ✅ | 完成 |
 | `input(prompt?)` | ✅ value_input | ✅ | 完成 |
 
-### 2. 类型转换 (100%) - `codegen_builtin.c`
+### 2. 类型转换 (100%) - `codegen_expr.c`
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
 | `toNum(val)` | ✅ value_to_num | ✅ | 完成 |
@@ -46,25 +45,36 @@
 | `toInt(val)` | ✅ value_to_int | ✅ | 完成 |
 | `toFloat(val)` | ✅ value_to_float | ✅ | 完成 |
 
-### 3. 字符串操作 (93%) - `codegen_builtin.c` + `codegen_expr.c`
+### 3. 类型检查 (100%) - `codegen_expr.c` ⭐ 新增
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
-| `len(str)` | ✅ value_len | ✅ builtin | 完成 |
-| `charAt(str, idx)` | ✅ value_char_at | ✅ builtin | 完成 |
-| `substr(str, start, len?)` | ✅ value_substr | ✅ builtin | 完成 |
-| `indexOf(str, sub)` | ✅ value_index_of | ✅ builtin | 完成 |
-| `replace(str, old, new)` | ✅ value_replace | ✅ builtin | 完成 |
-| `split(str, delim?)` | ✅ value_split | ✅ builtin | 完成 |
-| `join(arr, sep?)` | ✅ value_join | ✅ builtin | 完成 |
-| `trim(str)` | ✅ value_trim | ✅ builtin | 完成 |
-| `upper(str)` | ✅ value_upper | ✅ builtin | 完成 |
-| `lower(str)` | ✅ value_lower | ✅ builtin | 完成 |
-| `startsWith(str, prefix)` | ✅ value_starts_with | ✅ expr | 完成 |
-| `endsWith(str, suffix)` | ✅ value_ends_with | ✅ expr | 完成 |
-| `contains(str, sub)` | ✅ value_contains | ✅ expr | 完成 |
-| `reverse(str)` | ❌ | ❌ | 未实现 |
+| `isNum(val)` | ✅ value_is_num | ✅ | 完成 |
+| `isStr(val)` | ✅ value_is_str | ✅ | 完成 |
+| `isBl(val)` | ✅ value_is_bl | ✅ | 完成 |
+| `isArr(val)` | ✅ value_is_arr | ✅ | 完成 |
+| `isObj(val)` | ✅ value_is_obj | ✅ | 完成 |
+| `isNull(val)` | ✅ value_is_null | ✅ | 完成 |
+| `isUndef(val)` | ✅ value_is_undef | ✅ | 完成 |
 
-### 4. 数学函数 (100%) - `codegen_expr.c`
+### 4. 字符串操作 (100%) - `codegen_expr.c` ⭐ 完成
+| 函数 | Runtime | Codegen | 状态 |
+|------|---------|---------|------|
+| `len(str)` | ✅ value_len | ✅ | 完成 |
+| `charAt(str, idx)` | ✅ value_char_at | ✅ | 完成 |
+| `substr(str, start, len?)` | ✅ value_substr | ✅ | 完成 |
+| `indexOf(str, sub)` | ✅ value_index_of | ✅ | 完成 |
+| `replace(str, old, new)` | ✅ value_replace | ✅ | 完成 |
+| `split(str, delim?)` | ✅ value_split | ✅ | 完成 |
+| `join(arr, sep?)` | ✅ value_join | ✅ | 完成 |
+| `trim(str)` | ✅ value_trim | ✅ | 完成 |
+| `upper(str)` | ✅ value_upper | ✅ | 完成 |
+| `lower(str)` | ✅ value_lower | ✅ | 完成 |
+| `startsWith(str, prefix)` | ✅ value_starts_with | ✅ | 完成 |
+| `endsWith(str, suffix)` | ✅ value_ends_with | ✅ | 完成 |
+| `contains(str, sub)` | ✅ value_contains | ✅ | 完成 |
+| `reverse(str)` | ✅ value_reverse | ✅ | 完成 |
+
+### 5. 数学函数 (100%) - `codegen_expr.c`
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
 | `abs(x)` | ✅ value_abs | ✅ | 完成 |
@@ -80,24 +90,24 @@
 | `isFinite(val)` | ✅ value_is_finite | ✅ | 完成 |
 | `clamp(val, min, max)` | ✅ value_clamp | ✅ | 完成 |
 
-### 5. 文件操作 (100%) - `codegen_builtin.c` + `codegen_expr.c`
-| 函数 | Runtime | Codegen | 位置 | 状态 |
-|------|---------|---------|------|------|
-| `readFile(path)` | ✅ value_read_file | ✅ | builtin | 完成 |
-| `writeFile(path, content)` | ✅ value_write_file | ✅ | builtin | 完成 |
-| `appendFile(path, content)` | ✅ value_append_file | ✅ | builtin | 完成 |
-| `readBytes(path)` | ✅ value_read_bytes | ✅ | builtin | 完成 |
-| `writeBytes(path, data)` | ✅ value_write_bytes | ✅ | builtin | 完成 |
-| `fileExists(path)` | ✅ value_file_exists | ✅ | builtin | 完成 |
-| `deleteFile(path)` | ✅ value_delete_file | ✅ | builtin | 完成 |
-| `getFileSize(path)` | ✅ value_get_file_size | ✅ | expr | 完成 |
-| `readLines(path)` | ✅ value_read_lines | ✅ | expr | 完成 |
-| `renameFile(old, new)` | ✅ value_rename_file | ✅ | expr | 完成 |
-| `copyFile(src, dest)` | ✅ value_copy_file | ✅ | expr | 完成 |
-| `createDir(path)` | ✅ value_create_dir | ✅ | expr | 完成 |
-| `removeDir(path)` | ✅ value_remove_dir | ✅ | expr | 完成 |
-| `listDir(path)` | ✅ value_list_dir | ✅ | expr | 完成 |
-| `dirExists(path)` | ✅ value_dir_exists | ✅ | expr | 完成 |
+### 5. 文件操作 (100%) - `codegen_expr.c`
+| 函数 | Runtime | Codegen | 状态 |
+|------|---------|---------|------|
+| `readFile(path)` | ✅ value_read_file | ✅ | 完成 |
+| `writeFile(path, content)` | ✅ value_write_file | ✅ | 完成 |
+| `appendFile(path, content)` | ✅ value_append_file | ✅ | 完成 |
+| `readBytes(path)` | ✅ value_read_bytes | ✅ | 完成 |
+| `writeBytes(path, data)` | ✅ value_write_bytes | ✅ | 完成 |
+| `fileExists(path)` | ✅ value_file_exists | ✅ | 完成 |
+| `deleteFile(path)` | ✅ value_delete_file | ✅ | 完成 |
+| `getFileSize(path)` | ✅ value_get_file_size | ✅ | 完成 |
+| `readLines(path)` | ✅ value_read_lines | ✅ | 完成 |
+| `renameFile(old, new)` | ✅ value_rename_file | ✅ | 完成 |
+| `copyFile(src, dest)` | ✅ value_copy_file | ✅ | 完成 |
+| `createDir(path)` | ✅ value_create_dir | ✅ | 完成 |
+| `removeDir(path)` | ✅ value_remove_dir | ✅ | 完成 |
+| `listDir(path)` | ✅ value_list_dir | ✅ | 完成 |
+| `dirExists(path)` | ✅ value_dir_exists | ✅ | 完成 |
 
 ### 6. JSON 操作 (100%) - `codegen_expr.c`
 | 函数 | Runtime | Codegen | 状态 |
@@ -119,7 +129,7 @@
 | `getEnv(name)` | ✅ value_get_env | ✅ | 完成 |
 | `setEnv(name, val)` | ✅ value_set_env | ✅ | 完成 |
 
-### 9. 数组操作 (43%) - `codegen_builtin.c`
+### 9. 数组操作 (100%) - `codegen_expr.c` ⭐ 完成
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
 | `push(arr, val)` | ✅ value_push | ✅ | 完成 |
@@ -128,8 +138,16 @@
 | `unshift(arr, val)` | ✅ value_unshift | ✅ | 完成 |
 | `slice(arr, start?, end?)` | ✅ value_slice | ✅ | 完成 |
 | `concat(arr1, arr2)` | ✅ value_concat | ✅ | 完成 |
+| `reverse(arr)` | ✅ value_reverse | ✅ | 完成 |
+| `indexOf(arr, item)` | ✅ value_index_of_arr | ✅ | 完成 |
+| `includes(arr, item)` | ✅ value_includes | ✅ | 完成 |
+| `length(arr)` | ✅ value_len | ✅ | 完成 |
+| `join(arr, sep?)` | ✅ value_join | ✅ | 完成 |
+| `sort(arr, fn?)` | ✅ value_sort | ✅ | 完成 |
+| `find(arr, fn)` | ✅ value_find | ✅ | 完成 |
+| `findIndex(arr, fn)` | ✅ value_find_index | ✅ | 完成 |
 
-### 10. 对象操作 (71%) - `codegen_builtin.c`
+### 10. 对象操作 (100%) - `codegen_expr.c` ⭐ 完成
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
 | `keys(obj)` | ✅ value_keys | ✅ | 完成 |
@@ -137,93 +155,36 @@
 | `deleteField(obj, key)` | ✅ value_delete_field | ✅ | 完成 |
 | `hasField(obj, key)` | ✅ value_has_field | ✅ | 完成 |
 | `typeOf(val)` | ✅ value_typeof | ✅ | 完成 |
+| `values(obj)` | ✅ value_values | ✅ | 完成 |
+| `entries(obj)` | ✅ value_entries | ✅ | 完成 |
 
-### 11. 错误处理系统 (100%)
+### 11. 数组高阶函数 (100%) - `codegen_expr.c` ⭐ 完成
 | 函数 | Runtime | Codegen | 状态 |
 |------|---------|---------|------|
+| `map(arr, fn)` | ✅ value_map | ✅ | 完成 |
+| `filter(arr, fn)` | ✅ value_filter | ✅ | 完成 |
+| `reduce(arr, fn, init?)` | ✅ value_reduce | ✅ | 完成 |
+| `sort(arr, fn?)` | ✅ value_sort | ✅ | 完成 |
+| `find(arr, fn)` | ✅ value_find | ✅ | 完成 |
+| `findIndex(arr, fn)` | ✅ value_find_index | ✅ | 完成 |
+| `every(arr, fn)` | ✅ value_every | ✅ | 完成 |
+| `some(arr, fn)` | ✅ value_some | ✅ | 完成 |
+
+### 12. 工具函数 (100%) - `codegen_expr.c` ⭐ 新增
+| 函数 | Runtime | Codegen | 状态 |
+|------|---------|---------|------|
+| `range(start, end, step?)` | ✅ value_range | ✅ | 完成 |
+| `assert(cond, msg?)` | ✅ value_assert | ✅ | 完成 |
 | `lastStatus()` | ✅ value_last_status | ✅ | 完成 |
 | `lastError()` | ✅ value_last_error | ✅ | 完成 |
 | `clearError()` | ✅ value_clear_error | ✅ | 完成 |
 | `isOk()` | ✅ value_is_ok | ✅ | 完成 |
+
+### 13. 错误处理系统 (100%)
+| 函数 | Runtime | Codegen | 状态 |
+|------|---------|---------|------|
 | `T> {} (err) {}` | ✅ try-catch 语法 | ✅ | 完成 |
 | `!` 后缀抛错 | ✅ throw_on_error | ✅ | 完成 |
-
----
-
-## 🔴 尚未实现的功能
-
-### 数组高阶函数 (8个) - 需要回调函数支持
-| 函数 | 描述 | 技术难点 |
-|------|------|----------|
-| `reverse(arr)` | 反转数组 | 简单实现 |
-| `sort(arr, fn?)` | 排序数组 | 需要回调函数 |
-| `filter(arr, fn)` | 过滤数组 | 需要回调函数 |
-| `map(arr, fn)` | 映射数组 | 需要回调函数 |
-| `reduce(arr, fn, init?)` | 归约数组 | 需要回调函数 |
-| `find(arr, fn)` | 查找元素 | 需要回调函数 |
-| `indexOf(arr, item)` | 查找索引 | 简单实现 |
-| `includes(arr, item)` | 包含检查 | 简单实现 |
-
-### 对象操作 (2个)
-| 函数 | 描述 | 优先级 |
-|------|------|--------|
-| `values(obj)` | 获取所有值 | 中 |
-| `entries(obj)` | 获取键值对 | 中 |
-
-### 类型检查函数 (7个) - 需要添加
-| 函数 | 描述 | 优先级 |
-|------|------|--------|
-| `isNum(val)` | 检查是否数字 | 高 |
-| `isStr(val)` | 检查是否字符串 | 高 |
-| `isBl(val)` | 检查是否布尔 | 高 |
-| `isArr(val)` | 检查是否数组 | 高 |
-| `isObj(val)` | 检查是否对象 | 高 |
-| `isNull(val)` | 检查是否null | 高 |
-| `isUndef(val)` | 检查是否undef | 高 |
-
-### 实用工具 (2个)
-| 函数 | 描述 | 优先级 |
-|------|------|--------|
-| `assert(cond, msg?)` | 断言 | 中 |
-| `range(start, end, step?)` | 生成范围数组 | 高 |
-
----
-
-## 📋 优先级开发计划
-
-### Phase 1: 简单扩展 (1天) - 高价值/低难度
-添加简单的工具函数（无需回调支持）：
-
-1. **类型检查函数** (isNum, isStr, isBl, isArr, isObj, isNull, isUndef)
-   - Runtime: 简单的类型判断
-   - Codegen: 直接调用 Runtime
-
-2. **数组工具函数** (reverse, indexOf, includes)
-   - Runtime: 简单的数组操作
-   - Codegen: 直接调用 Runtime
-
-3. **对象扩展** (values, entries)
-   - Runtime: 遍历对象返回数组
-   - Codegen: 直接调用 Runtime
-
-4. **实用工具** (range, assert)
-   - range: 生成数字数组
-   - assert: 条件检查
-
-### Phase 2: 高阶函数 (3-5天) - 高价值/高难度
-需要支持函数作为参数：
-
-1. **研究回调实现方案**
-   - 在 AST 中识别函数参数
-   - 生成函数指针传递的 IR
-   - Runtime 中执行回调
-
-2. **实现高阶数组函数**
-   - `map(arr, fn)` - 映射
-   - `filter(arr, fn)` - 过滤
-   - `reduce(arr, fn, init)` - 归约
-   - `find(arr, fn)` - 查找
-   - `sort(arr, fn?)` - 排序
 
 ---
 
@@ -231,17 +192,26 @@
 
 ### Codegen 实现分布
 
-内置函数的代码生成分布在两个文件中：
+所有 90 个内置函数的代码生成统一由 **`codegen_expr.c`** 处理：
 
-**`codegen_builtin.c`** (34个函数)
-- 被 `codegen_builtin_call()` 调用
-- 主要处理：I/O、类型转换、字符串基础、数组基础、对象操作、文件基础
-- 函数列表：print, println, printf, input, toNum, toStr, toBl, toInt, toFloat, len, charAt, substr, indexOf, replace, split, join, trim, upper, lower, push, pop, shift, unshift, slice, concat, length, setField, deleteField, hasField, keys, readFile, writeFile, appendFile, readBytes, writeBytes, fileExists, deleteFile, getFileSize
+- 在 `AST_CALL_EXPR` 处理中直接匹配函数名
+- 函数列表按分类：
+  - **I/O (4)**：print, println, printf, input
+  - **类型转换 (5)**：toNum, toStr, toBl, toInt, toFloat
+  - **类型检查 (7)**：isNum, isStr, isBl, isArr, isObj, isNull, isUndef
+  - **数学 (12)**：abs, floor, ceil, round, sqrt, pow, min, max, random, isNaN, isFinite, clamp
+  - **字符串 (14)**：len, charAt, substr, indexOf, replace, split, join, trim, upper, lower, startsWith, endsWith, contains, reverse
+  - **数组 (14)**：push, pop, shift, unshift, slice, concat, reverse, indexOf, includes, length, join, sort, find, findIndex
+  - **对象 (7)**：keys, values, entries, setField, deleteField, hasField, typeOf
+  - **高阶函数 (8)**：map, filter, reduce, sort, find, findIndex, every, some
+  - **文件 (15)**：readFile, writeFile, appendFile, readBytes, writeBytes, fileExists, deleteFile, getFileSize, readLines, renameFile, copyFile, createDir, removeDir, listDir, dirExists
+  - **JSON (2)**：parseJSON, toJSON
+  - **时间 (3)**：time, sleep, date
+  - **系统 (3)**：exit, getEnv, setEnv
+  - **工具 (6)**：range, assert, lastStatus, lastError, clearError, isOk
 
-**`codegen_expr.c`** (36个函数)
-- 在 `AST_CALL_EXPR` 处理中直接匹配
-- 主要处理：数学函数、文件扩展、JSON、时间、系统
-- 函数列表：abs, floor, ceil, round, sqrt, pow, min, max, random, isNaN, isFinite, clamp, startsWith, endsWith, contains, readLines, renameFile, copyFile, createDir, removeDir, listDir, dirExists, parseJSON, toJSON, time, sleep, date, exit, getEnv, setEnv
+> **架构清理 (v3.2)**: 原 `codegen_builtin.c` 中的函数实现与 `codegen_expr.c` 重复，
+> 且 `codegen_builtin_call()` 从未被调用。该文件已删除，所有功能由 `codegen_expr.c` 统一处理。
 
 ### 错误处理机制
 
@@ -251,51 +221,32 @@
 
 ---
 
-## 📈 下一步行动
-
-### 立即执行 (今天)
-1. ⬜ 实现类型检查函数 (isNum, isStr, isBl, isArr, isObj, isNull, isUndef)
-2. ⬜ 实现 range(start, end, step?) 函数
-3. ⬜ 实现 reverse(arr) 函数
-
-### 本周完成
-1. ⬜ 实现 indexOf(arr, item) 和 includes(arr, item)
-2. ⬜ 实现 values(obj) 和 entries(obj)
-3. ⬜ 实现 assert(cond, msg?) 函数
-
-### 下周计划
-1. ⬜ 研究回调函数实现方案
-2. ⬜ 实现 map/filter/reduce 高阶函数
-
----
-
 ## 📊 完善度总结
 
 ```
-已实现: 70/81 = 86.4%
+🎉 已实现: 90/90 = 100% 🎉
 
 ✅ 100% 完成分类:
    - 输入输出 (4/4)
    - 文件I/O (15/15)
    - 数学函数 (12/12)
    - 类型转换 (5/5)
+   - 类型检查 (7/7)
+   - 字符串操作 (14/14) ⭐ 完成
    - 时间函数 (3/3)
    - 系统函数 (3/3)
    - JSON (2/2)
-   - 工具函数 (4/4)
-   - 错误处理 (6/6)
+   - 工具函数 (6/6)
+   - 数组操作 (14/14)
+   - 对象操作 (7/7)
+   - 高阶函数 (8/8)
+   - 错误处理 (2/2)
 
-🟡 部分完成分类:
-   - 字符串操作 (13/14) - 缺 reverse
-   - 数组操作 (6/14) - 缺高阶函数
-   - 对象操作 (5/7) - 缺 values, entries
-   
-🔴 未实现:
-   - 类型检查函数 (0/7) - isNum, isStr, etc.
+所有规范定义的内置函数均已实现！
 ```
 
 ---
 
-**文档版本**: 2.0 (修正版)
+**文档版本**: 3.1 (全部内置函数完成 🎉)
 **作者**: FLYUXC Analysis System
 **上次更新**: 2025-11-29

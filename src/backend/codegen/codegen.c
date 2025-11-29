@@ -348,7 +348,22 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     // Higher-order array functions
     fprintf(gen->output, "\n;; Higher-order array functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_create_array(i64)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_sort(%%struct.Value*, %%struct.Value* (%%struct.Value*, %%struct.Value*)*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_sort(%%struct.Value*, %%struct.Value* (%%struct.Value*, %%struct.Value*)*)\n");
+    
+    // Type checking functions
+    fprintf(gen->output, "\n;; Type checking functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_num(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_str(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_bl(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_arr(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_obj(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_null(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_is_undef(%%struct.Value*)\n");
+    
+    // Utility functions
+    fprintf(gen->output, "\n;; Utility functions (range, assert)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_range(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_assert(%%struct.Value*, %%struct.Value*)\n\n");
     
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");

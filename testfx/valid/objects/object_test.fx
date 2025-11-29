@@ -2,11 +2,11 @@
 main := () {
     person := {name: 100, age: 25};
     
-    print(person.age);
+    println(person.age);
     
     person.age = 26;
     
-    print(person.age);
+    println(person.age);
     
-    print(person.name);
+    println(person.name);
 };

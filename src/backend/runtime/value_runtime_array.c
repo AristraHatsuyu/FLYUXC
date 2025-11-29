@@ -10,27 +10,44 @@
 
 /*
  * push(array, value) - 在数组末尾添加元素
- * 注意：创建新数组，不修改原数组
+ * 返回新数组，不修改原数组
  */
 Value* value_push(Value *arr, Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(push) requires array");
-        return box_null_typed(VALUE_OBJECT);
+        return box_null_typed(VALUE_ARRAY);
     }
     
-    size_t new_size = arr->array_size + 1;
-    Value **new_elements = (Value**)realloc(arr->data.pointer, new_size * sizeof(Value*));
+    size_t old_size = arr->array_size;
+    size_t new_size = old_size + 1;
+    Value **old_elements = (Value**)arr->data.pointer;
+    
+    // 创建新数组（不能用 realloc，因为原数组可能不是 malloc 分配的）
+    Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
+    if (!new_elements) {
+        set_runtime_status(FLYUX_ERROR, "(push) memory allocation failed");
+        return box_null_typed(VALUE_ARRAY);
+    }
+    
+    // 复制旧元素
+    for (size_t i = 0; i < old_size; i++) {
+        new_elements[i] = old_elements[i];
+    }
     
     // 添加新元素
-    new_elements[arr->array_size] = val;
+    new_elements[old_size] = val;
     
-    // 原地修改数组
-    arr->data.pointer = new_elements;
-    arr->array_size = new_size;
+    // 创建新的 Value 对象
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->ext_type = EXT_TYPE_NONE;
+    result->data.pointer = new_elements;
+    result->array_size = new_size;
     
-    return arr;  // 返回同一个数组
+    return result;
 }
 
 /*
@@ -209,20 +226,44 @@ Value* value_concat(Value *arr1, Value *arr2) {
 }
 
 /*
- * reverse(array) - 反转数组
- * 返回新数组，不修改原数组
+ * reverse(array|string) - 反转数组或字符串
+ * 返回新数组/字符串，不修改原值
  */
-Value* value_reverse(Value *arr) {
+Value* value_reverse(Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
     
-    if (!arr || arr->type != VALUE_ARRAY) {
-        set_runtime_status(FLYUX_TYPE_ERROR, "(reverse) requires array");
+    if (!val) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(reverse) requires array or string");
+        return box_null();
+    }
+    
+    // 处理字符串反转
+    if (val->type == VALUE_STRING) {
+        const char *str = (const char*)val->data.pointer;
+        if (!str) {
+            return box_string("");
+        }
+        
+        size_t len = strlen(str);
+        char *reversed = (char*)malloc(len + 1);
+        
+        for (size_t i = 0; i < len; i++) {
+            reversed[i] = str[len - 1 - i];
+        }
+        reversed[len] = '\0';
+        
+        return box_string(reversed);
+    }
+    
+    // 处理数组反转
+    if (val->type != VALUE_ARRAY) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(reverse) requires array or string");
         return box_null_typed(VALUE_ARRAY);
     }
     
-    size_t size = arr->array_size;
+    size_t size = val->array_size;
     Value **new_elements = (Value**)malloc(size * sizeof(Value*));
-    Value **old_elements = (Value**)arr->data.pointer;
+    Value **old_elements = (Value**)val->data.pointer;
     
     for (size_t i = 0; i < size; i++) {
         new_elements[i] = old_elements[size - 1 - i];

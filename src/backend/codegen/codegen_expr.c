@@ -284,7 +284,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 特殊处理 println 函数（每个参数后换行）
+            // 特殊处理 println 函数（所有参数输出后只在最后换行一次）
             if (strcmp(callee->name, "println") == 0) {
                 if (call->arg_count == 0) {
                     // println() 无参数时只输出换行
@@ -294,11 +294,17 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* %s, i32 0, i32 0))\n", newline_label);
                     free(newline_label);
                 } else {
+                    // 使用 value_print 输出所有参数（不换行）
                     for (size_t i = 0; i < call->arg_count; i++) {
                         char *arg = codegen_expr(gen, call->args[i]);
-                        fprintf(gen->code_buf, "  call void @value_println(%%struct.Value* %s)\n", arg);
+                        fprintf(gen->code_buf, "  call void @value_print(%%struct.Value* %s)\n", arg);
                         free(arg);
                     }
+                    // 最后输出一个换行
+                    char *newline_label = new_string_label(gen);
+                    fprintf(gen->globals_buf, "%s = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n", newline_label);
+                    fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* %s, i32 0, i32 0))\n", newline_label);
+                    free(newline_label);
                 }
                 // 返回 true 表示成功输出
                 char *result = new_temp(gen);
@@ -366,6 +372,113 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 
                 free(arg);
                 free(type_str);
+                return result;
+            }
+            
+            // ========================================
+            // 类型检查函数 (Type Checking Functions)
+            // ========================================
+            
+            // isNum(value) - 检查是否为数字
+            if (strcmp(callee->name, "isNum") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_num(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isStr(value) - 检查是否为字符串
+            if (strcmp(callee->name, "isStr") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_str(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isBl(value) - 检查是否为布尔值
+            if (strcmp(callee->name, "isBl") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_bl(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isArr(value) - 检查是否为数组
+            if (strcmp(callee->name, "isArr") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_arr(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isObj(value) - 检查是否为对象
+            if (strcmp(callee->name, "isObj") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_obj(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isNull(value) - 检查是否为 null
+            if (strcmp(callee->name, "isNull") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_null(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // isUndef(value) - 检查是否为 undefined
+            if (strcmp(callee->name, "isUndef") == 0 && call->arg_count == 1) {
+                char *arg = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_undef(%%struct.Value* %s)\n", result, arg);
+                free(arg);
+                return result;
+            }
+            
+            // ========================================
+            // 工具函数 (Utility Functions)
+            // ========================================
+            
+            // range(start, end, step?) - 生成数字范围数组
+            if (strcmp(callee->name, "range") == 0 && (call->arg_count >= 2 && call->arg_count <= 3)) {
+                char *start = codegen_expr(gen, call->args[0]);
+                char *end = codegen_expr(gen, call->args[1]);
+                char *step;
+                if (call->arg_count == 3) {
+                    step = codegen_expr(gen, call->args[2]);
+                } else {
+                    step = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", step);
+                }
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_range(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n", result, start, end, step);
+                free(start);
+                free(end);
+                free(step);
+                return result;
+            }
+            
+            // assert(condition, message?) - 断言
+            if (strcmp(callee->name, "assert") == 0 && (call->arg_count >= 1 && call->arg_count <= 2)) {
+                char *condition = codegen_expr(gen, call->args[0]);
+                char *message;
+                if (call->arg_count == 2) {
+                    message = codegen_expr(gen, call->args[1]);
+                } else {
+                    message = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", message);
+                }
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_assert(%%struct.Value* %s, %%struct.Value* %s)\n", result, condition, message);
+                free(condition);
+                free(message);
                 return result;
             }
             
@@ -2161,9 +2274,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *arr_len = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call i64 @value_array_length(%%struct.Value* %s)\n", arr_len, arr);
                 
-                // 创建空结果数组
-                char *result_arr = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_create_array(i64 0)\n", result_arr);
+                // 创建空结果数组，用 alloca 存储指针（因为 value_push 返回新数组）
+                char *result_arr_ptr = new_temp(gen);
+                char *init_arr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = alloca %%struct.Value*\n", result_arr_ptr);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_create_array(i64 0)\n", init_arr);
+                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", init_arr, result_arr_ptr);
                 
                 // 循环
                 char *i_ptr = new_temp(gen);
@@ -2206,7 +2322,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", should_push, loop_push, loop_next);
                 
                 fprintf(gen->code_buf, "%s:\n", loop_push);
-                fprintf(gen->code_buf, "  call %%struct.Value* @value_push(%%struct.Value* %s, %%struct.Value* %s)\n", result_arr, elem);
+                // 加载当前结果数组，push 后更新
+                char *cur_result = new_temp(gen);
+                char *new_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s\n", cur_result, result_arr_ptr);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_push(%%struct.Value* %s, %%struct.Value* %s)\n", new_result, cur_result, elem);
+                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", new_result, result_arr_ptr);
                 fprintf(gen->code_buf, "  br label %%%s\n", loop_next);
                 
                 fprintf(gen->code_buf, "%s:\n", loop_next);
@@ -2216,6 +2337,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  br label %%%s\n", loop_start);
                 
                 fprintf(gen->code_buf, "%s:\n", loop_end);
+                
+                // 加载最终结果
+                char *result_arr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s\n", result_arr, result_arr_ptr);
                 
                 free(func_name);
                 free(arr);

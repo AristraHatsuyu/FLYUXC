@@ -190,6 +190,107 @@ int value_is_truthy(Value *v) {
     }
 }
 
+/* ========================================
+ * Type checking functions
+ * ======================================== */
+
+/* isNum(value) - 检查是否为数字类型 */
+Value* value_is_num(Value *v) {
+    return box_bool(v && v->type == VALUE_NUMBER);
+}
+
+/* isStr(value) - 检查是否为字符串类型 */
+Value* value_is_str(Value *v) {
+    return box_bool(v && v->type == VALUE_STRING);
+}
+
+/* isBl(value) - 检查是否为布尔类型 */
+Value* value_is_bl(Value *v) {
+    return box_bool(v && v->type == VALUE_BOOL);
+}
+
+/* isArr(value) - 检查是否为数组类型 */
+Value* value_is_arr(Value *v) {
+    return box_bool(v && v->type == VALUE_ARRAY);
+}
+
+/* isObj(value) - 检查是否为对象类型（不包括数组） */
+Value* value_is_obj(Value *v) {
+    return box_bool(v && v->type == VALUE_OBJECT);
+}
+
+/* isNull(value) - 检查是否为 null */
+Value* value_is_null(Value *v) {
+    return box_bool(!v || v->type == VALUE_NULL);
+}
+
+/* isUndef(value) - 检查是否为 undefined */
+Value* value_is_undef(Value *v) {
+    return box_bool(!v || v->type == VALUE_UNDEF);
+}
+
+/* ========================================
+ * Utility functions
+ * ======================================== */
+
+/* range(start, end, step) - 生成数字范围数组 */
+Value* value_range(Value *start_val, Value *end_val, Value *step_val) {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    double start = start_val ? unbox_number(start_val) : 0;
+    double end = end_val ? unbox_number(end_val) : 0;
+    double step = step_val && step_val->type != VALUE_UNDEF && step_val->type != VALUE_NULL 
+                  ? unbox_number(step_val) : 1;
+    
+    // 防止无限循环
+    if (step == 0) {
+        set_runtime_status(FLYUX_ERROR, "range: step cannot be 0");
+        return box_null();
+    }
+    
+    // 计算元素数量
+    int64_t count = 0;
+    if ((step > 0 && start < end) || (step < 0 && start > end)) {
+        count = (int64_t)ceil(fabs((end - start) / step));
+    }
+    
+    // 创建数组
+    Value **elements = NULL;
+    if (count > 0) {
+        elements = (Value**)malloc((size_t)count * sizeof(Value*));
+        double val = start;
+        for (int64_t i = 0; i < count; i++) {
+            elements[i] = box_number(val);
+            val += step;
+        }
+    }
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->ext_type = EXT_TYPE_NONE;
+    result->data.pointer = elements;
+    result->array_size = (size_t)count;
+    
+    return result;
+}
+
+/* assert(condition, message?) - 断言，失败时终止程序 */
+Value* value_assert(Value *condition, Value *message) {
+    int is_true = value_is_truthy(condition);
+    
+    if (!is_true) {
+        fprintf(stderr, "Assertion failed");
+        if (message && message->type == VALUE_STRING && message->data.string) {
+            fprintf(stderr, ": %s", message->data.string);
+        }
+        fprintf(stderr, "\n");
+        exit(1);
+    }
+    
+    return box_bool(1);  // 返回 true 表示断言通过
+}
+
 /* Helper: Convert value to JSON string representation */
 static void value_to_json_string(Value *v, char *buf, size_t size) {
     if (!v) {

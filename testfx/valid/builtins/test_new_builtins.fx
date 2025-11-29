@@ -110,7 +110,7 @@ println("\n测试Try-Catch (带!):")
 T> {
     bad_abs := abs("string")!  // 应该抛出错误被捕获
     println("不应该执行到这里")
-} C> e {
+} (e) {
     println("Caught error!")
     println(e.name)
     println(e.message)
