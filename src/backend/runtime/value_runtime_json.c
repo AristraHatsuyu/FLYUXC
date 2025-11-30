@@ -45,7 +45,7 @@ static Value* parse_json_string(const char** ptr) {
     if (*p == '"') p++; // 跳过结尾的 "
     *ptr = p;
     
-    return box_string(strdup(buffer));
+    return box_string_owned(strdup(buffer));
 }
 
 /* 解析 JSON 数字 */
@@ -394,7 +394,7 @@ Value* value_to_json(Value* obj) {
     
     serialize_value_to_json(obj, &buffer, &size, &capacity);
     
-    Value* result = box_string(buffer);
+    Value* result = box_string_owned(buffer);
     set_runtime_status(FLYUX_OK, NULL);
     return result;
 }

@@ -34,7 +34,7 @@ Value* value_read_file(Value *path) {
     fclose(fp);
     
     set_runtime_status(FLYUX_OK, NULL);
-    return box_string(content);
+    return box_string_owned(content);
 }
 
 /* writeFile(path, content) -> bool - 写入文本文件 */
@@ -284,7 +284,7 @@ Value* value_read_lines(Value *path) {
         
         // 复制行内容（需要strdup因为line会被重用）
         char *line_copy = strdup(line);
-        lines[count++] = box_string(line_copy);
+        lines[count++] = box_string_owned(line_copy);
     }
     
     free(line);
@@ -481,7 +481,7 @@ Value* value_list_dir(Value *path) {
         
         // 复制文件名（entry->d_name会被重用）
         char *name_copy = strdup(entry->d_name);
-        entries[count++] = box_string(name_copy);
+        entries[count++] = box_string_owned(name_copy);
     }
     
     closedir(dir);

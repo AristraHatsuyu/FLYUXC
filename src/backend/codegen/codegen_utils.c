@@ -131,3 +131,241 @@ int is_symbol_defined(CodeGen *gen, const char *var_name) {
     }
     return 0;
 }
+
+/* ============================================================================
+ * 作用域跟踪函数实现 (P2: 作用域退出清理)
+ * ============================================================================ */
+
+/* 创建作用域跟踪器 */
+ScopeTracker *scope_tracker_create(void) {
+    ScopeTracker *scope = (ScopeTracker *)malloc(sizeof(ScopeTracker));
+    scope->locals = NULL;
+    return scope;
+}
+
+/* 销毁作用域跟踪器 */
+void scope_tracker_free(ScopeTracker *scope) {
+    if (!scope) return;
+    
+    LocalVarEntry *entry = scope->locals;
+    while (entry) {
+        LocalVarEntry *next = entry->next;
+        free(entry->name);
+        free(entry);
+        entry = next;
+    }
+    free(scope);
+}
+
+/* 添加局部变量到作用域跟踪器 */
+void scope_add_local(ScopeTracker *scope, const char *var_name) {
+    if (!scope || !var_name) return;
+    
+    // 检查变量是否已在列表中（避免重复添加）
+    for (LocalVarEntry *e = scope->locals; e != NULL; e = e->next) {
+        if (strcmp(e->name, var_name) == 0) {
+            return;  // 已存在，不重复添加
+        }
+    }
+    
+    LocalVarEntry *entry = (LocalVarEntry *)malloc(sizeof(LocalVarEntry));
+    entry->name = strdup(var_name);
+    entry->next = scope->locals;
+    scope->locals = entry;
+}
+
+/* 生成作用域退出清理代码 - 释放所有局部变量 */
+void scope_generate_cleanup(CodeGen *gen, ScopeTracker *scope) {
+    scope_generate_cleanup_except(gen, scope, NULL);
+}
+
+/* 生成作用域退出清理代码，但排除指定变量（用于返回值保护） */
+void scope_generate_cleanup_except(CodeGen *gen, ScopeTracker *scope, const char *except_var) {
+    if (!gen || !scope) return;
+    
+    fprintf(gen->code_buf, "  ; === P2 Scope Cleanup Start ===\n");
+    
+    for (LocalVarEntry *entry = scope->locals; entry != NULL; entry = entry->next) {
+        // 如果这个变量是排除变量，跳过
+        if (except_var && strcmp(entry->name, except_var) == 0) {
+            fprintf(gen->code_buf, "  ; skip release for return value: %s\n", entry->name);
+            continue;
+        }
+        
+        // 加载变量值并释放
+        char *val = new_temp(gen);
+        fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                val, entry->name);
+        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", val);
+        free(val);
+    }
+    
+    fprintf(gen->code_buf, "  ; === P2 Scope Cleanup End ===\n");
+}
+
+/* ============================================================================
+ * 循环作用域函数实现 (Break/Next 清理)
+ * ============================================================================ */
+
+/* 进入循环 - 压入新的循环作用域 */
+void loop_scope_push(CodeGen *gen, const char *loop_end_label, const char *loop_continue_label, const char *label) {
+    if (!gen) return;
+    
+    LoopScopeEntry *entry = (LoopScopeEntry *)malloc(sizeof(LoopScopeEntry));
+    entry->loop_scope = scope_tracker_create();
+    entry->loop_end_label = strdup(loop_end_label);
+    entry->loop_continue_label = strdup(loop_continue_label);
+    entry->label = label ? strdup(label) : NULL;
+    entry->outer = gen->loop_scope_stack;
+    gen->loop_scope_stack = entry;
+}
+
+/* 退出循环 - 弹出循环作用域 */
+void loop_scope_pop(CodeGen *gen) {
+    if (!gen || !gen->loop_scope_stack) return;
+    
+    LoopScopeEntry *entry = gen->loop_scope_stack;
+    gen->loop_scope_stack = entry->outer;
+    
+    // 释放这个循环作用域的资源
+    scope_tracker_free(entry->loop_scope);
+    free(entry->loop_end_label);
+    free(entry->loop_continue_label);
+    if (entry->label) free(entry->label);
+    free(entry);
+}
+
+/* 添加变量到当前循环作用域 */
+void loop_scope_add_var(CodeGen *gen, const char *var_name) {
+    if (!gen || !var_name) return;
+    
+    // 如果在循环中，添加到循环作用域
+    if (gen->loop_scope_stack) {
+        scope_add_local(gen->loop_scope_stack->loop_scope, var_name);
+    }
+}
+
+/* 为 break 生成循环作用域清理代码 */
+void loop_scope_generate_break_cleanup(CodeGen *gen) {
+    if (!gen || !gen->loop_scope_stack) return;
+    
+    // 只清理当前循环作用域内的变量（不清理外层循环的变量）
+    ScopeTracker *loop_scope = gen->loop_scope_stack->loop_scope;
+    if (loop_scope && loop_scope->locals) {
+        fprintf(gen->code_buf, "  ; === Break Loop Cleanup Start ===\n");
+        
+        for (LocalVarEntry *entry = loop_scope->locals; entry != NULL; entry = entry->next) {
+            char *val = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                    val, entry->name);
+            fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", val);
+            free(val);
+        }
+        
+        fprintf(gen->code_buf, "  ; === Break Loop Cleanup End ===\n");
+    }
+}
+
+/* 为 next (continue) 生成循环作用域清理代码 */
+void loop_scope_generate_next_cleanup(CodeGen *gen) {
+    if (!gen || !gen->loop_scope_stack) return;
+    
+    // 只清理当前循环作用域内的变量（不清理外层循环的变量）
+    // next 和 break 的清理逻辑相同，但跳转目标不同
+    ScopeTracker *loop_scope = gen->loop_scope_stack->loop_scope;
+    if (loop_scope && loop_scope->locals) {
+        fprintf(gen->code_buf, "  ; === Next Loop Cleanup Start ===\n");
+        
+        for (LocalVarEntry *entry = loop_scope->locals; entry != NULL; entry = entry->next) {
+            char *val = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                    val, entry->name);
+            fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", val);
+            free(val);
+        }
+        
+        fprintf(gen->code_buf, "  ; === Next Loop Cleanup End ===\n");
+    }
+}
+
+/* 按标签查找目标循环，返回目标循环的 break 标签 */
+const char *loop_scope_find_break_label(CodeGen *gen, const char *target_label) {
+    if (!gen || !target_label) return NULL;
+    
+    for (LoopScopeEntry *entry = gen->loop_scope_stack; entry != NULL; entry = entry->outer) {
+        if (entry->label && strcmp(entry->label, target_label) == 0) {
+            return entry->loop_end_label;
+        }
+    }
+    return NULL;  // 未找到标签
+}
+
+/* 按标签查找目标循环，返回目标循环的 continue 标签 */
+const char *loop_scope_find_continue_label(CodeGen *gen, const char *target_label) {
+    if (!gen || !target_label) return NULL;
+    
+    for (LoopScopeEntry *entry = gen->loop_scope_stack; entry != NULL; entry = entry->outer) {
+        if (entry->label && strcmp(entry->label, target_label) == 0) {
+            return entry->loop_continue_label;
+        }
+    }
+    return NULL;  // 未找到标签
+}
+
+/* 生成跨层 break 清理代码（清理从当前到目标循环之间的所有循环作用域） */
+void loop_scope_generate_multilevel_break_cleanup(CodeGen *gen, const char *target_label) {
+    if (!gen || !gen->loop_scope_stack || !target_label) return;
+    
+    fprintf(gen->code_buf, "  ; === Multilevel Break Cleanup Start (target: %s) ===\n", target_label);
+    
+    // 从当前循环开始，向外遍历直到找到目标循环（包括目标循环本身）
+    for (LoopScopeEntry *entry = gen->loop_scope_stack; entry != NULL; entry = entry->outer) {
+        // 清理这个循环作用域的变量
+        ScopeTracker *loop_scope = entry->loop_scope;
+        if (loop_scope && loop_scope->locals) {
+            for (LocalVarEntry *var = loop_scope->locals; var != NULL; var = var->next) {
+                char *val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                        val, var->name);
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", val);
+                free(val);
+            }
+        }
+        
+        // 如果到达目标循环，停止清理
+        if (entry->label && strcmp(entry->label, target_label) == 0) {
+            break;
+        }
+    }
+    
+    fprintf(gen->code_buf, "  ; === Multilevel Break Cleanup End ===\n");
+}
+
+/* 生成跨层 next 清理代码（清理从当前到目标循环之间的所有循环作用域，但不包括目标循环本身） */
+void loop_scope_generate_multilevel_next_cleanup(CodeGen *gen, const char *target_label) {
+    if (!gen || !gen->loop_scope_stack || !target_label) return;
+    
+    fprintf(gen->code_buf, "  ; === Multilevel Next Cleanup Start (target: %s) ===\n", target_label);
+    
+    // 从当前循环开始，向外遍历直到找到目标循环（不包括目标循环本身，因为 next 继续在目标循环中执行）
+    for (LoopScopeEntry *entry = gen->loop_scope_stack; entry != NULL; entry = entry->outer) {
+        // 如果到达目标循环，停止清理（不清理目标循环的变量，因为还要继续迭代）
+        if (entry->label && strcmp(entry->label, target_label) == 0) {
+            break;
+        }
+        
+        // 清理这个循环作用域的变量
+        ScopeTracker *loop_scope = entry->loop_scope;
+        if (loop_scope && loop_scope->locals) {
+            for (LocalVarEntry *var = loop_scope->locals; var != NULL; var = var->next) {
+                char *val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                        val, var->name);
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", val);
+                free(val);
+            }
+        }
+    }
+    
+    fprintf(gen->code_buf, "  ; === Multilevel Next Cleanup End ===\n");
+}

@@ -70,14 +70,33 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 首次定义：注册变量并分配栈空间
                 register_symbol(gen, decl->name);
                 
+                // P2: 将变量添加到作用域跟踪器
+                if (gen->scope) {
+                    scope_add_local(gen->scope, decl->name);
+                }
+                
+                // Break清理：如果在循环中，也添加到循环作用域
+                loop_scope_add_var(gen, decl->name);
+                
                 // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
                 FILE *alloca_target = gen->entry_alloca_buf ? gen->entry_alloca_buf : gen->code_buf;
                 fprintf(alloca_target, "  %%%s = alloca %%struct.Value*\n", decl->name);
+                // 初始化为 null，防止 release 时读到垃圾值
+                fprintf(alloca_target, "  store %%struct.Value* null, %%struct.Value** %%%s\n", decl->name);
             }
             // 如果已定义，则变成重新赋值（只更新值，不重新 alloca）
             
             // 如果有初始化表达式
             if (decl->init_expr) {
+                // 如果变量已存在，需要先释放旧值
+                if (already_defined) {
+                    char *old_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                            old_val, decl->name);
+                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", old_val);
+                    free(old_val);
+                }
+                
                 // 检查是否是带类型注解的null
                 if (decl->type_annotation && decl->init_expr->kind == AST_NULL_LITERAL) {
                     // 需要用box_null_typed创建带声明类型的null
@@ -127,13 +146,19 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 简单变量赋值: x = 10
                 ASTIdentifier *target = (ASTIdentifier *)assign->target->data;
                 
+                // 检查变量是否已定义
+                int var_exists = is_symbol_defined(gen, target->name);
+                
                 // 如果变量未定义，先分配空间并注册
-                if (!is_symbol_defined(gen, target->name)) {
+                if (!var_exists) {
                     register_symbol(gen, target->name);
                     
                     // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
                     FILE *alloca_target = gen->entry_alloca_buf ? gen->entry_alloca_buf : gen->code_buf;
                     fprintf(alloca_target, "  %%%s = alloca %%struct.Value*\n", target->name);
+                    
+                    // 初始化为 null，防止未初始化的变量被 release
+                    fprintf(alloca_target, "  store %%struct.Value* null, %%struct.Value** %%%s\n", target->name);
                 }
                 
                 // 如果赋值的是null，需要保持变量的declared_type
@@ -142,6 +167,11 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     char *old_val = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
                             old_val, target->name);
+                    
+                    // 释放旧值 (如果变量已存在)
+                    if (var_exists) {
+                        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", old_val);
+                    }
                     
                     char *new_null = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null_preserve_type(%%struct.Value* %s)\n",
@@ -152,13 +182,32 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     free(old_val);
                     free(new_null);
                 } else {
-                    // 普通赋值
-                    gen->current_var_name = target->name;
-                    value = codegen_expr(gen, assign->value);
-                    gen->current_var_name = NULL;
-                    if (!value) break;
-                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
-                            value, target->name);
+                    // 普通赋值 - 先释放旧值 (如果变量已存在)
+                    if (var_exists) {
+                        // 正确顺序：先计算新值，再释放旧值，最后存储
+                        // 这样可以处理 x = x + 1 这种自引用的情况
+                        gen->current_var_name = target->name;
+                        value = codegen_expr(gen, assign->value);
+                        gen->current_var_name = NULL;
+                        if (!value) break;
+                        
+                        // 现在释放旧值（新值已经计算完毕，不再依赖旧值）
+                        char *old_val = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                                old_val, target->name);
+                        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", old_val);
+                        free(old_val);
+                        
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
+                                value, target->name);
+                    } else {
+                        gen->current_var_name = target->name;
+                        value = codegen_expr(gen, assign->value);
+                        gen->current_var_name = NULL;
+                        if (!value) break;
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
+                                value, target->name);
+                    }
                 }
             }
             else if (assign->target->kind == AST_INDEX_EXPR) {
@@ -246,29 +295,97 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             if (ret->value) {
                 char *ret_val = codegen_expr(gen, ret->value);
                 if (ret_val) {
+                    // P2: 返回值保护 - 在清理前 retain 返回值
+                    fprintf(gen->code_buf, "  ; P2: protect return value\n");
+                    fprintf(gen->code_buf, "  call void @value_retain(%%struct.Value* %s)\n", ret_val);
+                    
+                    // P2: 作用域清理 - 释放所有局部变量
+                    if (gen->scope) {
+                        scope_generate_cleanup(gen, gen->scope);
+                    }
+                    
                     fprintf(gen->code_buf, "  ret %%struct.Value* %s\n", ret_val);
+                    gen->block_terminated = 1;  // 标记基本块已终止
                     free(ret_val);
                 } else {
                     char *null_ret = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_ret);
+                    
+                    // P2: 作用域清理
+                    if (gen->scope) {
+                        scope_generate_cleanup(gen, gen->scope);
+                    }
+                    
                     fprintf(gen->code_buf, "  ret %%struct.Value* %s\n", null_ret);
+                    gen->block_terminated = 1;
                     free(null_ret);
                 }
             } else {
                 char *null_ret = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_ret);
+                
+                // P2: 作用域清理
+                if (gen->scope) {
+                    scope_generate_cleanup(gen, gen->scope);
+                }
+                
                 fprintf(gen->code_buf, "  ret %%struct.Value* %s\n", null_ret);
+                gen->block_terminated = 1;
                 free(null_ret);
             }
             break;
         }
         
         case AST_BREAK_STMT: {
-            if (gen->loop_end_label) {
-                // 跳转到循环结束标签
+            ASTBreakStmt *break_stmt = (ASTBreakStmt *)node->data;
+            const char *target_label = break_stmt ? break_stmt->target_label : NULL;
+            
+            if (target_label) {
+                // 多级 break: B> label
+                const char *break_label = loop_scope_find_break_label(gen, target_label);
+                if (break_label) {
+                    // 清理从当前到目标循环的所有作用域
+                    loop_scope_generate_multilevel_break_cleanup(gen, target_label);
+                    // 跳转到目标循环的结束标签
+                    fprintf(gen->code_buf, "  br label %%%s\n", break_label);
+                    gen->block_terminated = 1;
+                } else {
+                    fprintf(stderr, "Error: undefined loop label '%s' in break statement\n", target_label);
+                }
+            } else if (gen->loop_end_label) {
+                // 普通 break: B>（跳出当前循环）
+                loop_scope_generate_break_cleanup(gen);
                 fprintf(gen->code_buf, "  br label %%%s\n", gen->loop_end_label);
+                gen->block_terminated = 1;
             } else {
                 fprintf(stderr, "Error: break statement outside of loop\n");
+            }
+            break;
+        }
+        
+        case AST_NEXT_STMT: {
+            ASTNextStmt *next_stmt = (ASTNextStmt *)node->data;
+            const char *target_label = next_stmt ? next_stmt->target_label : NULL;
+            
+            if (target_label) {
+                // 多级 next: N> label
+                const char *continue_label = loop_scope_find_continue_label(gen, target_label);
+                if (continue_label) {
+                    // 清理从当前到目标循环的作用域（不包括目标循环本身）
+                    loop_scope_generate_multilevel_next_cleanup(gen, target_label);
+                    // 跳转到目标循环的继续标签
+                    fprintf(gen->code_buf, "  br label %%%s\n", continue_label);
+                    gen->block_terminated = 1;
+                } else {
+                    fprintf(stderr, "Error: undefined loop label '%s' in next statement\n", target_label);
+                }
+            } else if (gen->loop_continue_label) {
+                // 普通 next: N>（继续当前循环）
+                loop_scope_generate_next_cleanup(gen);
+                fprintf(gen->code_buf, "  br label %%%s\n", gen->loop_continue_label);
+                gen->block_terminated = 1;
+            } else {
+                fprintf(stderr, "Error: next statement outside of loop\n");
             }
             break;
         }
@@ -453,10 +570,15 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     
                     // Then 块
                     fprintf(gen->code_buf, "\n%s:\n", then_label);
+                    gen->block_terminated = 0;  // 重置块终止标志
                     if (ifstmt->then_blocks[i]) {
                         codegen_stmt(gen, ifstmt->then_blocks[i]);
                     }
-                    fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+                    // 只有在块未终止时才生成跳转
+                    if (!gen->block_terminated) {
+                        fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+                    }
+                    gen->block_terminated = 0;  // 重置供下一个分支使用
                     
                     // 下一个条件标签（else-if 或 else）
                     fprintf(gen->code_buf, "\n%s:\n", next_label);
@@ -470,9 +592,14 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 
                 // 如果有 else 块，在这里执行
                 if (ifstmt->else_block) {
+                    gen->block_terminated = 0;
                     codegen_stmt(gen, ifstmt->else_block);
                 }
-                fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+                // 只有在块未终止时才生成跳转
+                if (!gen->block_terminated) {
+                    fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+                }
+                gen->block_terminated = 0;  // 重置
                 
                 // End 标签
                 fprintf(gen->code_buf, "\n%s:\n", end_label);
@@ -510,6 +637,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 
                 char *loop_header = new_label(gen);
                 char *loop_body = new_label(gen);
+                char *loop_update = new_label(gen);  // next 跳转目标
                 char *loop_end = new_label(gen);
                 
                 // 跳转到条件检查
@@ -537,18 +665,30 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 循环体
                 fprintf(gen->code_buf, "\n%s:\n", loop_body);
                 
-                // 保存并设置 loop_end_label 用于 break
+                // 保存并设置 loop_end_label/loop_continue_label，同时创建循环作用域
                 char *old_loop_end_repeat = gen->loop_end_label;
+                char *old_loop_continue_repeat = gen->loop_continue_label;
                 gen->loop_end_label = loop_end;
+                gen->loop_continue_label = loop_update;  // next 跳到更新部分
+                loop_scope_push(gen, loop_end, loop_update, loop->label);
                 
                 if (loop->body) {
                     codegen_stmt(gen, loop->body);
                 }
                 
-                // 恢复 loop_end_label
+                // 退出循环作用域，恢复标签
+                loop_scope_pop(gen);
                 gen->loop_end_label = old_loop_end_repeat;
+                gen->loop_continue_label = old_loop_continue_repeat;
                 
-                // i++
+                // 跳转到更新部分（正常流程或 next 后）
+                if (!gen->block_terminated) {
+                    fprintf(gen->code_buf, "  br label %%%s\n", loop_update);
+                }
+                gen->block_terminated = 0;
+                
+                // 更新部分: i++
+                fprintf(gen->code_buf, "\n%s:\n", loop_update);
                 char *old_val = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s_var\n", old_val, loop_counter);
                 char *one = new_temp(gen);
@@ -570,6 +710,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 free(loop_limit);
                 free(loop_header);
                 free(loop_body);
+                free(loop_update);
                 free(loop_end);
                 
             } else if (loop->loop_type == LOOP_FOREACH) {
@@ -597,6 +738,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 
                 char *loop_header = new_label(gen);
                 char *loop_body = new_label(gen);
+                char *loop_update = new_label(gen);  // next 跳转目标
                 char *loop_end = new_label(gen);
                 
                 // 跳转到条件检查
@@ -633,19 +775,31 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 free(index_value);
                 free(element);
                 
-                // 保存并设置 loop_end_label 用于 break
+                // 保存并设置 loop_end_label/loop_continue_label，同时创建循环作用域
                 char *old_loop_end_foreach = gen->loop_end_label;
+                char *old_loop_continue_foreach = gen->loop_continue_label;
                 gen->loop_end_label = loop_end;
+                gen->loop_continue_label = loop_update;
+                loop_scope_push(gen, loop_end, loop_update, loop->label);
                 
                 // 执行循环体
                 if (loop->body) {
                     codegen_stmt(gen, loop->body);
                 }
                 
-                // 恢复 loop_end_label
+                // 退出循环作用域，恢复标签
+                loop_scope_pop(gen);
                 gen->loop_end_label = old_loop_end_foreach;
+                gen->loop_continue_label = old_loop_continue_foreach;
                 
-                // index++
+                // 跳转到更新部分（正常流程或 next 后）
+                if (!gen->block_terminated) {
+                    fprintf(gen->code_buf, "  br label %%%s\n", loop_update);
+                }
+                gen->block_terminated = 0;
+                
+                // 更新部分: index++
+                fprintf(gen->code_buf, "\n%s:\n", loop_update);
                 char *old_index = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = load i64, i64* %s_var\n", old_index, index_var);
                 char *new_index = new_temp(gen);
@@ -664,6 +818,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 free(index_var);
                 free(loop_header);
                 free(loop_body);
+                free(loop_update);
                 free(loop_end);
                 
             } else if (loop->loop_type == LOOP_FOR) {
@@ -708,18 +863,27 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 循环体
                 fprintf(gen->code_buf, "\n%s:\n", loop_body);
                 
-                // 保存并设置 loop_end_label 用于 break
+                // 保存并设置 loop_end_label/loop_continue_label，同时创建循环作用域
                 char *old_loop_end_for = gen->loop_end_label;
+                char *old_loop_continue_for = gen->loop_continue_label;
                 gen->loop_end_label = loop_end;
+                gen->loop_continue_label = loop_update;
+                loop_scope_push(gen, loop_end, loop_update, loop->label);
                 
                 if (loop->body) {
                     codegen_stmt(gen, loop->body);
                 }
                 
-                // 恢复 loop_end_label
+                // 退出循环作用域，恢复标签
+                loop_scope_pop(gen);
                 gen->loop_end_label = old_loop_end_for;
+                gen->loop_continue_label = old_loop_continue_for;
                 
-                fprintf(gen->code_buf, "  br label %%%s\n", loop_update);
+                // 跳转到更新部分（正常流程或 next 后）
+                if (!gen->block_terminated) {
+                    fprintf(gen->code_buf, "  br label %%%s\n", loop_update);
+                }
+                gen->block_terminated = 0;
                 
                 // 更新
                 fprintf(gen->code_buf, "\n%s:\n", loop_update);
@@ -751,7 +915,12 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_EXPR_STMT: {
             ASTExprStmt *stmt = (ASTExprStmt *)node->data;
             char *result = codegen_expr(gen, stmt->expr);
-            if (result) free(result);
+            if (result) {
+                // 表达式语句的结果不需要保留，释放它
+                // 这处理了像 "test".>print 这样的表达式，防止内存泄漏
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", result);
+                free(result);
+            }
             break;
         }
         
@@ -764,48 +933,138 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 func_llvm_name = "_flyux_main";
             }
             
-            // 函数签名 - 使用 Value* 类型
-            fprintf(gen->code_buf, "\ndefine %%struct.Value* @%s(", func_llvm_name);
+            // 检测是否是嵌套函数（在另一个函数内部定义）
+            // 如果 entry_alloca_buf 非空，说明我们在一个函数体内
+            int is_nested = (gen->entry_alloca_buf != NULL);
+            FILE *output_target;
             
-            for (size_t i = 0; i < func->param_count; i++) {
-                if (i > 0) fprintf(gen->code_buf, ", ");
-                fprintf(gen->code_buf, "%%struct.Value* %%param_%s", func->params[i]);
+            if (is_nested) {
+                // 嵌套函数：写入全局区域，而不是当前代码缓冲区
+                output_target = gen->globals_buf;
+            } else {
+                // 顶层函数：写入当前代码缓冲区
+                output_target = gen->code_buf;
             }
             
-            fprintf(gen->code_buf, ") {\n");
+            // 函数签名 - 使用 Value* 类型
+            fprintf(output_target, "\ndefine %%struct.Value* @%s(", func_llvm_name);
             
-            // 为参数创建局部变量并存储参数值，同时注册到符号表
             for (size_t i = 0; i < func->param_count; i++) {
-                fprintf(gen->code_buf, "  %%%s = alloca %%struct.Value*\n", func->params[i]);
-                fprintf(gen->code_buf, "  store %%struct.Value* %%param_%s, %%struct.Value** %%%s\n",
+                if (i > 0) fprintf(output_target, ", ");
+                fprintf(output_target, "%%struct.Value* %%param_%s", func->params[i]);
+            }
+            
+            fprintf(output_target, ") {\n");
+            
+            // P2: 创建函数作用域跟踪器
+            ScopeTracker *func_scope = scope_tracker_create();
+            
+            // 创建缓冲区用于收集 alloca 和函数体代码
+            FILE *func_entry_alloca_buf = tmpfile();
+            FILE *func_body_buf = tmpfile();
+            
+            // 保存当前状态
+            FILE *saved_code_buf = gen->code_buf;
+            FILE *saved_entry_alloca = gen->entry_alloca_buf;
+            ScopeTracker *saved_scope = gen->scope;
+            int saved_block_terminated = gen->block_terminated;
+            SymbolEntry *saved_symbols = gen->symbols;  // 保存符号表，函数有独立作用域
+            
+            // 清空符号表以开始新的函数作用域
+            gen->symbols = NULL;
+            
+            // 为参数创建局部变量（注意：必须在清空符号表之后）
+            for (size_t i = 0; i < func->param_count; i++) {
+                fprintf(output_target, "  %%%s = alloca %%struct.Value*\n", func->params[i]);
+                fprintf(output_target, "  store %%struct.Value* %%param_%s, %%struct.Value** %%%s\n",
                         func->params[i], func->params[i]);
                 // 注册参数到符号表，使其在函数体内可见
                 register_symbol(gen, func->params[i]);
+                // P2 修复：参数不添加到作用域跟踪器！
+                // 参数的生命周期由调用者管理，函数不应该释放参数
+                // scope_add_local(func_scope, func->params[i]); // 移除
             }
             
-            // 预扫描函数体：收集所有try-catch的catch参数，在entry块alloca
+            // 切换到函数体缓冲区，设置函数作用域
+            gen->code_buf = func_body_buf;
+            gen->entry_alloca_buf = func_entry_alloca_buf;
+            gen->scope = func_scope;
+            gen->block_terminated = 0;  // 函数开始时，基本块未终止
+            
+            // 预扫描收集 catch 参数的 alloca
             if (func->body) {
-                FILE *entry_alloca_buf = tmpfile();
-                collect_catch_params(gen, func->body, entry_alloca_buf);
-                
-                // 写入entry块的alloca语句
-                rewind(entry_alloca_buf);
-                char buffer[1024];
-                while (fgets(buffer, sizeof(buffer), entry_alloca_buf)) {
-                    fputs(buffer, gen->code_buf);
-                }
-                fclose(entry_alloca_buf);
+                collect_catch_params(gen, func->body, func_entry_alloca_buf);
             }
             
-            // 函数体
+            // 生成函数体代码
             if (func->body) {
                 codegen_stmt(gen, func->body);
             }
             
-            // 如果没有显式返回，添加默认返回 null
-            fprintf(gen->code_buf, "  %%default_ret = call %%struct.Value* @box_null()\n");
-            fprintf(gen->code_buf, "  ret %%struct.Value* %%default_ret\n");
-            fprintf(gen->code_buf, "}\n");
+            // 生成默认返回标签和代码
+            // 只有在当前基本块未终止时才跳转到默认返回块
+            char *default_ret_label = new_label(gen);
+            if (!gen->block_terminated) {
+                fprintf(func_body_buf, "  br label %%%s\n", default_ret_label);
+            }
+            fprintf(func_body_buf, "\n%s:\n", default_ret_label);
+            
+            // 重置 block_terminated 标志
+            gen->block_terminated = 0;
+            
+            // P2: 生成默认返回前的清理代码
+            fprintf(func_body_buf, "  ; P2: default return cleanup\n");
+            for (LocalVarEntry *entry = func_scope->locals; entry != NULL; entry = entry->next) {
+                char temp_name[64];
+                snprintf(temp_name, sizeof(temp_name), "%%cleanup_%s_%d", entry->name, gen->temp_count++);
+                fprintf(func_body_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                        temp_name, entry->name);
+                fprintf(func_body_buf, "  call void @value_release(%%struct.Value* %s)\n", temp_name);
+            }
+            
+            // 默认返回 null
+            fprintf(func_body_buf, "  %%default_ret_%s = call %%struct.Value* @box_null()\n", func_llvm_name);
+            fprintf(func_body_buf, "  ret %%struct.Value* %%default_ret_%s\n", func_llvm_name);
+            
+            // 恢复状态
+            gen->code_buf = saved_code_buf;
+            gen->entry_alloca_buf = saved_entry_alloca;
+            gen->scope = saved_scope;
+            gen->block_terminated = saved_block_terminated;
+            
+            // 释放当前函数的符号表并恢复外层符号表
+            SymbolEntry *entry = gen->symbols;
+            while (entry) {
+                SymbolEntry *next = entry->next;
+                free(entry->name);
+                free(entry);
+                entry = next;
+            }
+            gen->symbols = saved_symbols;
+            
+            // 将 entry alloca 写入输出
+            rewind(func_entry_alloca_buf);
+            char buffer[1024];
+            while (fgets(buffer, sizeof(buffer), func_entry_alloca_buf)) {
+                fputs(buffer, output_target);
+            }
+            
+            // 将函数体代码写入输出
+            rewind(func_body_buf);
+            while (fgets(buffer, sizeof(buffer), func_body_buf)) {
+                fputs(buffer, output_target);
+            }
+            
+            // 清理临时文件
+            fclose(func_entry_alloca_buf);
+            fclose(func_body_buf);
+            
+            // P2: 销毁函数作用域跟踪器
+            scope_tracker_free(func_scope);
+            
+            free(default_ret_label);
+            fprintf(output_target, "}\n");
+            
             break;
         }
         

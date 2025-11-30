@@ -83,7 +83,7 @@ Value* value_to_str(Value *v) {
     
     if (!v || v->type == VALUE_UNDEF) {
         char *str = strdup("undef");
-        return box_string(str);
+        return box_string_owned(str);
     }
     
     char buffer[256];
@@ -94,7 +94,7 @@ Value* value_to_str(Value *v) {
             char *str = (char*)malloc(v->string_length + 1);
             memcpy(str, v->data.string, v->string_length);
             str[v->string_length] = '\0';
-            return box_string(str);
+            return box_string_owned(str);
         }
         
         case VALUE_NUMBER: {
@@ -108,25 +108,25 @@ Value* value_to_str(Value *v) {
                 snprintf(buffer, sizeof(buffer), "%.16g", num);
             }
             char *str = strdup(buffer);
-            return box_string(str);
+            return box_string_owned(str);
         }
         
         case VALUE_BOOL:
-            return box_string(strdup(v->data.number != 0 ? "true" : "false"));
+            return box_string_owned(strdup(v->data.number != 0 ? "true" : "false"));
             
         case VALUE_NULL:
-            return box_string(strdup("null"));
+            return box_string_owned(strdup("null"));
             
         case VALUE_ARRAY:
         case VALUE_OBJECT: {
             // 使用 JSON 格式
             value_to_string(v, buffer, sizeof(buffer));
             char *str = strdup(buffer);
-            return box_string(str);
+            return box_string_owned(str);
         }
         
         default:
-            return box_string(strdup("unknown"));
+            return box_string_owned(strdup("unknown"));
     }
 }
 

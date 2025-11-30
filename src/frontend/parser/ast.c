@@ -455,6 +455,7 @@ ASTNode *ast_loop_stmt_create(LoopType type, ASTNode *body, SourceLocation loc) 
     ASTNode *node = ast_node_create(AST_LOOP_STMT, loc);
     ASTLoopStmt *loop = (ASTLoopStmt *)malloc(sizeof(ASTLoopStmt));
     loop->loop_type = type;
+    loop->label = NULL;  /* 默认无标签 */
     loop->body = body;
     node->data = loop;
     return node;

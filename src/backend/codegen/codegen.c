@@ -30,6 +30,11 @@ CodeGen *codegen_create(FILE *output) {
     gen->in_try_catch = 0;  /* 初始不在 Try-Catch 块中 */
     gen->try_catch_label = NULL;
     gen->loop_end_label = NULL;  /* 初始不在循环中 */
+    gen->loop_continue_label = NULL;  /* 初始不在循环中 */
+    gen->entry_alloca_buf = NULL;  /* 初始无函数入口alloca缓冲区 */
+    gen->scope = NULL;  /* P2: 初始无作用域跟踪器（在函数内部设置） */
+    gen->loop_scope_stack = NULL;  /* 循环作用域栈初始为空 */
+    gen->block_terminated = 0;  /* 初始基本块未终止 */
     
     return gen;
 }
@@ -235,6 +240,10 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_index(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare i64 @value_array_length(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_array_get(%%struct.Value*, %%struct.Value*)\n\n");
+    
+    fprintf(gen->output, ";; Memory management functions (Reference Counting)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_retain(%%struct.Value*)\n");
+    fprintf(gen->output, "declare void @value_release(%%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Input/Output functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_input(%%struct.Value*)\n\n");

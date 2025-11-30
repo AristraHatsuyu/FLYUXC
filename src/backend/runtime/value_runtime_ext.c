@@ -30,24 +30,50 @@ typedef struct {
     char *error_type;     /* 错误类型(Error/TypeError/IOError) */
 } ErrorObject;
 
+/* ============================================================================
+ * Box 函数 - 将原始值包装为 Value (带引用计数)
+ * 所有 box 函数创建的 Value 初始 refcount = 1
+ * ============================================================================ */
+
 /* Box a number into a Value */
 Value* box_number(double num) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NUMBER;
-    v->declared_type = VALUE_NUMBER;  /* 默认声明类型等于实际类型 */
+    v->declared_type = VALUE_NUMBER;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
     v->ext_type = EXT_TYPE_NONE;
     v->data.number = num;
+    v->array_size = 0;
+    v->string_length = 0;
     return v;
 }
 
-/* Box a string into a Value */
+/* Box a string into a Value (静态字符串，不会被释放) */
 Value* box_string(char *str) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_STRING;
     v->declared_type = VALUE_STRING;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_STATIC;  /* 默认假设是静态字符串常量 */
     v->ext_type = EXT_TYPE_NONE;
-    v->data.string = str;  // 不复制，直接使用全局常量
-    v->string_length = str ? strlen(str) : 0;  // 保存长度，支持\0字符串
+    v->data.string = str;
+    v->array_size = 0;
+    v->string_length = str ? strlen(str) : 0;
+    return v;
+}
+
+/* Box a dynamically allocated string (会在释放时 free) */
+Value* box_string_owned(char *str) {
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_STRING;
+    v->declared_type = VALUE_STRING;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;  /* 拥有所有权，释放时 free */
+    v->ext_type = EXT_TYPE_NONE;
+    v->data.string = str;
+    v->array_size = 0;
+    v->string_length = str ? strlen(str) : 0;
     return v;
 }
 
@@ -56,9 +82,12 @@ Value* box_string_with_length(char *str, size_t len) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_STRING;
     v->declared_type = VALUE_STRING;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_STATIC;
     v->ext_type = EXT_TYPE_NONE;
-    v->data.string = str;  // 不复制，直接使用全局常量
-    v->string_length = len;  // 使用显式长度，支持包含\0的字符串
+    v->data.string = str;
+    v->array_size = 0;
+    v->string_length = len;
     return v;
 }
 
@@ -67,8 +96,12 @@ Value* box_bool(int b) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_BOOL;
     v->declared_type = VALUE_BOOL;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
     v->ext_type = EXT_TYPE_NONE;
     v->data.number = b ? 1.0 : 0.0;
+    v->array_size = 0;
+    v->string_length = 0;
     return v;
 }
 
@@ -76,8 +109,13 @@ Value* box_bool(int b) {
 Value* box_null() {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NULL;
-    v->declared_type = VALUE_NULL;  /* 默认声明类型为null */
+    v->declared_type = VALUE_NULL;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
     v->ext_type = EXT_TYPE_NONE;
+    v->data.pointer = NULL;
+    v->array_size = 0;
+    v->string_length = 0;
     return v;
 }
 
@@ -86,7 +124,12 @@ Value* box_undef() {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_UNDEF;
     v->declared_type = VALUE_UNDEF;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
     v->ext_type = EXT_TYPE_NONE;
+    v->data.pointer = NULL;
+    v->array_size = 0;
+    v->string_length = 0;
     return v;
 }
 
@@ -94,8 +137,13 @@ Value* box_undef() {
 Value* box_null_typed(int decl_type) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NULL;
-    v->declared_type = decl_type;  /* 使用指定的声明类型 */
+    v->declared_type = decl_type;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
     v->ext_type = EXT_TYPE_NONE;
+    v->data.pointer = NULL;
+    v->array_size = 0;
+    v->string_length = 0;
     return v;
 }
 
@@ -105,27 +153,77 @@ Value* box_null_preserve_type(Value *old_val) {
     return box_null_typed(old_val->declared_type);
 }
 
-/* Box an array */
+/* Box an array (从栈上拷贝到堆上并获得所有权) */
 Value* box_array(void *array_ptr, long size) {
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_ARRAY;
     v->declared_type = VALUE_ARRAY;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
     v->ext_type = EXT_TYPE_NONE;
-    v->data.pointer = array_ptr;
+    
+    /* 重要：复制数组元素到堆上，因为传入的可能是栈上的临时数组 */
+    if (size > 0 && array_ptr) {
+        Value **src = (Value**)array_ptr;
+        Value **dst = (Value**)malloc(sizeof(Value*) * size);
+        for (long i = 0; i < size; i++) {
+            dst[i] = src[i];
+            /* P2 修复：对每个元素进行 retain，因为数组持有元素的引用 */
+            if (dst[i]) {
+                value_retain(dst[i]);
+            }
+        }
+        v->data.pointer = dst;
+    } else {
+        v->data.pointer = NULL;
+    }
+    
     v->array_size = size;
+    v->string_length = 0;
     return v;
 }
 
-/* Box an object - takes array of ObjectEntry */
+/* ObjectEntry 结构在 value_runtime_value.c 中定义，这里用前向声明 */
+struct ObjectEntry;  /* forward declaration */
+
+/* Box an object - takes array of ObjectEntry (从栈上拷贝到堆上) */
 Value* box_object(void *entries_ptr, long count) {
+    /* 内部定义与外部相同的结构，用于访问字段 */
+    typedef struct { char *key; Value *value; } ObjEntry;
+    
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_OBJECT;
     v->declared_type = VALUE_OBJECT;
-    v->ext_type = EXT_TYPE_NONE;  /* 普通obj */
-    v->data.pointer = entries_ptr;  /* ObjectEntry* */
-    v->array_size = count;          /* number of properties */
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
+    v->ext_type = EXT_TYPE_NONE;
+    
+    /* 重要：复制 entries 到堆上，因为传入的可能是栈上的临时数组 */
+    if (count > 0 && entries_ptr) {
+        ObjEntry *src = (ObjEntry*)entries_ptr;
+        ObjEntry *dst = (ObjEntry*)malloc(sizeof(ObjEntry) * count);
+        for (long i = 0; i < count; i++) {
+            /* 复制 key（需要 strdup 因为原 key 可能在栈上）*/
+            dst[i].key = src[i].key ? strdup(src[i].key) : NULL;
+            dst[i].value = src[i].value;
+            /* P2 修复：对每个 value 进行 retain，因为对象持有 value 的引用 */
+            if (dst[i].value) {
+                value_retain(dst[i].value);
+            }
+        }
+        v->data.pointer = dst;
+    } else {
+        v->data.pointer = NULL;
+    }
+    
+    v->array_size = count;
+    v->string_length = 0;
     return v;
 }
+
+/* ============================================================================
+ * Unbox 函数 - 从 Value 提取原始值
+ * ============================================================================ */
 
 /* Unbox to number (with type coercion) */
 double unbox_number(Value *v) {

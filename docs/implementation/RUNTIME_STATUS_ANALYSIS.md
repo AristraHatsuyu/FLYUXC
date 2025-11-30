@@ -1,7 +1,7 @@
 # FLYUX Runtime 完善度分析报告
 
 **分析日期**: 2025-11-29  
-**更新日期**: 2025-11-30 (v3.2 - 代码架构清理)
+**更新日期**: 2025-11-30 (v4.1 - 内存管理 P1 完成)
 
 ## 📊 总体完善度统计
 
@@ -20,9 +20,28 @@
 | 时间函数 | 3 | 3 | 3 | ✅ 100% |
 | 系统函数 | 3 | 3 | 3 | ✅ 100% |
 | 工具函数 | 6 | 6 | 6 | ✅ 100% |
-| **总计** | **90** | **90** | **90** | **🎉 100%** |
+| **内存管理** | **3** | **3** | **3** | **✅ 100%** |
+| **总计** | **93** | **93** | **93** | **🎉 100%** |
 
-> **注意**: 所有内置函数的代码生成均由 `codegen_expr.c` 统一处理（90个函数）
+> **注意**: 所有内置函数的代码生成均由 `codegen_expr.c` 统一处理
+
+---
+
+## 🧠 内存管理系统 (P0 + P1 完成)
+
+### 引用计数 API (100%)
+| 函数 | Runtime | Codegen | 状态 |
+|------|---------|---------|------|
+| `value_retain(v)` | ✅ value_runtime_value.c | ✅ | 增加引用计数 |
+| `value_release(v)` | ✅ value_runtime_value.c | ✅ | 减少引用计数，归零释放 |
+| `value_free_internal(v)` | ✅ value_runtime_value.c | internal | 递归释放 |
+
+### Codegen 自动内存管理
+- ✅ **变量重新赋值**: 自动插入 `value_release` 释放旧值
+- ✅ **变量初始化**: 新变量初始化为 null，防止释放垃圾指针  
+- ✅ **自引用安全**: `x = x + 1` 先计算新值，再释放旧值
+
+详见 [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md)
 
 ---
 
@@ -221,6 +240,54 @@
 
 ---
 
+## 🧠 内存管理 (v4.0 新增)
+
+### 引用计数系统
+
+FLYUX Runtime 现在使用**引用计数 (Reference Counting)** 进行内存管理：
+
+| 组件 | 描述 |
+|------|------|
+| `refcount` | Value 结构中的引用计数字段 |
+| `flags` | 内存标志位（静态/借用/永生）|
+| `value_retain()` | 增加引用计数 |
+| `value_release()` | 减少引用计数，归零时释放 |
+
+### Value 结构改进
+
+```c
+typedef struct Value {
+    int type;           // 实际类型
+    int declared_type;  // 声明类型
+    int refcount;       // 🆕 引用计数
+    unsigned char flags;// 🆕 内存标志
+    unsigned char ext_type;
+    union { ... } data;
+    long array_size;
+    size_t string_length;
+} Value;
+```
+
+### 内存标志位
+
+| 标志 | 描述 |
+|------|------|
+| `VALUE_FLAG_NONE` | 普通分配，可释放 |
+| `VALUE_FLAG_STATIC` | 静态字符串，不释放 |
+| `VALUE_FLAG_BORROWED` | 借用引用 |
+| `VALUE_FLAG_IMMORTAL` | 永生对象 |
+
+### Box 函数区分
+
+| 函数 | 用途 |
+|------|------|
+| `box_string(str)` | 静态字符串（不释放）|
+| `box_string_owned(str)` | 动态字符串（会释放）|
+
+详细文档见: [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md)
+
+---
+
 ## 📊 完善度总结
 
 ```
@@ -232,7 +299,7 @@
    - 数学函数 (12/12)
    - 类型转换 (5/5)
    - 类型检查 (7/7)
-   - 字符串操作 (14/14) ⭐ 完成
+   - 字符串操作 (14/14)
    - 时间函数 (3/3)
    - 系统函数 (3/3)
    - JSON (2/2)
@@ -242,11 +309,15 @@
    - 高阶函数 (8/8)
    - 错误处理 (2/2)
 
-所有规范定义的内置函数均已实现！
+🆕 内存管理:
+   - 引用计数系统 ✅
+   - 递归释放 ✅
+   - 静态对象保护 ✅
 ```
 
 ---
 
-**文档版本**: 3.1 (全部内置函数完成 🎉)
+**文档版本**: 4.0 (内存管理系统)
 **作者**: FLYUXC Analysis System
-**上次更新**: 2025-11-29
+**最后更新**: 2025-11-30
+

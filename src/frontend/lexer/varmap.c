@@ -49,8 +49,11 @@ static int is_reserved_identifier(const char* name, size_t len) {
     /* break 关键字 */
     if (len == 5 && name[0]=='b' && name[1]=='r' && name[2]=='e' && name[3]=='a' && name[4]=='k') return 1;
 
-    /* L / R / T 用于 L> / R> / T>，简单起见直接视为保留 */
-    if (len == 1 && (name[0] == 'L' || name[0] == 'R' || name[0] == 'T')) return 1;
+    /* next 关键字 (continue) */
+    if (len == 4 && name[0]=='n' && name[1]=='e' && name[2]=='x' && name[3]=='t') return 1;
+
+    /* L / R / T / B / N 用于 L> / R> / T> / B> / N>，简单起见直接视为保留 */
+    if (len == 1 && (name[0] == 'L' || name[0] == 'R' || name[0] == 'T' || name[0] == 'B' || name[0] == 'N')) return 1;
 
     /* 类型名 */
     if (len == 3 && name[0]=='n' && name[1]=='u' && name[2]=='m') return 1; // num

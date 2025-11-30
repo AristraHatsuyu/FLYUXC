@@ -32,6 +32,26 @@ typedef struct SymbolEntry {
     struct SymbolEntry *next;
 } SymbolEntry;
 
+/* 作用域内的局部变量条目 - 用于P2作用域退出清理 */
+typedef struct LocalVarEntry {
+    char *name;                     /* 变量名 */
+    struct LocalVarEntry *next;
+} LocalVarEntry;
+
+/* 作用域跟踪器 - 跟踪当前函数作用域的所有局部变量 */
+typedef struct ScopeTracker {
+    LocalVarEntry *locals;          /* 当前作用域的局部变量链表 */
+} ScopeTracker;
+
+/* 循环作用域条目 - 用于嵌套循环时的 break/next 清理 */
+typedef struct LoopScopeEntry {
+    ScopeTracker *loop_scope;       /* 这个循环的作用域跟踪器 */
+    char *loop_end_label;           /* 这个循环的结束标签 (break) */
+    char *loop_continue_label;      /* 这个循环的继续标签 (next) */
+    char *label;                    /* 循环标签名（用于多级 break/next） */
+    struct LoopScopeEntry *outer;   /* 外层循环 (renamed from next to avoid confusion) */
+} LoopScopeEntry;
+
 /* 代码生成器结构 */
 typedef struct CodeGen {
     FILE *output;           /* 最终输出文件 */
@@ -48,6 +68,10 @@ typedef struct CodeGen {
     int in_try_catch;       /* 是否在 Try-Catch 块中 */
     char *try_catch_label;  /* 当前 Try-Catch 的 catch 标签 */
     char *loop_end_label;   /* 当前循环的结束标签（用于 break） */
+    char *loop_continue_label; /* 当前循环的继续标签（用于 next） */
+    ScopeTracker *scope;    /* 当前函数作用域跟踪器 */
+    LoopScopeEntry *loop_scope_stack;  /* 循环作用域栈（用于 break 清理） */
+    int block_terminated;   /* 当前基本块是否已终止（有 ret/br） */
 } CodeGen;
 
 /* 创建代码生成器 */

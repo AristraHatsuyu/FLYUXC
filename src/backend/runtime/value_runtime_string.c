@@ -77,7 +77,7 @@ Value* value_char_at(Value *str, Value *index) {
     }
     
     char result[2] = {((char*)str->data.pointer)[idx], '\0'};
-    return box_string(strdup(result));
+    return box_string_owned(strdup(result));
 }
 
 /*
@@ -112,7 +112,7 @@ Value* value_substr(Value *str, Value *start, Value *length) {
     memcpy(result, ((char*)str->data.pointer) + start_idx, len);
     result[len] = '\0';
     
-    return box_string(result);
+    return box_string_owned(result);
 }
 
 /*
@@ -169,7 +169,7 @@ Value* value_replace(Value *str, Value *old_str, Value *new_str) {
     
     const char *pos = strstr(source, old);
     if (!pos) {
-        return box_string(strdup(source));
+        return box_string_owned(strdup(source));
     }
     
     size_t old_len = strlen(old);
@@ -184,7 +184,7 @@ Value* value_replace(Value *str, Value *old_str, Value *new_str) {
     memcpy(result + prefix_len + new_len, pos + old_len, suffix_len);
     result[result_len] = '\0';
     
-    return box_string(result);
+    return box_string_owned(result);
 }
 
 /*
@@ -225,7 +225,7 @@ Value* value_split(Value *str, Value *delimiter) {
         // 每个字符一个元素
         for (size_t i = 0; i < strlen(source); i++) {
             char temp[2] = {source[i], '\0'};
-            elements[idx++] = box_string(strdup(temp));
+            elements[idx++] = box_string_owned(strdup(temp));
         }
     } else {
         p = source;
@@ -235,18 +235,22 @@ Value* value_split(Value *str, Value *delimiter) {
             char *part = (char*)malloc(len + 1);
             memcpy(part, p, len);
             part[len] = '\0';
-            elements[idx++] = box_string(part);
+            elements[idx++] = box_string_owned(part);
             p = next + delim_len;
         }
         // 最后一段
-        elements[idx++] = box_string(strdup(p));
+        elements[idx++] = box_string_owned(strdup(p));
     }
     
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = elements;
     result->array_size = count;
+    result->string_length = 0;
     
     return result;
 }
@@ -300,7 +304,7 @@ Value* value_join(Value *arr, Value *separator) {
     }
     *ptr = '\0';
     
-    return box_string(result);
+    return box_string_owned(result);
 }
 
 /*
@@ -329,7 +333,7 @@ Value* value_trim(Value *str) {
     memcpy(result, start, len);
     result[len] = '\0';
     
-    return box_string(result);
+    return box_string_owned(result);
 }
 
 /*
@@ -352,7 +356,7 @@ Value* value_upper(Value *str) {
     }
     result[len] = '\0';
     
-    return box_string(result);
+    return box_string_owned(result);
 }
 
 /*
@@ -375,6 +379,6 @@ Value* value_lower(Value *str) {
     }
     result[len] = '\0';
     
-    return box_string(result);
+    return box_string_owned(result);
 }
 

@@ -3059,6 +3059,43 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             return result;
         }
         
+        case AST_FUNC_DECL: {
+            // 函数声明作为表达式（嵌套函数/匿名函数）
+            // 将函数体写入全局区，返回函数指针
+            ASTFuncDecl *func = (ASTFuncDecl *)node->data;
+            
+            // 保存当前代码缓冲区状态
+            FILE *saved_code_buf = gen->code_buf;
+            FILE *saved_entry_alloca = gen->entry_alloca_buf;
+            
+            // 创建临时缓冲区用于生成函数代码
+            FILE *func_buf = tmpfile();
+            gen->code_buf = func_buf;
+            gen->entry_alloca_buf = NULL;  // 函数内的 alloca 应该写在函数内
+            
+            // 生成函数定义
+            codegen_stmt(gen, node);
+            
+            // 恢复代码缓冲区
+            gen->code_buf = saved_code_buf;
+            gen->entry_alloca_buf = saved_entry_alloca;
+            
+            // 将函数代码追加到 globals_buf
+            rewind(func_buf);
+            char buf[1024];
+            while (fgets(buf, sizeof(buf), func_buf)) {
+                fputs(buf, gen->globals_buf);
+            }
+            fclose(func_buf);
+            
+            // 返回 null 作为函数值（FLYUX 中函数赋值暂不支持真正的函数指针语义）
+            // 实际调用时会通过函数名直接调用
+            char *temp = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; function '%s'\n", 
+                    temp, func->name);
+            return temp;
+        }
+        
         default:
             return NULL;
     }

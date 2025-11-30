@@ -252,7 +252,7 @@ Value* value_reverse(Value *val) {
         }
         reversed[len] = '\0';
         
-        return box_string(reversed);
+        return box_string_owned(reversed);
     }
     
     // 处理数组反转
@@ -266,15 +266,18 @@ Value* value_reverse(Value *val) {
     Value **old_elements = (Value**)val->data.pointer;
     
     for (size_t i = 0; i < size; i++) {
-        new_elements[i] = old_elements[size - 1 - i];
+        new_elements[i] = value_retain(old_elements[size - 1 - i]);  // 增加引用计数
     }
     
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
     result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = size;
+    result->string_length = 0;
     
     return result;
 }

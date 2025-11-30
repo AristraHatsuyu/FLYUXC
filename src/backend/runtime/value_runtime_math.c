@@ -230,7 +230,7 @@ Value* value_date() {
     strcpy(date_str, buffer);
     
     set_runtime_status(FLYUX_OK, NULL);
-    return box_string(date_str);
+    return box_string_owned(date_str);
 }
 
 // ========================================
@@ -270,7 +270,7 @@ Value* value_get_env(Value* name) {
     strcpy(env_value, value);
     
     set_runtime_status(FLYUX_OK, NULL);
-    return box_string(env_value);
+    return box_string_owned(env_value);
 }
 
 // setEnv(name, value) - 设置环境变量

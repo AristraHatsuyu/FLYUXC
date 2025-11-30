@@ -27,6 +27,7 @@ typedef enum ASTNodeKind {
     AST_LOOP_STMT,       /* L>循环语句 */
     AST_RETURN_STMT,     /* R>返回语句 */
     AST_BREAK_STMT,      /* break语句 */
+    AST_NEXT_STMT,       /* next语句 (continue) */
     AST_TRY_STMT,        /* T>异常处理语句 */
     AST_BLOCK,           /* 代码块: { ... } */
     
@@ -119,6 +120,7 @@ typedef struct ASTIfStmt {
 /* L>循环语句 */
 typedef struct ASTLoopStmt {
     LoopType loop_type;
+    char *label;             /* 循环标签（可为NULL，用于多级 break/next） */
     
     union {
         /* LOOP_REPEAT: L> [n] { ... } */
@@ -140,6 +142,16 @@ typedef struct ASTLoopStmt {
     
     ASTNode *body;           /* 循环体 */
 } ASTLoopStmt;
+
+/* break语句: B> 或 B> label */
+typedef struct ASTBreakStmt {
+    char *target_label;      /* 目标循环标签（可为NULL表示当前循环） */
+} ASTBreakStmt;
+
+/* next语句: N> 或 N> label */
+typedef struct ASTNextStmt {
+    char *target_label;      /* 目标循环标签（可为NULL表示当前循环） */
+} ASTNextStmt;
 
 /* R>返回语句: R> value 或 R> */
 typedef struct ASTReturnStmt {
