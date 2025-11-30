@@ -30,7 +30,7 @@ outer := () {
 // 测试4：循环中创建的变量
 loopTest := () {
     result := "initial"
-    L> [3] {
+    L> (3) {
         temp := "loop iteration"
         result = temp
     }

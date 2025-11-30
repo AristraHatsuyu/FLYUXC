@@ -1,6 +1,6 @@
-println("=== Break Test 1: L> [count] ===")
+println("=== Break Test 1: L> (count) ===")
 i := 0
-L> [10] {
+L> (10) {
     i := i + 1
     if (i == 3) { B> }
 }
@@ -17,7 +17,7 @@ println("sum after break2 =", sum)
 println("\n=== Break Test 3: L> foreach ===")
 arr := [1, 2, 3, 4]
 res := 0
-L> arr : v {
+L> (arr : v) {
     if (v == 3) { B> }
     res := res + v
 }

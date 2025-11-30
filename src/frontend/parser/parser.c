@@ -1253,97 +1253,111 @@ static ASTNode *parse_loop_statement(Parser *p) {
         return NULL;
     }
     
-    // 检查循环类型：必须紧跟 [ 或 (
-    // L> [n]:label { } - 重复循环
-    // L> (...):label { } - for 或 foreach 循环
+    // 所有循环都必须以 ( 开头
+    // L> (n) { } - repeat 循环（仅表达式，无 : 无 ;）
+    // L> (array : item) { } - foreach 循环（含单个 :）
+    // L> (init; cond; update) { } - for 循环（含 ;）
     
-    if (match(p, TK_L_BRACKET)) {
-        // 重复循环: L> [n]:label { }
-        ASTNode *count_expr = parse_expression(p);
-        if (!count_expr) {
-            error_at(p, current_token(p), "Expected expression in repeat loop");
-            return NULL;
+    if (!match(p, TK_L_PAREN)) {
+        error_at(p, current_token(p), "Expected '(' after 'L>'");
+        return NULL;
+    }
+    
+    // 向前看，判断循环类型
+    // 检查是否有 ; 或 : （不是 := 的 :）
+    int has_semi = 0;
+    int has_colon = 0;
+    int lookahead = 0;
+    int paren_depth = 1;  // 已经匹配了一个 (
+    
+    while (lookahead < 50 && paren_depth > 0) {
+        Token *t = peek(p, lookahead);
+        if (t->kind == TK_L_PAREN) {
+            paren_depth++;
+        } else if (t->kind == TK_R_PAREN) {
+            paren_depth--;
+        } else if (paren_depth == 1) {  // 只在第一层括号内检查
+            if (t->kind == TK_SEMI) {
+                has_semi = 1;
+                break;  // 有分号一定是 for 循环
+            }
+            if (t->kind == TK_COLON) {
+                // 检查下一个token，如果是 = 则是 := 不是 foreach
+                Token *next = peek(p, lookahead + 1);
+                if (next->kind != TK_ASSIGN && next->kind != TK_L_BRACKET && next->kind != TK_L_PAREN) {
+                    has_colon = 1;
+                }
+            }
         }
-        if (!match(p, TK_R_BRACKET)) {
-            error_at(p, current_token(p), "Expected ']' after repeat count");
+        lookahead++;
+    }
+    
+    if (has_semi) {
+        // for 循环: L> (init; cond; update):label { }
+        ASTNode *init = NULL;
+        ASTNode *cond = NULL;
+        ASTNode *update = NULL;
+        
+        // 初始化部分
+        if (!check(p, TK_SEMI)) {
+            if (check(p, TK_IDENT)) {
+                Token *next = peek(p, 1);
+                if (next->kind == TK_DEFINE) {
+                    init = parse_var_declaration(p);
+                } else if (next->kind == TK_ASSIGN) {
+                    Token *name_token = current_token(p);
+                    advance(p);
+                    advance(p);
+                    ASTNode *target = ast_identifier_create((char *)name_token->lexeme, token_to_loc(name_token));
+                    ASTNode *value = parse_expression(p);
+                    init = ast_assign_stmt_create(target, value, token_to_loc(name_token));
+                }
+            }
+        }
+        if (!match(p, TK_SEMI)) {
+            error_at(p, current_token(p), "Expected ';' after loop init");
+        }
+        
+        // 条件部分
+        if (!check(p, TK_SEMI)) {
+            cond = parse_expression(p);
+        }
+        if (!match(p, TK_SEMI)) {
+            error_at(p, current_token(p), "Expected ';' after loop condition");
+        }
+        
+        // 更新部分
+        if (!check(p, TK_R_PAREN)) {
+            if (check(p, TK_IDENT)) {
+                Token *name_token = current_token(p);
+                Token *next = peek(p, 1);
+                if (next->kind == TK_ASSIGN) {
+                    advance(p);
+                    advance(p);
+                    ASTNode *target = ast_identifier_create((char *)name_token->lexeme, token_to_loc(name_token));
+                    ASTNode *value = parse_expression(p);
+                    update = ast_assign_stmt_create(target, value, token_to_loc(name_token));
+                } else {
+                    update = parse_expression(p);
+                }
+            } else {
+                update = parse_expression(p);
+            }
+        }
+        
+        if (!match(p, TK_R_PAREN)) {
+            error_at(p, current_token(p), "Expected ')' after loop header");
             return NULL;
         }
         
-        // 解析可选标签
         char *label = parse_optional_loop_label(p);
-        
         ASTNode *body = parse_block(p);
-        ASTNode *node = ast_repeat_loop_create(count_expr, body, token_to_loc(start));
+        ASTNode *node = ast_for_loop_create(init, cond, update, body, token_to_loc(start));
         if (label) {
             ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
             loop->label = label;
         }
         return node;
-    }
-    
-    // 检查是否是不带括号的 forEach: L> array : item : label { }
-    if (check(p, TK_IDENT)) {
-        Token *lookahead = peek(p, 1);
-        if (lookahead && lookahead->kind == TK_COLON) {
-            // 不带括号的 forEach - 解析到冒号为止
-            // 先保存当前位置，解析 additive 表达式（不包括比较运算符）
-            ASTNode *iterable = parse_additive(p);
-            if (!iterable) {
-                error_at(p, current_token(p), "Expected iterable expression");
-                return NULL;
-            }
-            if (!match(p, TK_COLON)) {
-                error_at(p, current_token(p), "Expected ':' in foreach loop");
-                return NULL;
-            }
-            if (!match(p, TK_IDENT)) {
-                error_at(p, current_token(p), "Expected variable name after ':'");
-                return NULL;
-            }
-            Token *item_token = &p->tokens[p->current - 1];  // 获取刚刚匹配的 token
-            char *item_var = strdup(item_token->lexeme);
-            
-            // 解析可选标签: L> arr : item : label { }
-            char *label = parse_optional_loop_label(p);
-            
-            ASTNode *body = parse_block(p);
-            ASTNode *node = ast_foreach_loop_create(iterable, item_var, body, token_to_loc(start));
-            if (label) {
-                ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
-                loop->label = label;
-            }
-            return node;
-        }
-    }
-    
-    if (!match(p, TK_L_PAREN)) {
-        error_at(p, current_token(p), "Expected '(', '[', or identifier after 'L>'");
-        return NULL;
-    }
-    
-    // 区分 for 循环和 foreach 循环
-    // foreach: L> (array : item):label { }
-    // for:     L> (init; cond; update):label { }
-    
-    // 先向前看，检查是否有单独的 ':' 符号（不是 ':=' 的一部分）
-    int has_colon = 0;
-    int lookahead = 0;
-    while (lookahead < 10) {  // 最多向前看10个token
-        Token *t = peek(p, lookahead);
-        // 单独的冒号（不是 := 或类型注解）
-        if (t->kind == TK_COLON) {
-            // 检查下一个token，如果是 '=' 则是 ':=' 不是 foreach
-            Token *next = peek(p, lookahead + 1);
-            if (next->kind != TK_ASSIGN && next->kind != TK_L_BRACKET && next->kind != TK_L_PAREN) {
-                has_colon = 1;
-                break;
-            }
-        }
-        // 遇到分号说明是 for 循环
-        if (t->kind == TK_SEMI || t->kind == TK_R_PAREN) {
-            break;
-        }
-        lookahead++;
     }
     
     if (has_colon) {
@@ -1368,9 +1382,7 @@ static ASTNode *parse_loop_statement(Parser *p) {
             return NULL;
         }
         
-        // 解析可选标签
         char *label = parse_optional_loop_label(p);
-        
         ASTNode *body = parse_block(p);
         ASTNode *node = ast_foreach_loop_create(iterable, item_var, body, token_to_loc(start));
         if (label) {
@@ -1380,73 +1392,20 @@ static ASTNode *parse_loop_statement(Parser *p) {
         return node;
     }
     
-    // 解析 for 循环: L>(init; cond; update):label { ... }
-    ASTNode *init = NULL;
-    ASTNode *cond = NULL;
-    ASTNode *update = NULL;
-    
-    // 初始化部分 - 可以是变量声明或赋值
-    if (!check(p, TK_SEMI)) {
-        // 检查是否是变量声明 (identifier followed by :=)
-        if (check(p, TK_IDENT)) {
-            Token *next = peek(p, 1);
-            if (next->kind == TK_DEFINE) {
-                init = parse_var_declaration(p);
-            } else if (next->kind == TK_ASSIGN) {
-                // 赋值语句：转换为 AST_ASSIGN_STMT
-                Token *name_token = current_token(p);
-                advance(p); // 跳过标识符
-                advance(p); // 跳过 =
-                ASTNode *target = ast_identifier_create((char *)name_token->lexeme, token_to_loc(name_token));
-                ASTNode *value = parse_expression(p);
-                init = ast_assign_stmt_create(target, value, token_to_loc(name_token));
-            }
-        }
+    // repeat 循环: L> (n):label { }
+    ASTNode *count_expr = parse_expression(p);
+    if (!count_expr) {
+        error_at(p, current_token(p), "Expected count expression in repeat loop");
+        return NULL;
     }
-    if (!match(p, TK_SEMI)) {
-        error_at(p, current_token(p), "Expected ';' after loop init");
-    }
-    
-    // 条件部分
-    if (!check(p, TK_SEMI)) {
-        cond = parse_expression(p);
-    }
-    if (!match(p, TK_SEMI)) {
-        error_at(p, current_token(p), "Expected ';' after loop condition");
-    }
-    
-    // 更新部分 - 通常是赋值表达式
-    if (!check(p, TK_R_PAREN)) {
-        // 检查是否是赋值
-        if (check(p, TK_IDENT)) {
-            Token *name_token = current_token(p);
-            Token *next = peek(p, 1);
-            if (next->kind == TK_ASSIGN) {
-                advance(p); // 跳过标识符
-                advance(p); // 跳过 =
-                ASTNode *target = ast_identifier_create((char *)name_token->lexeme, token_to_loc(name_token));
-                ASTNode *value = parse_expression(p);
-                update = ast_assign_stmt_create(target, value, token_to_loc(name_token));
-            } else {
-                update = parse_expression(p);
-            }
-        } else {
-            update = parse_expression(p);
-        }
-    }
-    
     if (!match(p, TK_R_PAREN)) {
-        error_at(p, current_token(p), "Expected ')' after loop header");
+        error_at(p, current_token(p), "Expected ')' after repeat count");
         return NULL;
     }
     
-    // 解析可选标签
     char *label = parse_optional_loop_label(p);
-    
-    // 循环体
     ASTNode *body = parse_block(p);
-    
-    ASTNode *node = ast_for_loop_create(init, cond, update, body, token_to_loc(start));
+    ASTNode *node = ast_repeat_loop_create(count_expr, body, token_to_loc(start));
     if (label) {
         ASTLoopStmt *loop = (ASTLoopStmt *)node->data;
         loop->label = label;

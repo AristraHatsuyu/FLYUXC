@@ -1,7 +1,7 @@
 /* 测试 ForEach 循环 - 带括号和不带括号两种语法 */
 main := () {
     println("=== Test 1: Repeat Loop ===")
-    L>[5]{ println("Repeat") }
+    L>(5){ println("Repeat") }
     
     println("\n=== Test 2: For Loop ===")
     L>(i := 0; i < 3; i++){ println(i) }

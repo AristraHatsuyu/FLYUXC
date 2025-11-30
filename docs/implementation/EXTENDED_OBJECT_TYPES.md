@@ -132,7 +132,7 @@ FileHandle { path: "data.txt", mode: "r", position: 0, isOpen: true }
 // 流式读取大文件
 file := openFile("large.log", "r")
 if file != null {
-    L> [1000] {  // 最多读1000行
+    L> (1000) {  // 最多读1000行
         line := file.readLine()
         if line == null { break }
         print(line)
@@ -506,7 +506,7 @@ if file != null {
     print(file)  // FileHandle { path: "large.log", mode: "r", ... }
     
     // 逐行读取
-    L> [1000] {
+    L> (1000) {
         line := file.readLine()
         if line == null { break }
         processLine(line)
@@ -528,7 +528,7 @@ L> (files : name) {
 // openDir - 返回Directory对象(高级)
 dir :[obj]= openDir("./data")
 if dir != null {
-    L> [100] {
+    L> (100) {
         entry := dir.readNext()
         if entry == null { break }
         print("条目:", entry)
@@ -685,7 +685,7 @@ if file != null {
 file = openFile("large.txt", "r")
 if file != null {
     count := 0
-    L> [1000] {
+    L> (1000) {
         line := file.readLine()
         if line == null { break }
         count = count + 1
@@ -808,7 +808,7 @@ analyzeLog := (logPath) {
     }
     
     // 逐行分析
-    L> [100000] {  // 最多10万行
+    L> (100000) {  // 最多10万行
         line := file.readLine()
         if line == null { break }
         

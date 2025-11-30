@@ -52,6 +52,18 @@ typedef struct LoopScopeEntry {
     struct LoopScopeEntry *outer;   /* 外层循环 (renamed from next to avoid confusion) */
 } LoopScopeEntry;
 
+/* 中间值条目 - 跟踪表达式求值中创建的临时 Value* */
+typedef struct TempValueEntry {
+    char *temp_name;                /* 临时变量名（LLVM %tN 格式） */
+    struct TempValueEntry *next;    /* 链表下一个 */
+} TempValueEntry;
+
+/* 中间值栈 - 跟踪当前表达式求值中的所有临时值 */
+typedef struct TempValueStack {
+    TempValueEntry *entries;        /* 临时值链表头 */
+    int count;                      /* 临时值数量 */
+} TempValueStack;
+
 /* 代码生成器结构 */
 typedef struct CodeGen {
     FILE *output;           /* 最终输出文件 */
@@ -72,6 +84,7 @@ typedef struct CodeGen {
     ScopeTracker *scope;    /* 当前函数作用域跟踪器 */
     LoopScopeEntry *loop_scope_stack;  /* 循环作用域栈（用于 break 清理） */
     int block_terminated;   /* 当前基本块是否已终止（有 ret/br） */
+    TempValueStack *temp_values;  /* 中间值栈（表达式求值期间的临时值） */
 } CodeGen;
 
 /* 创建代码生成器 */

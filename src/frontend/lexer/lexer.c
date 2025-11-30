@@ -250,8 +250,7 @@ static int is_builtin_func_name(const char* name) {
 static TokenKind classify_identifier(const char* lexeme) {
     /* 关键字 */
     if (strcmp(lexeme, "if") == 0)    return TK_KW_IF;
-    if (strcmp(lexeme, "break") == 0) return TK_KW_BREAK;
-    if (strcmp(lexeme, "next") == 0)  return TK_KW_NEXT;
+    /* 注意: break 和 next 已被移除，只使用 B> 和 N> 语法 */
 
     /* 类型 */
     if (strcmp(lexeme, "num") == 0)  return TK_TYPE_NUM;

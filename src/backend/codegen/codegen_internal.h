@@ -91,6 +91,25 @@ void loop_scope_generate_multilevel_break_cleanup(CodeGen *gen, const char *targ
 void loop_scope_generate_multilevel_next_cleanup(CodeGen *gen, const char *target_label);
 
 /* ============================================================================
+ * 中间值管理函数声明 - codegen_utils.c (表达式求值期间临时值跟踪)
+ * ============================================================================ */
+
+/* 创建中间值栈 */
+TempValueStack *temp_value_stack_create(void);
+
+/* 释放中间值栈（仅释放栈本身，不释放条目） */
+void temp_value_stack_free(TempValueStack *stack);
+
+/* 注册一个中间值到栈中 */
+void temp_value_register(CodeGen *gen, const char *temp_name);
+
+/* 生成中间值清理代码，释放除最终结果外的所有中间值 */
+void temp_value_release_except(CodeGen *gen, const char *keep_name);
+
+/* 清空中间值栈（不生成清理代码） */
+void temp_value_clear(CodeGen *gen);
+
+/* ============================================================================
  * 表达式代码生成声明 - codegen_expr.c
  * ============================================================================ */
 

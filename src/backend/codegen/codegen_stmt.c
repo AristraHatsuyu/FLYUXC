@@ -119,6 +119,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                             init_val, type_code);
                     fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                             init_val, decl->name);
+                    // 释放中间值（null_typed 不是中间值，跳过）
+                    temp_value_clear(gen);
                     free(init_val);
                 } else {
                     // 普通初始化
@@ -127,9 +129,13 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     gen->current_var_name = NULL;
                     
                     if (init_val) {
+                        // 释放中间值，但保留要赋给变量的值
+                        temp_value_release_except(gen, init_val);
                         fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                                 init_val, decl->name);
                         free(init_val);
+                    } else {
+                        temp_value_clear(gen);
                     }
                 }
             }
@@ -189,7 +195,13 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         gen->current_var_name = target->name;
                         value = codegen_expr(gen, assign->value);
                         gen->current_var_name = NULL;
-                        if (!value) break;
+                        if (!value) {
+                            temp_value_clear(gen);
+                            break;
+                        }
+                        
+                        // 释放中间值，但保留要赋给变量的值
+                        temp_value_release_except(gen, value);
                         
                         // 现在释放旧值（新值已经计算完毕，不再依赖旧值）
                         char *old_val = new_temp(gen);
@@ -204,7 +216,12 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         gen->current_var_name = target->name;
                         value = codegen_expr(gen, assign->value);
                         gen->current_var_name = NULL;
-                        if (!value) break;
+                        if (!value) {
+                            temp_value_clear(gen);
+                            break;
+                        }
+                        // 释放中间值，但保留要赋给变量的值
+                        temp_value_release_except(gen, value);
                         fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                                 value, target->name);
                     }
@@ -213,13 +230,17 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             else if (assign->target->kind == AST_INDEX_EXPR) {
                 // 数组/对象索引赋值: arr[i] = 10 或 obj["key"] = 10 或 obj.arr[i] = 10
                 value = codegen_expr(gen, assign->value);
-                if (!value) break;
+                if (!value) {
+                    temp_value_clear(gen);
+                    break;
+                }
                 
                 ASTIndexExpr *idx_expr = (ASTIndexExpr *)assign->target->data;
                 
                 // 获取对象/数组（支持任意表达式）
                 char *obj_val = codegen_expr(gen, idx_expr->object);
                 if (!obj_val) {
+                    temp_value_clear(gen);
                     free(value);
                     break;
                 }
@@ -227,6 +248,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 计算索引（支持数字和字符串）
                 char *index_val = codegen_expr(gen, idx_expr->index);
                 if (!index_val) {
+                    temp_value_clear(gen);
                     free(obj_val);
                     free(value);
                     break;
@@ -237,6 +259,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_index(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
                         result, obj_val, index_val, value);
                 
+                // 释放中间值（result 是 set_index 返回的，需要释放；value 被存入数组/对象，保留）
+                temp_value_release_except(gen, value);
+                
                 free(obj_val);
                 free(index_val);
                 free(result);
@@ -245,13 +270,17 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 对象成员赋值: obj.prop = value 或 expr.prop = value
                 // 先生成要赋的值
                 value = codegen_expr(gen, assign->value);
-                if (!value) break;
+                if (!value) {
+                    temp_value_clear(gen);
+                    break;
+                }
                 
                 ASTMemberExpr *member = (ASTMemberExpr *)assign->target->data;
                 
                 // 获取对象 Value* （支持任意表达式）
                 char *obj_var = codegen_expr(gen, member->object);
                 if (!obj_var) {
+                    temp_value_clear(gen);
                     free(value);
                     break;
                 }
@@ -275,6 +304,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_field(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
                         result, obj_var, key_value, value);
                 
+                // 释放中间值（key_value 和 result 是临时创建的，需要释放）
+                temp_value_release_except(gen, value);
+                
                 free(obj_var);
                 free(key_label);
                 free(key_ptr);
@@ -283,6 +315,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             }
             else {
                 fprintf(gen->code_buf, "  ; ERROR: unsupported assignment target\n");
+                temp_value_clear(gen);
             }
             
             if (value) free(value);
@@ -295,6 +328,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             if (ret->value) {
                 char *ret_val = codegen_expr(gen, ret->value);
                 if (ret_val) {
+                    // 释放中间值，但保留返回值
+                    temp_value_release_except(gen, ret_val);
+                    
                     // P2: 返回值保护 - 在清理前 retain 返回值
                     fprintf(gen->code_buf, "  ; P2: protect return value\n");
                     fprintf(gen->code_buf, "  call void @value_retain(%%struct.Value* %s)\n", ret_val);
@@ -308,6 +344,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     gen->block_terminated = 1;  // 标记基本块已终止
                     free(ret_val);
                 } else {
+                    temp_value_clear(gen);
                     char *null_ret = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_ret);
                     
@@ -321,6 +358,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     free(null_ret);
                 }
             } else {
+                temp_value_clear(gen);
                 char *null_ret = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_ret);
                 
@@ -626,6 +664,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 char *loop_counter = new_temp(gen);
                 char *loop_limit = codegen_expr(gen, loop->loop_data.repeat_count);
                 
+                // 循环控制表达式不应该作为中间值释放，清空栈
+                temp_value_clear(gen);
+                
                 // 分配计数器变量
                 fprintf(gen->code_buf, "  %s_var = alloca %%struct.Value*\n", loop_counter);
                 
@@ -717,6 +758,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // foreach循环: L> (array : item) { body }
                 char *array = codegen_expr(gen, loop->loop_data.foreach_loop.iterable);
                 char *item_var = loop->loop_data.foreach_loop.item_var;
+                
+                // 循环控制表达式不应该作为中间值释放，清空栈
+                temp_value_clear(gen);
                 
                 // 注册循环变量
                 if (!is_symbol_defined(gen, item_var)) {
@@ -833,6 +877,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     codegen_stmt(gen, loop->loop_data.for_loop.init);
                 }
                 
+                // 初始化表达式不应该作为中间值释放，清空栈
+                temp_value_clear(gen);
+                
                 // 跳转到条件检查
                 fprintf(gen->code_buf, "  br label %%%s\n", loop_header);
                 fprintf(gen->code_buf, "\n%s:\n", loop_header);
@@ -916,10 +963,15 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             ASTExprStmt *stmt = (ASTExprStmt *)node->data;
             char *result = codegen_expr(gen, stmt->expr);
             if (result) {
+                // 释放所有中间值（但保留最终结果）
+                temp_value_release_except(gen, result);
                 // 表达式语句的结果不需要保留，释放它
                 // 这处理了像 "test".>print 这样的表达式，防止内存泄漏
                 fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", result);
                 free(result);
+            } else {
+                // 即使没有结果，也清空中间值栈
+                temp_value_clear(gen);
             }
             break;
         }

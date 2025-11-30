@@ -6,7 +6,7 @@ main := () {
     // Test 1: Simple loop with next
     println("Test 1: Simple loop - skip even numbers")
     sum := 0
-    L> [10] {
+    L> (10) {
         sum = sum + 1
         if (sum % 2 == 0) { N> }
         println("odd:", sum)
@@ -27,7 +27,7 @@ main := () {
     println("\nTest 3: Foreach loop - skip 'skip' item")
     arr := ["a", "skip", "b", "skip", "c"]
     output := ""
-    L> arr : item {
+    L> (arr : item) {
         if (item == "skip") { N> }
         output = output + item
     }
@@ -36,11 +36,11 @@ main := () {
     // Test 4: Nested loops with next
     println("\nTest 4: Nested loops - inner next")
     outer := 0
-    L> [3] {
+    L> (3) {
         outer = outer + 1
         println("Outer:", outer)
         inner := 0
-        L> [5] {
+        L> (5) {
             inner = inner + 1
             if (inner == 2) { N> }
             println("  Inner:", inner)
@@ -50,7 +50,7 @@ main := () {
     // Test 5: Next with local variable cleanup
     println("\nTest 5: Next with local variable")
     count := 0
-    L> [5] {
+    L> (5) {
         localVar := "iteration"
         count = count + 1
         if (count == 2 || count == 4) {

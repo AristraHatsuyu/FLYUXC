@@ -35,6 +35,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->scope = NULL;  /* P2: 初始无作用域跟踪器（在函数内部设置） */
     gen->loop_scope_stack = NULL;  /* 循环作用域栈初始为空 */
     gen->block_terminated = 0;  /* 初始基本块未终止 */
+    gen->temp_values = NULL;  /* 中间值栈初始为空 */
     
     return gen;
 }
@@ -81,6 +82,11 @@ void codegen_free(CodeGen *gen) {
             free(sym->name);
             free(sym);
             sym = next_sym;
+        }
+        
+        // 释放中间值栈
+        if (gen->temp_values) {
+            temp_value_stack_free(gen->temp_values);
         }
         
         free(gen);

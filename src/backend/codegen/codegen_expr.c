@@ -19,6 +19,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 使用 %.17e 科学计数法保持完整精度（17位有效数字）
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %.17e)\n", 
                     temp, num->value);
+            temp_value_register(gen, temp);  // 注册为中间值
             
             return temp;
         }
@@ -31,6 +32,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // LLVM i1/i32: false=0, true=1
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %d)\n", 
                     temp, bl->value ? 1 : 0);
+            temp_value_register(gen, temp);  // 注册为中间值
             
             return temp;
         }
@@ -57,6 +59,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 使用 box_string_with_length 装箱，传递显式长度支持\0字符串
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string_with_length(i8* %s, i64 %zu)\n",
                     temp, str_ptr, len);
+            temp_value_register(gen, temp);  // 注册为中间值
             
             free(escaped);
             free(str_label);
@@ -69,6 +72,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             
             // 调用 box_null() 创建 null 值
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", temp);
+            temp_value_register(gen, temp);  // 注册为中间值
             
             return temp;
         }
@@ -78,6 +82,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             
             // undef 使用 box_undef()
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", temp);
+            temp_value_register(gen, temp);  // 注册为中间值
             
             return temp;
         }
@@ -91,10 +96,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 未定义的变量返回 undef
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()  ; undef variable '%s'\n", 
                         temp, id->name);
+                temp_value_register(gen, temp);  // 注册为中间值
                 return temp;
             }
             
             // 加载变量值（现在是 Value*）
+            // 注意：从变量加载的值不是中间值，不需要注册
             fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", 
                     temp, id->name);
             
@@ -112,34 +119,42 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     // 使用 value_add 支持数字和字符串拼接
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);  // 注册结果为中间值
                     break;
                 case TK_MINUS:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_subtract(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_STAR:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_multiply(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_SLASH:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_divide(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_POWER:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_power(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_PERCENT:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_modulo(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_LT:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_less_than(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_GT:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_greater_than(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_LE: {
                     // <= 使用 !(a > b)
@@ -149,11 +164,14 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     // 对结果取反（使用 value_is_truthy 和 box_bool）
                     char *truthy = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, gt);
+                    // 释放中间 Value* gt
+                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", gt);
                     char *inverted = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", inverted, truthy);
                     char *as_i32 = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, inverted);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                    temp_value_register(gen, result);
                     free(gt);
                     free(truthy);
                     free(inverted);
@@ -167,11 +185,14 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                             lt, left, right);
                     char *truthy = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, lt);
+                    // 释放中间 Value* lt
+                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", lt);
                     char *inverted = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", inverted, truthy);
                     char *as_i32 = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, inverted);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                    temp_value_register(gen, result);
                     free(lt);
                     free(truthy);
                     free(inverted);
@@ -181,6 +202,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 case TK_EQ_EQ:
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_equals(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
+                    temp_value_register(gen, result);
                     break;
                 case TK_BANG_EQ: {
                     // != 使用 !value_equals
@@ -189,11 +211,14 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                             eq, left, right);
                     char *truthy = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, eq);
+                    // 释放中间 Value* eq
+                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", eq);
                     char *inverted = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", inverted, truthy);
                     char *as_i32 = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, inverted);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                    temp_value_register(gen, result);
                     free(eq);
                     free(truthy);
                     free(inverted);
@@ -217,6 +242,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     char *as_i32 = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, and_result);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                    temp_value_register(gen, result);
                     free(left_truthy);
                     free(right_truthy);
                     free(left_bool);
@@ -242,6 +268,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     char *as_i32 = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, or_result);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                    temp_value_register(gen, result);
                     free(left_truthy);
                     free(right_truthy);
                     free(left_bool);

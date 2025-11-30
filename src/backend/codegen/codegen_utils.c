@@ -369,3 +369,115 @@ void loop_scope_generate_multilevel_next_cleanup(CodeGen *gen, const char *targe
     
     fprintf(gen->code_buf, "  ; === Multilevel Next Cleanup End ===\n");
 }
+
+/* ============================================================================
+ * 中间值管理函数实现 - 跟踪表达式求值期间的临时 Value*
+ * ============================================================================ */
+
+/* 创建中间值栈 */
+TempValueStack *temp_value_stack_create(void) {
+    TempValueStack *stack = (TempValueStack *)malloc(sizeof(TempValueStack));
+    stack->entries = NULL;
+    stack->count = 0;
+    return stack;
+}
+
+/* 释放中间值栈（释放栈结构和所有条目的 C 字符串） */
+void temp_value_stack_free(TempValueStack *stack) {
+    if (!stack) return;
+    
+    TempValueEntry *entry = stack->entries;
+    while (entry) {
+        TempValueEntry *next = entry->next;
+        if (entry->temp_name) {
+            free(entry->temp_name);
+        }
+        free(entry);
+        entry = next;
+    }
+    
+    free(stack);
+}
+
+/* 注册一个中间值到栈中 */
+void temp_value_register(CodeGen *gen, const char *temp_name) {
+    if (!gen || !temp_name) return;
+    
+    // 如果栈不存在，创建它
+    if (!gen->temp_values) {
+        gen->temp_values = temp_value_stack_create();
+    }
+    
+    // 创建新条目
+    TempValueEntry *entry = (TempValueEntry *)malloc(sizeof(TempValueEntry));
+    entry->temp_name = strdup(temp_name);
+    entry->next = gen->temp_values->entries;
+    gen->temp_values->entries = entry;
+    gen->temp_values->count++;
+}
+
+/* 生成中间值清理代码，释放除最终结果外的所有中间值 */
+void temp_value_release_except(CodeGen *gen, const char *keep_name) {
+    if (!gen || !gen->temp_values) return;
+    
+    TempValueStack *stack = gen->temp_values;
+    if (stack->count == 0) return;
+    
+    // 如果只有一个值，且是要保留的，不需要清理
+    if (stack->count == 1 && keep_name && 
+        stack->entries && stack->entries->temp_name &&
+        strcmp(stack->entries->temp_name, keep_name) == 0) {
+        temp_value_clear(gen);
+        return;
+    }
+    
+    // 生成清理代码
+    fprintf(gen->code_buf, "  ; --- Temp values cleanup start ---\n");
+    
+    TempValueEntry *entry = stack->entries;
+    TempValueEntry *prev = NULL;
+    
+    while (entry) {
+        TempValueEntry *next = entry->next;
+        
+        // 如果不是要保留的值，释放它
+        if (!keep_name || !entry->temp_name || strcmp(entry->temp_name, keep_name) != 0) {
+            fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", 
+                    entry->temp_name);
+        }
+        
+        // 释放 C 字符串和条目
+        if (entry->temp_name) {
+            free(entry->temp_name);
+        }
+        free(entry);
+        
+        entry = next;
+    }
+    
+    fprintf(gen->code_buf, "  ; --- Temp values cleanup end ---\n");
+    
+    // 清空栈
+    stack->entries = NULL;
+    stack->count = 0;
+}
+
+/* 清空中间值栈（不生成清理代码） */
+void temp_value_clear(CodeGen *gen) {
+    if (!gen || !gen->temp_values) return;
+    
+    TempValueStack *stack = gen->temp_values;
+    TempValueEntry *entry = stack->entries;
+    
+    while (entry) {
+        TempValueEntry *next = entry->next;
+        if (entry->temp_name) {
+            free(entry->temp_name);
+        }
+        free(entry);
+        entry = next;
+    }
+    
+    stack->entries = NULL;
+    stack->count = 0;
+}

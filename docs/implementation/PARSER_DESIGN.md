@@ -461,7 +461,7 @@ typedef enum ASTNodeKind {
     /* ===== 语句 (10种) ===== */
     AST_BLOCK,              // { stmts }
     AST_IF,                 // if (cond) { } { }
-    AST_LOOP_REPEAT,        // L> [10] { }
+    AST_LOOP_REPEAT,        // L> (10) { }
     AST_LOOP_FOR,           // L> (init; cond; update) { }
     AST_LOOP_FOREACH,       // L> (arr : item) { }
     AST_RETURN,             // R> value
@@ -509,7 +509,7 @@ typedef struct IfStmt {
 /* 循环语句 */
 typedef struct LoopStmt {
     enum {
-        LOOP_REPEAT,        // L> [n] { }
+        LOOP_REPEAT,        // L> (n) { }
         LOOP_FOR,           // L> (init; cond; update) { }
         LOOP_FOREACH,       // L> (arr : item) { }
     } loop_kind;

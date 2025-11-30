@@ -1,6 +1,6 @@
 # FLYUX 语言语法规范 - 完整参考
 
-**更新日期**: 2025-11-27
+**更新日期**: 2025-12-01
 
 ## 📌 语法快速参考
 
@@ -119,20 +119,69 @@ if (a < 10) {
 
 #### L> 循环语句
 ```flyux
-// 重复循环
-L> [10] {
+// 重复循环 - 执行固定次数
+L> (10) {
     // 执行 10 次
 }
 
-// for 循环
-L> (i := 0; i < 10; i++) {
-    // 初始化、条件、更新
+// for 循环 - 传统三段式
+L> (i := 0; i < 10; i = i + 1) {
+    // 初始化; 条件; 更新
 }
 
-// 遍历循环
-L> array : item {
-    // 遍历数组的每个元素
+// 遍历循环 - 遍历数组元素
+L> (array : item) {
+    // item 为当前元素
 }
+```
+
+#### 循环标签与多级控制
+```flyux
+// 为循环添加标签，实现多级 B>/N> 控制
+// 语法: L> (...):标签
+
+// 示例1: 重复循环带标签
+L> (10):outer {
+    L> (5):inner {
+        if (condition) { B> outer }  // 跳出外层循环
+        if (other) { N> outer }      // 继续外层循环的下一次迭代
+    }
+}
+
+// 示例2: for 循环带标签
+L> (i := 0; i < 3; i = i + 1):rowLoop {
+    L> (j := 0; j < 3; j = j + 1):colLoop {
+        if (i == 1 && j == 1) {
+            B> rowLoop  // 跳出外层 for 循环
+        }
+    }
+}
+
+// 示例3: 遍历循环带标签
+L> (rows : row):rowIter {
+    L> (cols : col):colIter {
+        if (col == target) {
+            N> rowIter  // 继续外层遍历的下一次迭代
+        }
+    }
+}
+
+// 示例4: 遍历循环带标签
+L> (items : item):itemLoop {
+    if (item == "skip") { N> }  // 跳过当前项
+    if (item == "stop") { B> }  // 结束循环
+}
+```
+
+#### B> 和 N> 循环控制
+```flyux
+// B> - 跳出循环 (等效于其他语言的 break)
+B>          // 跳出当前循环
+B> label    // 跳出指定标签的循环（多级跳出）
+
+// N> - 继续循环 (等效于其他语言的 continue)
+N>          // 继续当前循环的下一次迭代
+N> label    // 继续指定标签循环的下一次迭代（多级继续）
 ```
 
 #### R> 返回语句
@@ -280,6 +329,8 @@ a ^ b      // 位异或
 #### 语言关键字
 - `if` - 条件语句
 - `L>` - 循环
+- `B>` - 跳出循环 (break)
+- `N>` - 继续循环 (continue)
 - `R>` - 返回
 - `T>` - 错误捕获 (Try-Catch)
 - `:=` - 变量/常量定义（推断或显式类型）
@@ -287,7 +338,7 @@ a ^ b      // 位异或
 - `.>` - 方法链调用
 - `.` - 属性访问
 - `!` - 错误抛出后缀（用于函数调用）
-- `:` - 对象键分隔符
+- `:` - 对象键分隔符 / 循环标签分隔符
 
 #### 保留类型（不能用作变量名）
 - `num` - 数字类型
@@ -536,7 +587,7 @@ writeBytes("backup.bin", buffer)
 // 流式读取大文件
 file :[obj]= openFile("large.log", "r")
 if (file != null) {
-    L> [10000] {  // 最多读10000行
+    L> (10000) {  // 最多读10000行
         line := file.readLine()
         if (line == null) { break }
         print(line)
@@ -1011,7 +1062,7 @@ file.close()
 file := openFile("large.log", "r")
 if (file != null) {
     count := 0
-    L> [100000] {
+    L> (100000) {
         line := file.readLine()
         if (line == null) { break }
         count = count + 1
@@ -1054,7 +1105,7 @@ if (content != null) {
 // 大文件 - 流式处理
 file :[obj]= openFile("large.log", "r")
 if (file != null) {
-    L> [10000] {
+    L> (10000) {
         line := file.readLine()
         if (line == null) { break }
         processLine(line)
@@ -1329,10 +1380,16 @@ print("Result:", result)
 
 ---
 
-**文档版本**: 3.1
-**最后更新**: 2025-11-27
+**文档版本**: 3.2
+**最后更新**: 2025-12-01
 
 ## 📝 更新历史
+
+### 版本 3.2 (2025-12-01)
+- ✅ 统一循环语法：所有循环必须使用括号形式
+- ✅ 重复循环语法从 `L> [n]` 改为 `L> (n)`
+- ✅ 遍历循环语法必须使用 `L> (array : item)` 形式
+- ✅ 消除了 `L> [5] : idx` 的语法歧义问题
 
 ### 版本 3.1 (2025-11-27)
 - 修复已知问题

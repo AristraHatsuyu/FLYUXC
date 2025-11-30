@@ -729,7 +729,7 @@ ASTNode* parse_loop_statement(Parser* p) {
     SourceLoc loc = token_loc(parser_previous(p));
     
     if (parser_match(p, TK_LBRACKET)) {
-        // 重复循环: L> [n] { }
+        // 重复循环: L> (n) { }
         ASTNode* count = parse_expression(p);
         parser_consume(p, TK_RBRACKET, "expected ']' after count");
         ASTNode* body = parse_block(p);

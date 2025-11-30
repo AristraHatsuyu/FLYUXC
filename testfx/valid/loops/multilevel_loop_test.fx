@@ -6,9 +6,9 @@ main := () {
     // Test 1: 多级 break - 从内层直接跳出外层
     println("\nTest 1: Multilevel break from inner to outer")
     count := 0
-    L> [3]:outer1 {
+    L> (3):outer1 {
         println("Outer:", count + 1)
-        L> [5]:inner1 {
+        L> (5):inner1 {
             count = count + 1
             if (count == 3) {
                 println("  Breaking out to outer at count:", count)
@@ -24,10 +24,10 @@ main := () {
     println("\nTest 2: Multilevel next from inner to outer")
     outer_count := 0
     inner_total := 0
-    L> [4]:outer2 {
+    L> (4):outer2 {
         outer_count = outer_count + 1
         println("Outer iteration:", outer_count)
-        L> [3]:inner2 {
+        L> (3):inner2 {
             inner_total = inner_total + 1
             if (outer_count == 2) {
                 println("  Skipping rest of outer iteration 2")
@@ -40,11 +40,11 @@ main := () {
     
     // Test 3: 三层嵌套 break
     println("\nTest 3: Three-level nested break")
-    L> [2]:level1 {
+    L> (2):level1 {
         println("Level 1")
-        L> [2]:level2 {
+        L> (2):level2 {
             println("  Level 2")
-            L> [3]:level3 {
+            L> (3):level3 {
                 println("    Level 3")
                 if (true) {
                     println("    Breaking to level 1")
@@ -58,8 +58,8 @@ main := () {
     // Test 4: 混合普通 break/next 和多级
     println("\nTest 4: Mixed regular and multilevel break/next")
     result := 0
-    L> [5]:outer4 {
-        L> [5]:inner4 {
+    L> (5):outer4 {
+        L> (5):inner4 {
             result = result + 1
             if (result % 3 == 0) {
                 N>  // 普通 next，继续当前循环
@@ -92,8 +92,8 @@ main := () {
     arr1 := ["a", "b", "c"]
     arr2 := [1, 2, 3]
     output := ""
-    L> arr1 : x : foreachOuter {
-        L> arr2 : y : foreachInner {
+    L> (arr1 : x):foreachOuter {
+        L> (arr2 : y):foreachInner {
             output = output + x + toStr(y) + " "
             if (x == "b" && y == 2) {
                 println("Continuing outer foreach at x=", x, "y=", y)
