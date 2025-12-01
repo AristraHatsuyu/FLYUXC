@@ -178,6 +178,545 @@ static char* validate_variable_declarations(const char* source) {
 }
 
 /**
+ * Get a specific line from source code
+ * Returns a newly allocated string containing the line (caller must free)
+ */
+static char* get_source_line(const char* source, int line_num) {
+    if (!source || line_num < 1) return NULL;
+    
+    const char* p = source;
+    int current_line = 1;
+    
+    // Find the start of the target line
+    while (*p && current_line < line_num) {
+        if (*p == '\n') {
+            current_line++;
+        }
+        p++;
+    }
+    
+    if (!*p && current_line < line_num) return NULL;
+    
+    // Find the end of the line
+    const char* line_start = p;
+    while (*p && *p != '\n') {
+        p++;
+    }
+    
+    size_t line_len = p - line_start;
+    char* line = malloc(line_len + 1);
+    if (!line) return NULL;
+    
+    memcpy(line, line_start, line_len);
+    line[line_len] = '\0';
+    return line;
+}
+
+/**
+ * Create a formatted error message with source line and position indicator
+ * Similar to parser error format:
+ *   Error at line X, column Y: message
+ *       X | source_line
+ *         |      ^
+ */
+static char* create_formatted_error(const char* source, int line, int column,
+                                   const char* keyword, const char* flyux_equiv,
+                                   const char* suggestion) {
+    char* src_line = get_source_line(source, line);
+    
+    // Build the error message with proper formatting
+    size_t buf_size = 1024;
+    if (src_line) buf_size += strlen(src_line);
+    if (suggestion) buf_size += strlen(suggestion);
+    
+    char* error_buf = malloc(buf_size);
+    if (!error_buf) {
+        free(src_line);
+        return NULL;
+    }
+    
+    // Create position indicator (spaces followed by ^)
+    char indicator[256] = {0};
+    int spaces = column - 1;
+    if (spaces > 200) spaces = 200;  // Limit to prevent buffer overflow
+    for (int i = 0; i < spaces; i++) {
+        indicator[i] = ' ';
+    }
+    indicator[spaces] = '^';
+    indicator[spaces + 1] = '\0';
+    
+    if (flyux_equiv != NULL) {
+        snprintf(error_buf, buf_size,
+                 "Error at line %d, column %d: Invalid keyword '%s'\n"
+                 "    %d | %s\n"
+                 "      | %s\n"
+                 "  Hint: FLYUX uses '%s' instead\n"
+                 "  Suggestion: %s",
+                 line, column, keyword,
+                 line, src_line ? src_line : "(unable to read line)",
+                 indicator,
+                 flyux_equiv, suggestion);
+    } else {
+        snprintf(error_buf, buf_size,
+                 "Error at line %d, column %d: Invalid keyword '%s'\n"
+                 "    %d | %s\n"
+                 "      | %s\n"
+                 "  Suggestion: %s",
+                 line, column, keyword,
+                 line, src_line ? src_line : "(unable to read line)",
+                 indicator,
+                 suggestion);
+    }
+    
+    free(src_line);
+    return error_buf;
+}
+
+/* Non-FLYUX syntax keyword detection table */
+typedef struct {
+    const char* keyword;        /* Invalid keyword */
+    const char* flyux_equiv;    /* FLYUX equivalent */
+    const char* suggestion;     /* Suggestion message */
+} InvalidKeywordInfo;
+
+static const InvalidKeywordInfo INVALID_KEYWORDS[] = {
+    /* Variable declaration keywords */
+    {"let", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    {"const", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    {"var", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    
+    /* Control flow keywords */
+    {"else", "{} {}", "FLYUX has no 'else' keyword, use the second block of if, e.g.: if (cond) { true_branch } { false_branch }"},
+    {"while", "L>", "Use 'L>' for loops, e.g.: L> (true_condition) { body }"},
+    {"for", "L>", "Use 'L>' for loops, e.g.: L> (i; i < 10; i++) { body }"},
+    {"do", "L>", "Use 'L>' for loops, e.g.: L> (condition) { body }"},
+    {"switch", "if", "FLYUX has no 'switch' statement, use multiple if conditions"},
+    {"case", "if", "FLYUX has no 'case' statement, use multiple if conditions"},
+    {"default", "if", "FLYUX has no 'default' statement, use the else branch of if"},
+    
+    /* Jump keywords */
+    {"return", "R>", "Use 'R>' to return values, e.g.: R> value"},
+    {"break", "B>", "Use 'B>' to break out of loops, e.g.: B> or B> @label"},
+    {"continue", "N>", "Use 'N>' to continue to next iteration, e.g.: N> or N> @label"},
+    
+    /* Function definition keywords */
+    {"function", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"def", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"fn", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"lambda", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    
+    /* Exception handling keywords */
+    {"try", "T>", "Use 'T>' for exception handling, e.g.: T> { risky_code } (e) { handle_error }"},
+    {"catch", "T>", "Use 'T>' for exception handling, e.g.: T> { risky_code } (e) { handle_error }"},
+    {"finally", NULL, "FLYUX's T> structure has no finally block"},
+    {"throw", NULL, "FLYUX uses built-in error object mechanism"},
+    {"raise", NULL, "FLYUX uses built-in error object mechanism"},
+    
+    /* Class/object keywords */
+    {"class", "obj", "FLYUX uses 'obj' type to create objects, e.g.: person := {name: \"John\", age: 30}"},
+    {"new", NULL, "FLYUX does not need 'new' keyword, create objects directly"},
+    {"this", NULL, "FLYUX object methods have no 'this' keyword"},
+    {"self", NULL, "FLYUX object methods have no 'self' keyword"},
+    
+    /* Module keywords */
+    {"import", NULL, "FLYUX currently does not support module imports"},
+    {"export", NULL, "FLYUX currently does not support module exports"},
+    {"from", NULL, "FLYUX currently does not support module system"},
+    {"require", NULL, "FLYUX currently does not support module system"},
+    
+    /* Other common keywords */
+    {"async", NULL, "FLYUX currently does not support async programming"},
+    {"await", NULL, "FLYUX currently does not support async programming"},
+    {"yield", NULL, "FLYUX currently does not support generators"},
+    {"void", NULL, "FLYUX does not use 'void' type"},
+    {"elif", "if", "FLYUX has no 'elif', use nested if statements"},
+    {"elsif", "if", "FLYUX has no 'elsif', use nested if statements"},
+    {"unless", "if", "FLYUX has no 'unless', use if (!condition)"},
+    {"until", "L>", "FLYUX has no 'until', use 'L>' loop"},
+    
+    /* Python/Ruby logic keywords */
+    {"and", "&&", "Use '&&' for logical AND in FLYUX"},
+    {"or", "||", "Use '||' for logical OR in FLYUX"},
+    {"not", "!", "Use '!' for logical NOT in FLYUX"},
+    {"pass", NULL, "FLYUX has no 'pass' statement, use empty block {}"},
+    
+    /* Type keywords from other languages */
+    {"int", NULL, "FLYUX is dynamically typed, no 'int' keyword needed"},
+    {"float", NULL, "FLYUX is dynamically typed, no 'float' keyword needed"},
+    {"double", NULL, "FLYUX is dynamically typed, no 'double' keyword needed"},
+    {"boolean", NULL, "FLYUX is dynamically typed, no 'boolean' keyword needed"},
+    {"string", NULL, "FLYUX is dynamically typed, no 'string' keyword needed"},
+    {"char", NULL, "FLYUX is dynamically typed, no 'char' keyword needed"},
+    
+    /* Special values from other languages */
+    {"None", "null", "Use 'null' for null values in FLYUX"},
+    {"nil", "null", "Use 'null' for null values in FLYUX"},
+    {"undefined", "null", "Use 'null' for undefined values in FLYUX"},
+    {"True", "true", "Use lowercase 'true' for boolean true in FLYUX"},
+    {"False", "false", "Use lowercase 'false' for boolean false in FLYUX"},
+    
+    {NULL, NULL, NULL}  /* 结束标记 */
+};
+
+/**
+ * Check if a keyword has been defined as a variable before a given position
+ * Looks for patterns like "keyword:=" or "keyword :=" before the current position
+ */
+static int is_keyword_defined_before(const char* source, const char* current_pos, 
+                                     const char* keyword, int kw_len) {
+    if (!source || !current_pos || !keyword || current_pos <= source) return 0;
+    
+    const char* p = source;
+    
+    while (p < current_pos) {
+        // Skip strings
+        if (*p == '"' || *p == '\'') {
+            char quote = *p++;
+            while (p < current_pos && *p != quote) {
+                if (*p == '\\' && *(p+1)) p++;
+                p++;
+            }
+            if (p < current_pos) p++;  // skip closing quote
+            continue;
+        }
+        
+        // Look for keyword
+        if (isalpha(*p) || *p == '_') {
+            const char* start = p;
+            while (p < current_pos && (isalnum(*p) || *p == '_')) p++;
+            int ident_len = p - start;
+            
+            if (ident_len == kw_len && strncmp(start, keyword, kw_len) == 0) {
+                // Check if followed by := (with optional whitespace)
+                const char* after = p;
+                while (after < current_pos && isspace(*after) && *after != '\n') after++;
+                if (after < current_pos - 1 && after[0] == ':' && after[1] == '=') {
+                    return 1;  // Found keyword:= before current position
+                }
+            }
+            continue;
+        }
+        
+        p++;
+    }
+    return 0;
+}
+
+/**
+ * 检测非法关键字
+ * 在源码中查找非 FLYUX 的关键字，如 let, const, var, return, break, continue 等
+ * 返回错误消息（需要调用者释放），如果没有错误返回 NULL
+ */
+static char* check_invalid_keywords(const char* source) {
+    if (!source) return NULL;
+    
+    const char* p = source;
+    int line = 1;
+    int column = 1;
+    int in_string = 0;
+    char str_quote = 0;
+    int escape = 0;
+    
+    while (*p) {
+        // 处理转义
+        if (escape) {
+            escape = 0;
+            if (*p == '\n') { line++; column = 1; } else { column++; }
+            p++;
+            continue;
+        }
+        if (*p == '\\' && in_string) {
+            escape = 1;
+            column++;
+            p++;
+            continue;
+        }
+        
+        // 处理字符串边界
+        if (!in_string && (*p == '"' || *p == '\'')) {
+            in_string = 1;
+            str_quote = *p;
+            column++;
+            p++;
+            continue;
+        }
+        if (in_string && *p == str_quote) {
+            in_string = 0;
+            str_quote = 0;
+            column++;
+            p++;
+            continue;
+        }
+        if (in_string) {
+            if (*p == '\n') { line++; column = 1; } else { column++; }
+            p++;
+            continue;
+        }
+        
+        // 跳过空白
+        if (isspace(*p)) {
+            if (*p == '\n') { line++; column = 1; } else { column++; }
+            p++;
+            continue;
+        }
+        
+        // 检查标识符
+        if (isalpha(*p) || *p == '_') {
+            const char* start = p;
+            int start_line = line;
+            int start_column = column;
+            
+            // 扫描标识符
+            while (*p && (isalnum(*p) || *p == '_')) {
+                column++;
+                p++;
+            }
+            
+            int ident_len = p - start;
+            
+            // 跳过标识符后的空白（但不跳过换行）
+            const char* after = p;
+            while (*after && isspace(*after) && *after != '\n') {
+                after++;
+            }
+            
+            // 检查非法关键字用法
+            // 只有当这些关键字被用作其他语言的语法时才报错
+            // 如果它们用作变量名（后面跟 := 或 = 或 . 等）则允许
+            for (int i = 0; INVALID_KEYWORDS[i].keyword != NULL; i++) {
+                int kw_len = strlen(INVALID_KEYWORDS[i].keyword);
+                if (ident_len == kw_len && strncmp(start, INVALID_KEYWORDS[i].keyword, kw_len) == 0) {
+                    int should_error = 0;
+                    
+                    // 检查是否是作为变量名使用
+                    // 对于 break/continue，只有 := 或 = 或 ( 才算变量名使用
+                    // 单独出现在一行（后面是换行/分号）是其他语言的语句用法
+                    int is_break_continue = (strcmp(INVALID_KEYWORDS[i].keyword, "break") == 0 ||
+                                             strcmp(INVALID_KEYWORDS[i].keyword, "continue") == 0);
+                    
+                    int is_var_usage = 0;
+                    if (*after == ':' && *(after+1) == '=') is_var_usage = 1;  // :=
+                    else if (*after == '=' && *(after+1) != '=') is_var_usage = 1;  // = 赋值（排除 ==）
+                    
+                    // 对于循环/条件关键字，( 不算函数调用
+                    int is_loop_or_cond_keyword = (strcmp(INVALID_KEYWORDS[i].keyword, "for") == 0 ||
+                                                   strcmp(INVALID_KEYWORDS[i].keyword, "while") == 0 ||
+                                                   strcmp(INVALID_KEYWORDS[i].keyword, "do") == 0 ||
+                                                   strcmp(INVALID_KEYWORDS[i].keyword, "unless") == 0 ||
+                                                   strcmp(INVALID_KEYWORDS[i].keyword, "until") == 0 ||
+                                                   strcmp(INVALID_KEYWORDS[i].keyword, "switch") == 0 ||
+                                                   strcmp(INVALID_KEYWORDS[i].keyword, "catch") == 0);
+                    
+                    // 函数调用 - 但排除循环/条件关键字
+                    if (*after == '(' && !is_loop_or_cond_keyword) is_var_usage = 1;
+                    
+                    // 对于非 break/continue 关键字，更多情况算作变量用法
+                    if (!is_break_continue) {
+                        if (*after == '.') is_var_usage = 1;                   // 成员访问
+                        else if (*after == '[') is_var_usage = 1;              // 索引访问
+                        else if (*after == ')') is_var_usage = 1;              // 表达式结尾
+                        else if (*after == ',') is_var_usage = 1;              // 参数分隔
+                        else if (*after == ';') is_var_usage = 1;              // 语句结尾
+                        else if (*after == '\n' || *after == '\0') is_var_usage = 1; // 行尾
+                        else if (*after == '}') is_var_usage = 1;              // 块结尾
+                        else if (*after == '+' || *after == '-' || *after == '*' || *after == '/') is_var_usage = 1;  // 运算符
+                        else if (*after == '<' || *after == '>' || *after == '!' || *after == '&' || *after == '|') is_var_usage = 1;  // 比较/逻辑
+                    }
+                    
+                    if (is_var_usage) {
+                        // Allow as variable name usage, skip check
+                        break;
+                    }
+                    
+                    // For break/continue, if followed by semicolon/newline/} etc., it's used as a statement
+                    if (is_break_continue) {
+                        if (*after == '\0' || *after == '\n' || *after == ';' || *after == '}') {
+                            return create_formatted_error(source, start_line, start_column,
+                                                          INVALID_KEYWORDS[i].keyword,
+                                                          INVALID_KEYWORDS[i].flyux_equiv,
+                                                          INVALID_KEYWORDS[i].suggestion);
+                        }
+                    }
+                    
+                    // For specific keywords, check their error usage patterns
+                    if (strcmp(INVALID_KEYWORDS[i].keyword, "let") == 0 ||
+                        strcmp(INVALID_KEYWORDS[i].keyword, "const") == 0 ||
+                        strcmp(INVALID_KEYWORDS[i].keyword, "var") == 0) {
+                        // "let x" / "const x" / "var x" pattern - followed by identifier
+                        if (*after && (isalpha(*after) || *after == '_')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "return") == 0) {
+                        // "return x" 模式 - 后面跟着表达式（非 :=）
+                        if (*after && (isalpha(*after) || *after == '_' || isdigit(*after) || 
+                                       *after == '"' || *after == '\'' || *after == '!' || *after == '-')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "function") == 0) {
+                        // "function name" 或 "function(" 模式
+                        if (*after && (isalpha(*after) || *after == '_')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "for") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "while") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "do") == 0) {
+                        // "for (" / "while (" / "do {" 模式
+                        // 但如果关键字之前被定义为变量（如 for:=），则允许调用 for(...)
+                        if (*after == '(' || *after == '{') {
+                            // 检查该关键字是否之前被定义
+                            if (!is_keyword_defined_before(source, start, 
+                                                           INVALID_KEYWORDS[i].keyword, kw_len)) {
+                                should_error = 1;
+                            }
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "else") == 0) {
+                        // "else" 后面直接跟 { 或 if
+                        if (*after == '{' || (strncmp(after, "if", 2) == 0)) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "try") == 0) {
+                        // "try {" 模式
+                        if (*after == '{') {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "catch") == 0) {
+                        // "catch (" 模式
+                        if (*after == '(') {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "class") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "import") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "export") == 0) {
+                        // "class X" / "import X" / "export X" pattern
+                        if (*after && (isalpha(*after) || *after == '_' || *after == '{' || *after == '*')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "and") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "or") == 0) {
+                        // "x and y" / "x or y" - used between expressions
+                        // Error when followed by identifier/number/expression start
+                        if (*after && (isalpha(*after) || *after == '_' || isdigit(*after) ||
+                                      *after == '(' || *after == '!' || *after == '"' || *after == '\'')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "not") == 0) {
+                        // "not x" - used before expression
+                        if (*after && (isalpha(*after) || *after == '_' || isdigit(*after) ||
+                                      *after == '(' || *after == '!' || *after == '"' || *after == '\'')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "pass") == 0) {
+                        // "pass" alone on a line or followed by nothing
+                        if (*after == '\0' || *after == '\n' || *after == ';' || *after == '}') {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "int") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "float") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "double") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "boolean") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "string") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "char") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "void") == 0) {
+                        // "int x" / "float x" etc. - type followed by identifier
+                        if (*after && (isalpha(*after) || *after == '_')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "None") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "nil") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "undefined") == 0) {
+                        // Python/Ruby null values - used in expressions/assignments
+                        // Error when used as value (after := or = or in expression)
+                        // Check: is there a := or = before this on the same line?
+                        const char* line_start = start;
+                        while (line_start > source && *(line_start - 1) != '\n') {
+                            line_start--;
+                        }
+                        // Check for := or = before this keyword
+                        const char* checker = line_start;
+                        int found_assign = 0;
+                        while (checker < start) {
+                            if (*checker == ':' && *(checker + 1) == '=') {
+                                found_assign = 1;
+                                break;
+                            } else if (*checker == '=' && (checker == source || *(checker - 1) != ':') && *(checker + 1) != '=') {
+                                found_assign = 1;
+                                break;
+                            }
+                            checker++;
+                        }
+                        if (found_assign) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "True") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "False") == 0) {
+                        // Python True/False - capital letters should be lowercase
+                        // Always error when used (suggest lowercase)
+                        should_error = 1;
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "yield") == 0) {
+                        // "yield x" - followed by expression
+                        if (*after && (isalpha(*after) || *after == '_' || isdigit(*after) ||
+                                      *after == '(' || *after == '"' || *after == '\'')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "async") == 0) {
+                        // "async function" or "async def"
+                        if (*after && (isalpha(*after) || *after == '_')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "await") == 0) {
+                        // "await x" - followed by expression
+                        if (*after && (isalpha(*after) || *after == '_' || isdigit(*after) || *after == '(')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "def") == 0) {
+                        // "def name" - Python function definition
+                        if (*after && (isalpha(*after) || *after == '_')) {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "unless") == 0 ||
+                               strcmp(INVALID_KEYWORDS[i].keyword, "until") == 0) {
+                        // "unless (" / "until (" - Ruby style conditionals/loops
+                        if (*after == '(' || *after == '{') {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "pass") == 0) {
+                        // "pass" alone - Python placeholder
+                        if (*after == '\0' || *after == '\n' || *after == ';' || *after == '}') {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "switch") == 0) {
+                        // "switch (" - switch statement
+                        if (*after == '(' || *after == '{') {
+                            should_error = 1;
+                        }
+                    } else if (strcmp(INVALID_KEYWORDS[i].keyword, "case") == 0) {
+                        // "case x:" - case label
+                        if (*after && (isalpha(*after) || *after == '_' || isdigit(*after) || *after == '"' || *after == '\'')) {
+                            should_error = 1;
+                        }
+                    }
+                    // Other keywords not restricted for now, allow as variable names
+                    
+                    if (should_error) {
+                        return create_formatted_error(source, start_line, start_column,
+                                                      INVALID_KEYWORDS[i].keyword,
+                                                      INVALID_KEYWORDS[i].flyux_equiv,
+                                                      INVALID_KEYWORDS[i].suggestion);
+                    }
+                }
+            }
+            continue;
+        }
+        
+        // 跳过其他字符
+        if (*p == '\n') { line++; column = 1; } else { column++; }
+        p++;
+    }
+    
+    return NULL;  // 没有错误
+}
+
+/**
  * 释放语句数组
  */
 static void free_statements(Statement* statements, int count) {
@@ -449,6 +988,15 @@ NormalizeResult flyux_normalize(const char* source_code) {
         return result;
     }
     
+    // Step 1.4: 检测非法关键字（如 let, const, var, return 等）
+    char* keyword_error = check_invalid_keywords(no_comments);
+    if (keyword_error) {
+        result.error_msg = keyword_error;
+        result.error_code = -1;
+        free(no_comments);
+        return result;
+    }
+    
     // Step 1.5: 规范化块内的换行符为分号
     char* normalized_newlines = normalize_internal_newlines(no_comments);
     free(no_comments);
@@ -629,11 +1177,17 @@ NormalizeResult flyux_normalize(const char* source_code) {
                     continue;
                 }
                 
-                // 跳过空白
+                // 跳过空白 - 但如果 normalized 中当前字符也是空格，则不跳过
+                // 这样可以正确匹配保留在 normalized 中的空格
                 if (src_ch == ' ' || src_ch == '\t' || src_ch == '\r') {
-                    orig_col++;
-                    src_idx++;
-                    continue;
+                    // 检查 normalized 中是否也是空格
+                    if (normalized[norm_idx] != ' ') {
+                        // normalized 中不是空格，跳过源码中的空格
+                        orig_col++;
+                        src_idx++;
+                        continue;
+                    }
+                    // 否则，需要匹配这个空格，不跳过
                 }
             } else {
                 // 在字符串内，不跳过注释和空白，只跳过字符串外的换行（不应该有）

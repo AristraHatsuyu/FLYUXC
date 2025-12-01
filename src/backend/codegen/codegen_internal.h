@@ -4,6 +4,20 @@
 #include "flyuxc/backend/codegen.h"
 
 /* ============================================================================
+ * 错误处理函数 - codegen.c
+ * ============================================================================ */
+
+/* 设置编译错误 */
+void codegen_set_error(CodeGen *gen, const char *message);
+
+/* 设置带位置信息的编译错误 */
+void codegen_set_error_at(CodeGen *gen, int line, int column, 
+                          const char *var_name, const char *message);
+
+/* 从映射表中查找映射后名字对应的原始名字 */
+const char *codegen_lookup_original_name(CodeGen *gen, const char *mapped_name);
+
+/* ============================================================================
  * 内部工具函数声明 - codegen_utils.c
  * ============================================================================ */
 
@@ -37,8 +51,14 @@ ObjectField *find_field(ObjectMetadata *obj_meta, const char *field_name);
 /* 注册变量到符号表 */
 void register_symbol(CodeGen *gen, const char *var_name);
 
+/* 注册全局变量到全局符号表 */
+void register_global(CodeGen *gen, const char *var_name);
+
 /* 检查变量是否已定义 */
 int is_symbol_defined(CodeGen *gen, const char *var_name);
+
+/* 检查变量是否是全局变量 */
+int is_global_var(CodeGen *gen, const char *var_name);
 
 /* ============================================================================
  * 作用域跟踪函数声明 - codegen_utils.c (P2: 作用域退出清理)

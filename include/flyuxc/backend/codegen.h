@@ -76,6 +76,7 @@ typedef struct CodeGen {
     ArrayMetadata *arrays;  /* 数组元数据链表 */
     ObjectMetadata *objects; /* 对象元数据链表 */
     SymbolEntry *symbols;   /* 符号表 - 已定义的变量 */
+    SymbolEntry *globals;   /* 全局变量表 - has_main时使用LLVM全局变量 */
     const char *current_var_name;  /* 当前正在赋值的变量名（用于数组/对象跟踪） */
     int in_try_catch;       /* 是否在 Try-Catch 块中 */
     char *try_catch_label;  /* 当前 Try-Catch 的 catch 标签 */
@@ -85,13 +86,32 @@ typedef struct CodeGen {
     LoopScopeEntry *loop_scope_stack;  /* 循环作用域栈（用于 break 清理） */
     int block_terminated;   /* 当前基本块是否已终止（有 ret/br） */
     TempValueStack *temp_values;  /* 中间值栈（表达式求值期间的临时值） */
+    int has_error;          /* 是否有编译错误 */
+    char *error_message;    /* 错误消息 */
+    /* 变量映射表（用于错误消息中显示原始名字） */
+    void *varmap_entries;   /* VarMapEntry 数组的指针 */
+    size_t varmap_count;    /* 映射表大小 */
+    /* 原始源代码（用于错误消息中显示源码行） */
+    const char *original_source;
 } CodeGen;
 
 /* 创建代码生成器 */
 CodeGen *codegen_create(FILE *output);
 
+/* 设置变量映射表（用于错误消息中显示原始变量名） */
+void codegen_set_varmap(CodeGen *gen, void *entries, size_t count);
+
+/* 设置原始源代码（用于错误消息中显示源码行） */
+void codegen_set_original_source(CodeGen *gen, const char *source);
+
 /* 生成LLVM IR */
 void codegen_generate(CodeGen *gen, ASTNode *ast);
+
+/* 检查是否有错误 */
+int codegen_has_error(CodeGen *gen);
+
+/* 获取错误消息 */
+const char *codegen_get_error(CodeGen *gen);
 
 /* 释放代码生成器 */
 void codegen_free(CodeGen *gen);

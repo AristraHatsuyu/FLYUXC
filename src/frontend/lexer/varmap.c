@@ -4,29 +4,167 @@
 #include <stdio.h>
 #include <ctype.h>
 
-/* ========== 工具函数 ========== */
+/* ========== Utility functions ========== */
 
 static int is_space_c(int c) {
     return c==' ' || c=='\t' || c=='\n' || c=='\r' || c=='\v' || c=='\f';
 }
 
 static int is_ident_char(int c) {
-    /* 允许 ASCII 字母、数字、_，以及所有非 ASCII 字节（emoji 等） */
+    /* Allow ASCII letters, digits, _, and all non-ASCII bytes (emoji etc.) */
     return (c == '_' || isalnum((unsigned char)c) || (unsigned char)c >= 0x80);
 }
 
 static int is_ident_start(int c) {
-    /* 允许以字母、_、非 ASCII 开头，数字开头暂不当作标识符起点 */
+    /* Allow starting with letters, _, non-ASCII; digits not allowed at start */
     return (c == '_' || isalpha((unsigned char)c) || (unsigned char)c >= 0x80);
 }
 
-/* 简单字符串复制，出错返回 NULL */
+/* Simple string copy, returns NULL on error */
 static char* str_dup_n(const char* s, size_t len) {
     char* out = (char*)malloc(len + 1);
     if (!out) return NULL;
     memcpy(out, s, len);
     out[len] = '\0';
     return out;
+}
+
+/**
+ * Get a specific line from original source code using source map
+ * Returns a newly allocated string containing the line (caller must free)
+ */
+static char* get_original_source_line(const char* original_source, int line_num) {
+    if (!original_source || line_num < 1) return NULL;
+    
+    const char* p = original_source;
+    int current_line = 1;
+    
+    // Find the start of the target line
+    while (*p && current_line < line_num) {
+        if (*p == '\n') {
+            current_line++;
+        }
+        p++;
+    }
+    
+    if (!*p && current_line < line_num) return NULL;
+    
+    // Find the end of the line
+    const char* line_start = p;
+    while (*p && *p != '\n') {
+        p++;
+    }
+    
+    size_t line_len = p - line_start;
+    char* line = malloc(line_len + 1);
+    if (!line) return NULL;
+    
+    memcpy(line, line_start, line_len);
+    line[line_len] = '\0';
+    return line;
+}
+
+/**
+ * Create a formatted error message with source line and position indicator
+ */
+static char* create_varmap_formatted_error(const char* original_source,
+                                           int line, int column,
+                                           const char* keyword,
+                                           const char* flyux_equiv,
+                                           const char* suggestion) {
+    char* src_line = get_original_source_line(original_source, line);
+    
+    // Build the error message with proper formatting
+    size_t buf_size = 1024;
+    if (src_line) buf_size += strlen(src_line);
+    if (suggestion) buf_size += strlen(suggestion);
+    
+    char* error_buf = malloc(buf_size);
+    if (!error_buf) {
+        free(src_line);
+        return NULL;
+    }
+    
+    // Create position indicator (spaces followed by ^)
+    char indicator[256] = {0};
+    int spaces = column - 1;
+    if (spaces > 200) spaces = 200;  // Limit to prevent buffer overflow
+    for (int i = 0; i < spaces; i++) {
+        indicator[i] = ' ';
+    }
+    indicator[spaces] = '^';
+    indicator[spaces + 1] = '\0';
+    
+    if (flyux_equiv != NULL) {
+        snprintf(error_buf, buf_size,
+                 "Error at line %d, column %d: Invalid keyword '%s'\n"
+                 "    %d | %s\n"
+                 "      | %s\n"
+                 "  Hint: FLYUX uses '%s' instead\n"
+                 "  Suggestion: %s",
+                 line, column, keyword,
+                 line, src_line ? src_line : "(unable to read line)",
+                 indicator,
+                 flyux_equiv, suggestion);
+    } else {
+        snprintf(error_buf, buf_size,
+                 "Error at line %d, column %d: Invalid keyword '%s'\n"
+                 "    %d | %s\n"
+                 "      | %s\n"
+                 "  Suggestion: %s",
+                 line, column, keyword,
+                 line, src_line ? src_line : "(unable to read line)",
+                 indicator,
+                 suggestion);
+    }
+    
+    free(src_line);
+    return error_buf;
+}
+
+/**
+ * Create a formatted error message for invalid statement types (X>)
+ */
+static char* create_varmap_stmt_type_error(const char* original_source,
+                                           int line, int column,
+                                           char stmt_char) {
+    char* src_line = get_original_source_line(original_source, line);
+    
+    size_t buf_size = 1024;
+    if (src_line) buf_size += strlen(src_line);
+    
+    char* error_buf = malloc(buf_size);
+    if (!error_buf) {
+        free(src_line);
+        return NULL;
+    }
+    
+    // Create position indicator
+    char indicator[256] = {0};
+    int spaces = column - 1;
+    if (spaces > 200) spaces = 200;
+    for (int i = 0; i < spaces; i++) {
+        indicator[i] = ' ';
+    }
+    indicator[spaces] = '^';
+    indicator[spaces + 1] = '\0';
+    
+    snprintf(error_buf, buf_size,
+             "Error at line %d, column %d: Invalid statement type '%c>'\n"
+             "    %d | %s\n"
+             "      | %s\n"
+             "  Hint: FLYUX supports these statement types:\n"
+             "    L> - loop statement\n"
+             "    R> - return statement\n"
+             "    B> - break statement\n"
+             "    N> - next/continue statement\n"
+             "    T> - try/exception handling",
+             line, column, stmt_char,
+             line, src_line ? src_line : "(unable to read line)",
+             indicator);
+    
+    free(src_line);
+    return error_buf;
 }
 
 /* 生成形如 "_00001" 的映射名 */
@@ -130,6 +268,98 @@ static int is_builtin_identifier(const char* name, size_t len) {
     return 0;
 }
 
+/* Non-FLYUX syntax keyword detection table */
+typedef struct {
+    const char* keyword;        /* Invalid keyword */
+    const char* flyux_equiv;    /* FLYUX equivalent */
+    const char* suggestion;     /* Suggestion message */
+} InvalidKeywordInfo;
+
+static const InvalidKeywordInfo INVALID_KEYWORDS[] = {
+    /* Variable declaration keywords */
+    {"let", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    {"const", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    {"var", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    
+    /* Control flow keywords */
+    {"else", "{} {}", "FLYUX has no 'else' keyword, use the second block of if, e.g.: if (cond) { true_branch } { false_branch }"},
+    {"while", "L>", "Use 'L>' for loops, e.g.: L> (true_condition) { body }"},
+    {"for", "L>", "Use 'L>' for loops, e.g.: L> (i; i < 10; i++) { body }"},
+    {"do", "L>", "Use 'L>' for loops, e.g.: L> (condition) { body }"},
+    {"switch", "if", "FLYUX has no 'switch' statement, use multiple if conditions"},
+    {"case", "if", "FLYUX has no 'case' statement, use multiple if conditions"},
+    {"default", "if", "FLYUX has no 'default' statement, use the else branch of if"},
+    
+    /* Jump keywords */
+    {"return", "R>", "Use 'R>' to return values, e.g.: R> value"},
+    {"break", "B>", "Use 'B>' to break out of loops, e.g.: B> or B> @label"},
+    {"continue", "N>", "Use 'N>' to continue to next iteration, e.g.: N> or N> @label"},
+    
+    /* Function definition keywords */
+    {"function", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"def", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"fn", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"lambda", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    
+    /* Exception handling keywords */
+    {"try", "T>", "Use 'T>' for exception handling, e.g.: T> { risky_code } (e) { handle_error }"},
+    {"catch", "T>", "Use 'T>' for exception handling, e.g.: T> { risky_code } (e) { handle_error }"},
+    {"finally", NULL, "FLYUX's T> structure has no finally block"},
+    {"throw", NULL, "FLYUX uses built-in error object mechanism"},
+    {"raise", NULL, "FLYUX uses built-in error object mechanism"},
+    
+    /* Class/object keywords */
+    {"class", "obj", "FLYUX uses 'obj' type to create objects, e.g.: person := {name: \"John\", age: 30}"},
+    {"new", NULL, "FLYUX does not need 'new' keyword, create objects directly"},
+    {"this", NULL, "FLYUX object methods have no 'this' keyword"},
+    {"self", NULL, "FLYUX object methods have no 'self' keyword"},
+    
+    /* Module keywords */
+    {"import", NULL, "FLYUX currently does not support module imports"},
+    {"export", NULL, "FLYUX currently does not support module exports"},
+    {"from", NULL, "FLYUX currently does not support module system"},
+    {"require", NULL, "FLYUX currently does not support module system"},
+    
+    /* Other common keywords */
+    {"async", NULL, "FLYUX currently does not support async programming"},
+    {"await", NULL, "FLYUX currently does not support async programming"},
+    {"yield", NULL, "FLYUX currently does not support generators"},
+    {"void", NULL, "FLYUX does not use 'void' type"},
+    {"int", "num", "FLYUX uses 'num' type to represent numbers"},
+    {"float", "num", "FLYUX uses 'num' type to represent numbers"},
+    {"double", "num", "FLYUX uses 'num' type to represent numbers"},
+    {"string", "str", "FLYUX uses 'str' type to represent strings"},
+    {"boolean", "bl", "FLYUX uses 'bl' type to represent booleans"},
+    {"bool", "bl", "FLYUX uses 'bl' type to represent booleans"},
+    {"undefined", "undef", "FLYUX uses 'undef' to represent undefined values"},
+    {"nil", "null", "FLYUX uses 'null' to represent null values"},
+    {"None", "null", "FLYUX uses 'null' to represent null values"},
+    {"True", "true", "FLYUX uses lowercase 'true'"},
+    {"False", "false", "FLYUX uses lowercase 'false'"},
+    {"elif", "if", "FLYUX has no 'elif', use nested if statements"},
+    {"elsif", "if", "FLYUX has no 'elsif', use nested if statements"},
+    {"unless", "if", "FLYUX has no 'unless', use if (!condition)"},
+    {"until", "L>", "FLYUX has no 'until', use 'L>' loop"},
+    {"in", ":", "FLYUX foreach loop uses ':', e.g.: L> (arr : item) { }"},
+    {"of", ":", "FLYUX foreach loop uses ':', e.g.: L> (arr : item) { }"},
+    {"and", "&&", "FLYUX uses '&&' for logical AND"},
+    {"or", "||", "FLYUX uses '||' for logical OR"},
+    {"not", "!", "FLYUX uses '!' for logical NOT"},
+    
+    {NULL, NULL, NULL}  /* End marker */
+};
+
+/* Check for invalid keywords, return info struct pointer, NULL if not found */
+static const InvalidKeywordInfo* check_invalid_keyword(const char* name, size_t len) {
+    for (int i = 0; INVALID_KEYWORDS[i].keyword != NULL; i++) {
+        size_t kw_len = strlen(INVALID_KEYWORDS[i].keyword);
+        if (len == kw_len && memcmp(name, INVALID_KEYWORDS[i].keyword, len) == 0) {
+            return &INVALID_KEYWORDS[i];
+        }
+    }
+    return NULL;
+}
+
 /* 动态数组扩容 */
 static int ensure_entry_capacity(VarMapEntry** arr, size_t* cap, size_t needed) {
     if (*cap >= needed) return 1;
@@ -210,7 +440,8 @@ static int looks_like_typed_definition(const char* src, size_t len, size_t ident
 
 VarMapResult flyux_varmap_process(const char* normalized_source,
                                   const SourceLocation* source_map,
-                                  size_t source_map_size) {
+                                  size_t source_map_size,
+                                  const char* original_source) {
     VarMapResult result;
     result.mapped_source = NULL;
     result.entries = NULL;
@@ -359,12 +590,127 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
             }
             size_t ident_len = j - start;
             const char* ident_start = normalized_source + start;
-
+            
+            /* Check for invalid X> format (single uppercase letter followed by >, not valid L>/R>/T>/B>/N>) */
+            if (ident_len == 1 && isupper((unsigned char)ident_start[0]) 
+                && j < len && normalized_source[j] == '>'
+                && ident_start[0] != 'L' && ident_start[0] != 'R' && ident_start[0] != 'T' 
+                && ident_start[0] != 'B' && ident_start[0] != 'N') {
+                /* Find original position */
+                int orig_line = 1, orig_col = 1;
+                if (source_map && start < source_map_size && source_map[start].orig_line > 0) {
+                    orig_line = source_map[start].orig_line;
+                    orig_col = source_map[start].orig_column;
+                }
+                
+                result.error_code = 1;
+                result.error_msg = create_varmap_stmt_type_error(original_source, orig_line, orig_col, ident_start[0]);
+                free(out);
+                if (entries) {
+                    for (size_t k = 0; k < entry_count; k++) {
+                        free(entries[k].original);
+                        free(entries[k].mapped);
+                    }
+                    free(entries);
+                }
+                return result;
+            }
             /* 确认 token 边界：前一个/后一个字符不能是标识符字符 */
             if ( (start == 0 || !is_ident_char((unsigned char)normalized_source[start - 1])) &&
                  (j >= len || !is_ident_char((unsigned char)normalized_source[j])) ) {
 
-                /* 保留/内置标识符：直接不参与映射 */
+                /* 检测非 FLYUX 关键字用法（不是作为变量名使用时才报错） */
+                const InvalidKeywordInfo* inv_kw = check_invalid_keyword(ident_start, ident_len);
+                if (inv_kw != NULL) {
+                    /* 先检查这个关键字是否已经在映射表中（之前被定义过） */
+                    int already_defined = varmap_find(entries, entry_count, ident_start, ident_len) >= 0;
+                    
+                    /* 检查是否是作为变量名使用 */
+                    /* 在 varmap 阶段，空格已经被删除，所以直接检查后面的字符 */
+                    char after_char = (j < len) ? normalized_source[j] : '\0';
+                    int is_var_usage = 0;
+                    
+                    /* 特殊值关键字 - 永远不允许使用（即使作为表达式的一部分）*/
+                    int is_special_value = (ident_len == 4 && memcmp(ident_start, "None", 4) == 0) ||
+                                           (ident_len == 3 && memcmp(ident_start, "nil", 3) == 0) ||
+                                           (ident_len == 9 && memcmp(ident_start, "undefined", 9) == 0) ||
+                                           (ident_len == 4 && memcmp(ident_start, "True", 4) == 0) ||
+                                           (ident_len == 5 && memcmp(ident_start, "False", 5) == 0);
+                    
+                    /* 如果是特殊值且没有被定义，直接报错 */
+                    if (is_special_value && !already_defined) {
+                        /* 只有当它被用作 := 左边时才允许（定义同名变量） */
+                        if (!(after_char == ':' && j + 1 < len && normalized_source[j + 1] == '=')) {
+                            /* Find original position */
+                            int orig_line = 1, orig_col = 1;
+                            if (source_map && start < source_map_size && source_map[start].orig_line > 0) {
+                                orig_line = source_map[start].orig_line;
+                                orig_col = source_map[start].orig_column;
+                            }
+                            
+                            result.error_code = 1;
+                            result.error_msg = create_varmap_formatted_error(original_source, orig_line, orig_col,
+                                                                             inv_kw->keyword,
+                                                                             inv_kw->flyux_equiv,
+                                                                             inv_kw->suggestion);
+                            free(out);
+                            if (entries) {
+                                for (size_t k = 0; k < entry_count; k++) {
+                                    free(entries[k].original);
+                                    free(entries[k].mapped);
+                                }
+                                free(entries);
+                            }
+                            return result;
+                        }
+                    }
+                    
+                    /* 如果已经被定义，则后续使用都是合法的 */
+                    if (already_defined) {
+                        is_var_usage = 1;
+                    } else {
+                        /* 对于 for/while/do，如果后面跟着 ( 是其他语言的循环语法，不算变量使用 */
+                        int is_loop_keyword = (ident_len == 3 && memcmp(ident_start, "for", 3) == 0) ||
+                                              (ident_len == 5 && memcmp(ident_start, "while", 5) == 0) ||
+                                              (ident_len == 2 && memcmp(ident_start, "do", 2) == 0);
+                        
+                        if (after_char == ':' && j + 1 < len && normalized_source[j + 1] == '=') is_var_usage = 1;  // :=
+                        else if (after_char == '=') is_var_usage = 1;   // = assignment
+                        else if (after_char == '.') is_var_usage = 1;   // member access
+                        else if (after_char == '[') is_var_usage = 1;   // index access
+                        else if (after_char == '(' && !is_loop_keyword) is_var_usage = 1;   // function call (not for/while/do)
+                        else if (after_char == '+' || after_char == '-' || after_char == '*' || after_char == '/') is_var_usage = 1;  // operators
+                        else if (after_char == '<' || after_char == '>' || after_char == '!' || after_char == '&' || after_char == '|') is_var_usage = 1;  // comparison/logic
+                        else if (after_char == ')' || after_char == ',' || after_char == ';' || after_char == '}') is_var_usage = 1;  // expression/statement end
+                        else if (after_char == '\0') is_var_usage = 1;  // end of file
+                    }
+                    
+                    if (!is_var_usage) {
+                        /* Find original position */
+                        int orig_line = 1, orig_col = 1;
+                        if (source_map && start < source_map_size && source_map[start].orig_line > 0) {
+                            orig_line = source_map[start].orig_line;
+                            orig_col = source_map[start].orig_column;
+                        }
+                        
+                        result.error_code = 1;
+                        result.error_msg = create_varmap_formatted_error(original_source, orig_line, orig_col,
+                                                                         inv_kw->keyword,
+                                                                         inv_kw->flyux_equiv,
+                                                                         inv_kw->suggestion);
+                        free(out);
+                        if (entries) {
+                            for (size_t k = 0; k < entry_count; k++) {
+                                free(entries[k].original);
+                                free(entries[k].mapped);
+                            }
+                            free(entries);
+                        }
+                        return result;
+                    }
+                }
+
+                /* Reserved/builtin identifiers: don't participate in mapping */
                 int reserved = is_reserved_identifier(ident_start, ident_len) ||
                                is_builtin_identifier(ident_start, ident_len);
 

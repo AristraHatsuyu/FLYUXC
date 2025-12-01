@@ -41,16 +41,18 @@ typedef struct {
 
 /**
  * 对规范化后的 FLYUX 源码进行变量名映射。
- * 只映射“标识符 token”，并跳过关键字、类型名、布尔/特殊字面量等。
+ * 只映射"标识符 token"，并跳过关键字、类型名、布尔/特殊字面量等。
  *
  * @param normalized_source 来自 flyux_normalize(...) 的 normalized 字符串
  * @param source_map 来自 flyux_normalize(...) 的源码位置映射
  * @param source_map_size 源码位置映射数组长度
+ * @param original_source 原始源代码（用于错误报告）
  * @return 映射结果，需要调用 varmap_result_free 释放
  */
 VarMapResult flyux_varmap_process(const char* normalized_source, 
                                   const SourceLocation* source_map,
-                                  size_t source_map_size);
+                                  size_t source_map_size,
+                                  const char* original_source);
 
 /**
  * 释放 VarMapResult 内部动态资源。

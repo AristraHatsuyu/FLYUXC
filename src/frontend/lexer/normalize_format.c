@@ -309,6 +309,11 @@ static int is_primary_expr(const char* s){
 
 /* ---------------- 空白紧凑化 ---------------- */
 
+/* 判断字符是否是标识符字符（字母、数字、下划线、Unicode字符） */
+static int is_ident_char_for_ws(unsigned char ch) {
+    return ch == '_' || isalnum(ch) || ch >= 0x80;
+}
+
 static char* normalize_whitespace(const char* stmt){
     if (!stmt) return NULL;
     size_t len=strlen(stmt);
@@ -353,8 +358,37 @@ static char* normalize_whitespace(const char* stmt){
             continue;
         }
         
-        // 在字符串外：删除空格
-        if (is_space_c(ch)) continue;
+        // 在字符串外：智能处理空格
+        // 规则：
+        // - 标识符和标识符之间的空格 → 保留（如 "if x" 不应变成 "ifx"）
+        // - 标识符和符号之间的空格 → 删除（如 "x (" 变成 "x("）
+        // - 符号和符号之间的空格 → 删除（如 "+ +" 变成 "++"）
+        if (is_space_c(ch)) {
+            // 查看前一个非空格字符和后一个非空格字符
+            unsigned char prev_char = 0;
+            unsigned char next_char = 0;
+            
+            // 获取前一个字符
+            if (out > 0) {
+                prev_char = (unsigned char)result[out - 1];
+            }
+            
+            // 获取后一个非空格字符
+            size_t j = i + 1;
+            while (j < len && is_space_c((unsigned char)stmt[j])) {
+                j++;
+            }
+            if (j < len) {
+                next_char = (unsigned char)stmt[j];
+            }
+            
+            // 如果前后都是标识符字符，保留空格
+            if (is_ident_char_for_ws(prev_char) && is_ident_char_for_ws(next_char)) {
+                result[out++] = ' ';  // 只保留一个空格
+            }
+            // 否则删除空格
+            continue;
+        }
         
         result[out++]=(char)ch;
     }

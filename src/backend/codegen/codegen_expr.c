@@ -93,17 +93,32 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             
             // 检查变量是否已定义
             if (!is_symbol_defined(gen, id->name)) {
-                // 未定义的变量返回 undef
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()  ; undef variable '%s'\n", 
+                // 未定义的变量 - 报错
+                // 尝试查找原始名字
+                const char *original_name = codegen_lookup_original_name(gen, id->name);
+                const char *display_name = original_name ? original_name : id->name;
+                
+                // 使用节点的位置信息
+                codegen_set_error_at(gen, node->loc.orig_line, node->loc.orig_column,
+                                     display_name, "Undefined variable");
+                
+                // 返回一个 undef 值以继续生成（但会因为 has_error 而失败）
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()  ; ERROR: undefined variable '%s'\n", 
                         temp, id->name);
-                temp_value_register(gen, temp);  // 注册为中间值
+                temp_value_register(gen, temp);
                 return temp;
             }
             
-            // 加载变量值（现在是 Value*）
-            // 注意：从变量加载的值不是中间值，不需要注册
-            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", 
-                    temp, id->name);
+            // 检查是否是全局变量
+            if (is_global_var(gen, id->name)) {
+                // 全局变量访问 - 使用 @var_name
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** @%s\n", 
+                        temp, id->name);
+            } else {
+                // 局部变量访问 - 使用 %var_name
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", 
+                        temp, id->name);
+            }
             
             return temp;
         }
@@ -2690,7 +2705,27 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 普通函数调用
+            // 普通函数调用 - 检查函数是否已定义
+            // 注意：函数名经过 varmap 处理后是 _XXXXX 格式
+            if (getenv("DEBUG_CODEGEN")) {
+                fprintf(stderr, "[DEBUG CODEGEN] Checking function call: %s, is_defined=%d\n", 
+                        callee->name, is_symbol_defined(gen, callee->name));
+            }
+            if (!is_symbol_defined(gen, callee->name)) {
+                // 未定义的函数 - 报错
+                const char *original_name = codegen_lookup_original_name(gen, callee->name);
+                const char *display_name = original_name ? original_name : callee->name;
+                
+                codegen_set_error_at(gen, node->loc.orig_line, node->loc.orig_column,
+                                     display_name, "Undefined function");
+                
+                // 返回一个 undef 值以继续生成
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()  ; ERROR: undefined function '%s'\n", 
+                        result, callee->name);
+                return result;
+            }
+            
             char **arg_regs = NULL;
             if (call->arg_count > 0) {
                 arg_regs = (char **)malloc(call->arg_count * sizeof(char *));

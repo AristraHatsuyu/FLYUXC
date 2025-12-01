@@ -979,6 +979,12 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
         case AST_FUNC_DECL: {
             ASTFuncDecl *func = (ASTFuncDecl *)node->data;
             
+            // 注意：函数名已在 codegen_generate 中预注册（用于支持前向引用）
+            // 对于嵌套函数，需要在这里注册
+            if (!is_symbol_defined(gen, func->name)) {
+                register_symbol(gen, func->name);
+            }
+            
             // 特殊处理: main函数需要重命名为_flyux_main,避免与LLVM入口冲突
             const char *func_llvm_name = func->name;
             if (strcmp(func->name, "main") == 0) {
@@ -1020,10 +1026,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             FILE *saved_entry_alloca = gen->entry_alloca_buf;
             ScopeTracker *saved_scope = gen->scope;
             int saved_block_terminated = gen->block_terminated;
-            SymbolEntry *saved_symbols = gen->symbols;  // 保存符号表，函数有独立作用域
+            SymbolEntry *saved_symbols = gen->symbols;  // 保存符号表
             
-            // 清空符号表以开始新的函数作用域
-            gen->symbols = NULL;
+            // 注意：不清空符号表！顶层预注册的函数名需要在函数体内可见
+            // 函数内的局部变量会覆盖同名的全局符号
             
             // 为参数创建局部变量（注意：必须在清空符号表之后）
             for (size_t i = 0; i < func->param_count; i++) {
@@ -1084,9 +1090,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             gen->scope = saved_scope;
             gen->block_terminated = saved_block_terminated;
             
-            // 释放当前函数的符号表并恢复外层符号表
+            // 释放函数内新添加的符号（在 saved_symbols 之后添加的）
+            // 注意：不释放 saved_symbols 及其之前的条目
             SymbolEntry *entry = gen->symbols;
-            while (entry) {
+            while (entry && entry != saved_symbols) {
                 SymbolEntry *next = entry->next;
                 free(entry->name);
                 free(entry);

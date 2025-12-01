@@ -91,10 +91,9 @@ static std::unique_ptr<llvm::Module> load_ir_module(
     auto module = llvm::parseIRFile(ir_file, err, context);
     
     if (!module) {
-        std::string error_msg = "Failed to parse IR file: ";
-        error_msg += ir_file;
-        error_msg += "\n";
+        std::string error_msg = "IR compilation error: ";
         error_msg += err.getMessage().str();
+        error_msg += "\n  Hint: Use '-IR' flag to view generated IR for debugging";
         set_error(error_msg);
         return nullptr;
     }

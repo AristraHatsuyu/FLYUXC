@@ -104,13 +104,23 @@ int main(int argc, char *argv[])
         /* Step 2: 变量名映射 */
         VarMapResult vm_result = flyux_varmap_process(norm_result.normalized,
                                                       norm_result.source_map,
-                                                      norm_result.source_map_size);
+                                                      norm_result.source_map_size,
+                                                      original_source);
         if (vm_result.error_code != 0) {
             fprintf(stderr, "%sVarmap error:%s %s\n", COLOR_RED, COLOR_RESET,
                     vm_result.error_msg ? vm_result.error_msg : "Unknown error");
             normalize_result_free(&norm_result);
             varmap_result_free(&vm_result);
             return 1;
+        }
+        
+        if (getenv("DEBUG_VARMAP")) {
+            fprintf(stderr, "=== VARMAP RESULT ===\n%s\n=== END ===\n", vm_result.mapped_source);
+            fprintf(stderr, "=== VARMAP ENTRIES ===\n");
+            for (size_t i = 0; i < vm_result.entry_count; i++) {
+                fprintf(stderr, "  %s -> %s\n", vm_result.entries[i].original, vm_result.entries[i].mapped);
+            }
+            fprintf(stderr, "=== END ===\n");
         }
 
         /* Step 3: 词法分析 */
@@ -218,7 +228,20 @@ int main(int argc, char *argv[])
                     fprintf(stderr, "%sError:%s Failed to create code generator\n", COLOR_RED, COLOR_RESET);
                     has_errors = true;
                 } else {
+                    // 设置变量映射表用于错误消息
+                    codegen_set_varmap(codegen, vm_result.entries, vm_result.entry_count);
+                    // 设置原始源代码用于错误消息
+                    codegen_set_original_source(codegen, original_source);
+                    
                     codegen_generate(codegen, ast);
+                    
+                    // 检查 codegen 是否有错误
+                    if (codegen_has_error(codegen)) {
+                        fprintf(stderr, "%sCodegen error:%s %s\n", 
+                                COLOR_RED, COLOR_RESET, codegen_get_error(codegen));
+                        has_errors = true;
+                    }
+                    
                     codegen_free(codegen);
                 }
                 

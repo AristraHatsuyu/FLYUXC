@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "flyuxc/frontend/varmap.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -26,6 +27,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->arrays = NULL;
     gen->objects = NULL;
     gen->symbols = NULL;
+    gen->globals = NULL;  /* 初始无全局变量 */
     gen->current_var_name = NULL;
     gen->in_try_catch = 0;  /* 初始不在 Try-Catch 块中 */
     gen->try_catch_label = NULL;
@@ -36,8 +38,28 @@ CodeGen *codegen_create(FILE *output) {
     gen->loop_scope_stack = NULL;  /* 循环作用域栈初始为空 */
     gen->block_terminated = 0;  /* 初始基本块未终止 */
     gen->temp_values = NULL;  /* 中间值栈初始为空 */
+    gen->has_error = 0;  /* 初始无错误 */
+    gen->error_message = NULL;  /* 初始无错误消息 */
+    gen->varmap_entries = NULL;  /* 初始无映射表 */
+    gen->varmap_count = 0;  /* 初始映射表大小为0 */
+    gen->original_source = NULL;  /* 初始无原始源代码 */
     
     return gen;
+}
+
+/* 设置变量映射表 */
+void codegen_set_varmap(CodeGen *gen, void *entries, size_t count) {
+    if (gen) {
+        gen->varmap_entries = entries;
+        gen->varmap_count = count;
+    }
+}
+
+/* 设置原始源代码 */
+void codegen_set_original_source(CodeGen *gen, const char *source) {
+    if (gen) {
+        gen->original_source = source;
+    }
 }
 
 void codegen_free(CodeGen *gen) {
@@ -89,8 +111,124 @@ void codegen_free(CodeGen *gen) {
             temp_value_stack_free(gen->temp_values);
         }
         
+        // 释放错误消息
+        if (gen->error_message) {
+            free(gen->error_message);
+        }
+        
         free(gen);
     }
+}
+
+/* 检查是否有错误 */
+int codegen_has_error(CodeGen *gen) {
+    return gen ? gen->has_error : 0;
+}
+
+/* 获取错误消息 */
+const char *codegen_get_error(CodeGen *gen) {
+    return gen ? gen->error_message : NULL;
+}
+
+/* 设置错误 */
+void codegen_set_error(CodeGen *gen, const char *message) {
+    if (gen && !gen->has_error) {  /* 只记录第一个错误 */
+        gen->has_error = 1;
+        gen->error_message = strdup(message);
+    }
+}
+
+/* 获取指定行的源代码 */
+static char *get_source_line(const char *source, int line_num) {
+    if (!source || line_num < 1) return NULL;
+    
+    const char *p = source;
+    int current_line = 1;
+    
+    // 找到目标行的开始
+    while (*p && current_line < line_num) {
+        if (*p == '\n') {
+            current_line++;
+        }
+        p++;
+    }
+    
+    if (!*p && current_line < line_num) return NULL;
+    
+    // 找到行末
+    const char *line_start = p;
+    while (*p && *p != '\n') {
+        p++;
+    }
+    
+    size_t line_len = p - line_start;
+    char *line = malloc(line_len + 1);
+    if (!line) return NULL;
+    
+    memcpy(line, line_start, line_len);
+    line[line_len] = '\0';
+    return line;
+}
+
+/* 设置带位置信息的编译错误 */
+void codegen_set_error_at(CodeGen *gen, int line, int column, 
+                          const char *var_name, const char *message) {
+    if (gen && !gen->has_error) {
+        gen->has_error = 1;
+        
+        // 尝试获取源代码行
+        char *src_line = NULL;
+        if (gen->original_source) {
+            src_line = get_source_line(gen->original_source, line);
+        }
+        
+        // 创建位置指示器
+        char indicator[256] = {0};
+        int spaces = column - 1;
+        if (spaces > 200) spaces = 200;
+        for (int i = 0; i < spaces; i++) {
+            indicator[i] = ' ';
+        }
+        indicator[spaces] = '^';
+        indicator[spaces + 1] = '\0';
+        
+        // 构建完整错误消息
+        size_t buf_size = 512;
+        if (src_line) buf_size += strlen(src_line);
+        
+        char *error_buf = malloc(buf_size);
+        if (error_buf) {
+            if (src_line) {
+                snprintf(error_buf, buf_size,
+                         "Error at line %d, column %d: %s '%s'\n"
+                         "    %d | %s\n"
+                         "      | %s",
+                         line, column, message, var_name,
+                         line, src_line,
+                         indicator);
+            } else {
+                snprintf(error_buf, buf_size,
+                         "Error at line %d, column %d: %s '%s'",
+                         line, column, message, var_name);
+            }
+            gen->error_message = error_buf;
+        }
+        
+        if (src_line) free(src_line);
+    }
+}
+
+/* 从映射表中查找映射后名字对应的原始名字 */
+const char *codegen_lookup_original_name(CodeGen *gen, const char *mapped_name) {
+    if (!gen || !gen->varmap_entries || !mapped_name) return NULL;
+    
+    VarMapEntry *entries = (VarMapEntry *)gen->varmap_entries;
+    for (size_t i = 0; i < gen->varmap_count; i++) {
+        if (entries[i].mapped && strcmp(entries[i].mapped, mapped_name) == 0) {
+            return entries[i].original;
+        }
+    }
+    return NULL;
 }
 
 /* ============================================================================
@@ -104,15 +242,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     if (ast->kind == AST_PROGRAM) {
         ASTProgram *prog = (ASTProgram *)ast->data;
         
-        // 首先生成所有函数声明
-        for (size_t i = 0; i < prog->stmt_count; i++) {
-            if (prog->statements[i]->kind == AST_FUNC_DECL) {
-                codegen_stmt(gen, prog->statements[i]);
-            }
-        }
-        
-        // 生成 main 函数包装器
-        // 如果用户定义了main函数,调用它;否则执行顶层语句
+        // 检查是否有用户定义的main函数
         bool has_main = false;
         for (size_t i = 0; i < prog->stmt_count; i++) {
             ASTNode *stmt = prog->statements[i];
@@ -125,10 +255,107 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
             }
         }
         
+        // 如果有main函数，先处理全局变量
+        if (has_main) {
+            for (size_t i = 0; i < prog->stmt_count; i++) {
+                ASTNode *stmt = prog->statements[i];
+                if (stmt->kind == AST_VAR_DECL || stmt->kind == AST_CONST_DECL) {
+                    ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                    // 检查是否是函数定义（初始值是函数表达式），函数定义允许
+                    if (decl->init_expr && decl->init_expr->kind == AST_FUNC_DECL) {
+                        continue;  // 函数定义允许
+                    }
+                    // 检查是否是字面量值
+                    if (decl->init_expr) {
+                        ASTNodeKind init_kind = decl->init_expr->kind;
+                        if (init_kind != AST_NUM_LITERAL && 
+                            init_kind != AST_STRING_LITERAL &&
+                            init_kind != AST_BOOL_LITERAL &&
+                            init_kind != AST_NULL_LITERAL &&
+                            init_kind != AST_ARRAY_LITERAL &&
+                            init_kind != AST_OBJECT_LITERAL) {
+                            // 不是字面量，报错
+                            const char *original_name = codegen_lookup_original_name(gen, decl->name);
+                            const char *display_name = original_name ? original_name : decl->name;
+                            codegen_set_error_at(gen, stmt->loc.orig_line, stmt->loc.orig_column,
+                                                 display_name,
+                                                 "Global variable must be initialized with a literal value");
+                            return;
+                        }
+                    }
+                    // 注册为全局变量，生成LLVM全局变量声明
+                    register_global(gen, decl->name);
+                    fprintf(gen->globals_buf, "@%s = global %%struct.Value* null\n", decl->name);
+                }
+            }
+        }
+        
+        // 预注册所有函数名（用于支持前向引用）
+        // 包括直接的 AST_FUNC_DECL 和作为 AST_VAR_DECL 初始值的函数
+        for (size_t i = 0; i < prog->stmt_count; i++) {
+            ASTNode *stmt = prog->statements[i];
+            if (getenv("DEBUG_CODEGEN")) {
+                const char *kind_name = "UNKNOWN";
+                switch (stmt->kind) {
+                    case AST_FUNC_DECL: kind_name = "FUNC_DECL"; break;
+                    case AST_VAR_DECL: kind_name = "VAR_DECL"; break;
+                    default: break;
+                }
+                fprintf(stderr, "[DEBUG CODEGEN] stmt[%zu] kind = %s\n", i, kind_name);
+            }
+            if (stmt->kind == AST_FUNC_DECL) {
+                ASTFuncDecl *func = (ASTFuncDecl *)stmt->data;
+                if (getenv("DEBUG_CODEGEN")) {
+                    fprintf(stderr, "[DEBUG CODEGEN] Registering function: %s\n", func->name);
+                }
+                register_symbol(gen, func->name);
+            } else if (stmt->kind == AST_VAR_DECL) {
+                // 检查是否是函数赋值（name := (params) { body }）
+                ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                if (decl->init_expr && decl->init_expr->kind == AST_FUNC_DECL) {
+                    // 这是一个函数定义，注册变量名
+                    if (getenv("DEBUG_CODEGEN")) {
+                        fprintf(stderr, "[DEBUG CODEGEN] Registering VAR_DECL function: %s\n", decl->name);
+                    }
+                    register_symbol(gen, decl->name);
+                }
+            }
+        }
+        
+        // 然后生成所有函数代码
+        for (size_t i = 0; i < prog->stmt_count; i++) {
+            if (prog->statements[i]->kind == AST_FUNC_DECL) {
+                codegen_stmt(gen, prog->statements[i]);
+            }
+        }
+        
         // 始终创建 i32 @main() 作为程序入口
         if (has_main) {
-            // 调用用户定义的main函数 (重命名为_flyux_main)
+            // 有用户定义的main函数，先初始化全局变量
             fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
+            
+            // 初始化全局变量
+            for (size_t i = 0; i < prog->stmt_count; i++) {
+                ASTNode *stmt = prog->statements[i];
+                if ((stmt->kind == AST_VAR_DECL || stmt->kind == AST_CONST_DECL)) {
+                    ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                    // 跳过函数定义
+                    if (decl->init_expr && decl->init_expr->kind == AST_FUNC_DECL) {
+                        continue;
+                    }
+                    // 生成初始化代码
+                    if (decl->init_expr) {
+                        char *init_val = codegen_expr(gen, decl->init_expr);
+                        if (init_val) {
+                            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** @%s\n",
+                                    init_val, decl->name);
+                            free(init_val);
+                        }
+                    }
+                }
+            }
+            
+            // 调用用户定义的main函数 (重命名为_flyux_main)
             fprintf(gen->code_buf, "  %%user_main_result = call %%struct.Value* @_flyux_main()\n");
         } else {
             // 预扫描：收集所有需要在entry块alloca的变量（catch参数等）

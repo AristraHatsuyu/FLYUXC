@@ -53,6 +53,53 @@ static Token *previous(Parser *p) {
     return &p->tokens[0];
 }
 
+/**
+ * 检查当前位置是否是函数定义语法: (params) { body }
+ * 需要向前查看，跳过括号内容，检查 ) 后是否是 {
+ * 函数参数只能是标识符和逗号，不能包含运算符
+ */
+static bool is_function_definition(Parser *p) {
+    // 当前应该在 ( 位置
+    if (!check(p, TK_L_PAREN)) {
+        return false;
+    }
+    
+    int offset = 1; // 从 ( 后面开始
+    int paren_depth = 1;
+    bool valid_params = true;
+    
+    // 扫描括号内容
+    while (paren_depth > 0) {
+        Token *tok = peek(p, offset);
+        if (tok->kind == TK_EOF) {
+            return false; // 未闭合的括号
+        }
+        
+        if (tok->kind == TK_L_PAREN) {
+            paren_depth++;
+            // 如果有嵌套括号，这不可能是函数参数列表
+            valid_params = false;
+        } else if (tok->kind == TK_R_PAREN) {
+            paren_depth--;
+        } else if (paren_depth == 1) {
+            // 在最外层括号内，检查是否只有合法的参数语法
+            // 合法：标识符、逗号、空
+            // 非法：运算符、数字、字符串等
+            if (tok->kind != TK_IDENT && tok->kind != TK_COMMA) {
+                valid_params = false;
+            }
+        }
+        offset++;
+    }
+    
+    // 现在 offset 指向 ) 的下一个位置
+    // 检查 ) 后面是否是 {
+    Token *after_paren = peek(p, offset);
+    
+    // 只有当括号后面是 { 且参数合法时，才是函数定义
+    return after_paren->kind == TK_L_BRACE && valid_params;
+}
+
 static void error_at(Parser *p, Token *token, const char *message) {
     // 只使用原始源码位置
     int display_line = token->orig_line;
@@ -95,70 +142,75 @@ static void error_at(Parser *p, Token *token, const char *message) {
             line_end++;
         }
         
-        // 显示行号和源代码行，但用红色高亮错误区间
+        // 显示行号和源代码行，用红色高亮错误区间
         fprintf(stderr, "\033[36m%5d |\033[0m ", display_line);
         
-        // 输出源代码，高亮错误区间
+        // 按UTF-8字符遍历，正确处理高亮
         const char *ptr = line_start;
-        int byte_pos = 1;
-        int error_start_byte = display_column;
-        int error_end_byte = display_column + token->orig_length - 1;
+        int char_pos = 1;  // 字符位置（非字节）
+        int error_start_char = display_column;
+        int error_end_char = display_column + token->orig_length - 1;
         
         while (ptr < line_end) {
-            // 判断当前位置是否在错误区间内
-            if (byte_pos >= error_start_byte && byte_pos <= error_end_byte) {
-                if (byte_pos == error_start_byte) {
+            unsigned char c = (unsigned char)*ptr;
+            int char_bytes = 1;
+            
+            // 计算UTF-8字符的字节数
+            if (c >= 0xF0) char_bytes = 4;
+            else if (c >= 0xE0) char_bytes = 3;
+            else if (c >= 0xC0) char_bytes = 2;
+            
+            // 判断当前字符是否在错误区间内
+            if (char_pos >= error_start_char && char_pos <= error_end_char) {
+                if (char_pos == error_start_char) {
                     fprintf(stderr, "\033[31m");  // 开始红色高亮
                 }
             }
             
-            fputc(*ptr, stderr);
-            ptr++;
-            byte_pos++;
+            // 输出完整的UTF-8字符
+            for (int i = 0; i < char_bytes && ptr + i < line_end; i++) {
+                fputc(ptr[i], stderr);
+            }
+            ptr += char_bytes;
             
             // 判断是否需要结束红色高亮
-            if (byte_pos > error_end_byte && byte_pos - 1 <= error_end_byte) {
+            if (char_pos == error_end_char) {
                 fprintf(stderr, "\033[0m");  // 结束红色高亮
             }
+            
+            char_pos++;
         }
         
-        // 如果高亮区间在行尾，确保关闭颜色
-        if (error_end_byte >= byte_pos - 1) {
-            fprintf(stderr, "\033[0m");
-        }
-        fprintf(stderr, "\n");
+        // 确保关闭颜色
+        fprintf(stderr, "\033[0m\n");
         
         // 显示箭头指示器
         fprintf(stderr, "      \033[36m|\033[0m ");
         
-        // 计算箭头位置和长度（考虑 UTF-8 多字节字符）
+        // 计算箭头位置（考虑 UTF-8 字符的显示宽度）
         ptr = line_start;
         int visual_column = 1;
-        byte_pos = 1;
+        char_pos = 1;
         
         // 找到错误起始的视觉列
-        while (ptr < line_end && byte_pos < display_column) {
-            unsigned char c = *ptr;
-            if (c < 0x80) {
-                visual_column++;
-                ptr++;
-                byte_pos++;
-            } else if ((c & 0xE0) == 0xC0) {
-                visual_column++;
-                ptr += 2;
-                byte_pos++;
-            } else if ((c & 0xF0) == 0xE0) {
-                visual_column++;
-                ptr += 3;
-                byte_pos++;
-            } else if ((c & 0xF8) == 0xF0) {
-                visual_column += 2; // Emoji 通常占两个显示宽度
-                ptr += 4;
-                byte_pos++;
-            } else {
-                ptr++;
-                byte_pos++;
+        while (ptr < line_end && char_pos < display_column) {
+            unsigned char c = (unsigned char)*ptr;
+            int char_bytes = 1;
+            int display_width = 1;
+            
+            if (c >= 0xF0) {
+                char_bytes = 4;
+                display_width = 2;  // Emoji 通常占两个显示宽度
+            } else if (c >= 0xE0) {
+                char_bytes = 3;
+                display_width = 2;  // 中文占两个显示宽度
+            } else if (c >= 0xC0) {
+                char_bytes = 2;
             }
+            
+            visual_column += display_width;
+            ptr += char_bytes;
+            char_pos++;
         }
         
         // 输出空格到错误起始位置
@@ -168,29 +220,25 @@ static void error_at(Parser *p, Token *token, const char *message) {
         
         // 计算错误区间的视觉长度
         int error_visual_length = 0;
-        int remaining_bytes = token->orig_length;
-        while (ptr < line_end && remaining_bytes > 0) {
-            unsigned char c = *ptr;
-            if (c < 0x80) {
-                error_visual_length++;
-                ptr++;
-                remaining_bytes--;
-            } else if ((c & 0xE0) == 0xC0) {
-                error_visual_length++;
-                ptr += 2;
-                remaining_bytes--;
-            } else if ((c & 0xF0) == 0xE0) {
-                error_visual_length++;
-                ptr += 3;
-                remaining_bytes--;
-            } else if ((c & 0xF8) == 0xF0) {
-                error_visual_length += 2; // Emoji 占两个显示宽度
-                ptr += 4;
-                remaining_bytes--;
-            } else {
-                ptr++;
-                remaining_bytes--;
+        int remaining_chars = token->orig_length;
+        while (ptr < line_end && remaining_chars > 0) {
+            unsigned char c = (unsigned char)*ptr;
+            int char_bytes = 1;
+            int display_width = 1;
+            
+            if (c >= 0xF0) {
+                char_bytes = 4;
+                display_width = 2;
+            } else if (c >= 0xE0) {
+                char_bytes = 3;
+                display_width = 2;
+            } else if (c >= 0xC0) {
+                char_bytes = 2;
             }
+            
+            error_visual_length += display_width;
+            ptr += char_bytes;
+            remaining_chars--;
         }
         
         // 显示红色波浪线
@@ -255,51 +303,65 @@ static void warning_at(Parser *p, Token *token, const char *message) {
         // 显示行号和源代码行，用黄色高亮警告区间
         fprintf(stderr, "\033[36m%5d |\033[0m ", display_line);
         
-        // 输出源代码，高亮警告区间
+        // 按UTF-8字符遍历，正确处理高亮
         const char *ptr = line_start;
-        int byte_pos = 1;
-        int error_start_byte = display_column;
-        int error_end_byte = display_column + token->orig_length - 1;
+        int char_pos = 1;
+        int warn_start_char = display_column;
+        int warn_end_char = display_column + token->orig_length - 1;
         
         while (ptr < line_end) {
-            if (byte_pos >= error_start_byte && byte_pos <= error_end_byte) {
-                if (byte_pos == error_start_byte) {
-                    fprintf(stderr, "\033[33m");  // 开始黄色高亮
+            unsigned char c = (unsigned char)*ptr;
+            int char_bytes = 1;
+            
+            if (c >= 0xF0) char_bytes = 4;
+            else if (c >= 0xE0) char_bytes = 3;
+            else if (c >= 0xC0) char_bytes = 2;
+            
+            if (char_pos >= warn_start_char && char_pos <= warn_end_char) {
+                if (char_pos == warn_start_char) {
+                    fprintf(stderr, "\033[33m");
                 }
             }
-            fputc(*ptr, stderr);
-            ptr++;
-            byte_pos++;
             
-            if (byte_pos > error_end_byte && byte_pos - 1 == error_end_byte) {
-                fprintf(stderr, "\033[0m");  // 结束高亮
+            for (int i = 0; i < char_bytes && ptr + i < line_end; i++) {
+                fputc(ptr[i], stderr);
             }
+            ptr += char_bytes;
+            
+            if (char_pos == warn_end_char) {
+                fprintf(stderr, "\033[0m");
+            }
+            
+            char_pos++;
         }
-        fprintf(stderr, "\n");
+        fprintf(stderr, "\033[0m\n");
         
         // 显示指示器
         fprintf(stderr, "\033[36m      |\033[0m ");
         
-        // 计算到达错误位置的视觉列数
+        // 计算视觉列位置
         ptr = line_start;
         int visual_column = 1;
-        while (ptr < line_end && visual_column < display_column) {
-            unsigned char c = *ptr;
-            if (c < 0x80) {
-                visual_column++;
-                ptr++;
-            } else if ((c & 0xE0) == 0xC0) {
-                visual_column++;
-                ptr += 2;
-            } else if ((c & 0xF0) == 0xE0) {
-                visual_column++;
-                ptr += 3;
-            } else if ((c & 0xF8) == 0xF0) {
-                visual_column += 2;
-                ptr += 4;
-            } else {
-                ptr++;
+        char_pos = 1;
+        
+        while (ptr < line_end && char_pos < display_column) {
+            unsigned char c = (unsigned char)*ptr;
+            int char_bytes = 1;
+            int display_width = 1;
+            
+            if (c >= 0xF0) {
+                char_bytes = 4;
+                display_width = 2;
+            } else if (c >= 0xE0) {
+                char_bytes = 3;
+                display_width = 2;
+            } else if (c >= 0xC0) {
+                char_bytes = 2;
             }
+            
+            visual_column += display_width;
+            ptr += char_bytes;
+            char_pos++;
         }
         
         for (int i = 1; i < visual_column; i++) {
@@ -307,35 +369,31 @@ static void warning_at(Parser *p, Token *token, const char *message) {
         }
         
         // 计算警告区间的视觉长度
-        int error_visual_length = 0;
-        int remaining_bytes = token->orig_length;
-        while (ptr < line_end && remaining_bytes > 0) {
-            unsigned char c = *ptr;
-            if (c < 0x80) {
-                error_visual_length++;
-                ptr++;
-                remaining_bytes--;
-            } else if ((c & 0xE0) == 0xC0) {
-                error_visual_length++;
-                ptr += 2;
-                remaining_bytes -= 2;
-            } else if ((c & 0xF0) == 0xE0) {
-                error_visual_length++;
-                ptr += 3;
-                remaining_bytes -= 3;
-            } else if ((c & 0xF8) == 0xF0) {
-                error_visual_length += 2;
-                ptr += 4;
-                remaining_bytes -= 4;
-            } else {
-                ptr++;
-                remaining_bytes--;
+        int warn_visual_length = 0;
+        int remaining_chars = token->orig_length;
+        while (ptr < line_end && remaining_chars > 0) {
+            unsigned char c = (unsigned char)*ptr;
+            int char_bytes = 1;
+            int display_width = 1;
+            
+            if (c >= 0xF0) {
+                char_bytes = 4;
+                display_width = 2;
+            } else if (c >= 0xE0) {
+                char_bytes = 3;
+                display_width = 2;
+            } else if (c >= 0xC0) {
+                char_bytes = 2;
             }
+            
+            warn_visual_length += display_width;
+            ptr += char_bytes;
+            remaining_chars--;
         }
         
-        if (error_visual_length < 1) error_visual_length = 1;
+        if (warn_visual_length < 1) warn_visual_length = 1;
         
-        for (int i = 0; i < error_visual_length; i++) {
+        for (int i = 0; i < warn_visual_length; i++) {
             fputc('^', stderr);
         }
         fprintf(stderr, "\n");
@@ -1566,64 +1624,61 @@ static ASTNode *parse_var_declaration(Parser *p) {
     }
     
     // 检查是否是无类型声明的函数: name := (params){body}
-    if (check(p, TK_L_PAREN)) {
-        Token *peek_tok = peek(p, 1);
-        // 如果 ( 后面是 ) 或 标识符，很可能是函数定义
-        if (peek_tok && (peek_tok->kind == TK_R_PAREN || peek_tok->kind == TK_IDENT)) {
-            // 解析为函数定义
-            if (!match(p, TK_L_PAREN)) {
-                error_at(p, current_token(p), "Expected '('");
-                free(name);
-                return NULL;
-            }
-            
-            // 解析参数列表
-            char **params = NULL;
-            size_t param_count = 0;
-            size_t param_capacity = 0;
-            
-            while (!check(p, TK_R_PAREN) && !check(p, TK_EOF)) {
-                if (!check(p, TK_IDENT)) {
-                    error_at(p, current_token(p), "Expected parameter name");
-                    break;
-                }
-                
-                if (param_count >= param_capacity) {
-                    param_capacity = param_capacity == 0 ? 4 : param_capacity * 2;
-                    params = (char **)realloc(params, param_capacity * sizeof(char *));
-                }
-                
-                params[param_count++] = strdup(current_token(p)->lexeme);
-                advance(p);
-                
-                if (!match(p, TK_COMMA)) {
-                    break;
-                }
-            }
-            
-            if (!match(p, TK_R_PAREN)) {
-                error_at(p, current_token(p), "Expected ')' after parameters");
-                free(name);
-                for (size_t i = 0; i < param_count; i++) free(params[i]);
-                free(params);
-                return NULL;
-            }
-            
-            // 解析函数体
-            ASTNode *body = parse_block(p);
-            
-            // 创建函数声明节点
-            ASTNode *func_node = ast_node_create(AST_FUNC_DECL, token_to_loc(name_token));
-            ASTFuncDecl *func = (ASTFuncDecl *)malloc(sizeof(ASTFuncDecl));
-            func->name = name;
-            func->params = params;
-            func->param_count = param_count;
-            func->return_type = NULL;
-            func->body = body;
-            func_node->data = func;
-            
-            return func_node;
+    // 使用 is_function_definition 来正确区分函数定义和括号表达式
+    if (check(p, TK_L_PAREN) && is_function_definition(p)) {
+        // 解析为函数定义
+        if (!match(p, TK_L_PAREN)) {
+            error_at(p, current_token(p), "Expected '('");
+            free(name);
+            return NULL;
         }
+        
+        // 解析参数列表
+        char **params = NULL;
+        size_t param_count = 0;
+        size_t param_capacity = 0;
+        
+        while (!check(p, TK_R_PAREN) && !check(p, TK_EOF)) {
+            if (!check(p, TK_IDENT)) {
+                error_at(p, current_token(p), "Expected parameter name");
+                break;
+            }
+            
+            if (param_count >= param_capacity) {
+                param_capacity = param_capacity == 0 ? 4 : param_capacity * 2;
+                params = (char **)realloc(params, param_capacity * sizeof(char *));
+            }
+            
+            params[param_count++] = strdup(current_token(p)->lexeme);
+            advance(p);
+            
+            if (!match(p, TK_COMMA)) {
+                break;
+            }
+        }
+        
+        if (!match(p, TK_R_PAREN)) {
+            error_at(p, current_token(p), "Expected ')' after parameters");
+            free(name);
+            for (size_t i = 0; i < param_count; i++) free(params[i]);
+            free(params);
+            return NULL;
+        }
+        
+        // 解析函数体
+        ASTNode *body = parse_block(p);
+        
+        // 创建函数声明节点
+        ASTNode *func_node = ast_node_create(AST_FUNC_DECL, token_to_loc(name_token));
+        ASTFuncDecl *func = (ASTFuncDecl *)malloc(sizeof(ASTFuncDecl));
+        func->name = name;
+        func->params = params;
+        func->param_count = param_count;
+        func->return_type = NULL;
+        func->body = body;
+        func_node->data = func;
+        
+        return func_node;
     }
     
     // 普通变量赋值

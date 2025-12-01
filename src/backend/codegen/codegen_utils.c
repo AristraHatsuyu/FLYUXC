@@ -122,9 +122,40 @@ void register_symbol(CodeGen *gen, const char *var_name) {
     gen->symbols = entry;
 }
 
+/* 注册全局变量到全局符号表 */
+void register_global(CodeGen *gen, const char *var_name) {
+    SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+    entry->name = strdup(var_name);
+    entry->next = gen->globals;
+    gen->globals = entry;
+}
+
 /* 检查变量是否已定义 */
 int is_symbol_defined(CodeGen *gen, const char *var_name) {
+    if (getenv("DEBUG_CODEGEN")) {
+        fprintf(stderr, "[DEBUG is_symbol_defined] Looking for: %s\n", var_name);
+        fprintf(stderr, "[DEBUG is_symbol_defined] Symbols list:\n");
+        for (SymbolEntry *e = gen->symbols; e != NULL; e = e->next) {
+            fprintf(stderr, "  - %s\n", e->name);
+        }
+    }
     for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return 1;
+        }
+    }
+    // 也检查全局变量
+    for (SymbolEntry *entry = gen->globals; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 检查变量是否是全局变量 */
+int is_global_var(CodeGen *gen, const char *var_name) {
+    for (SymbolEntry *entry = gen->globals; entry != NULL; entry = entry->next) {
         if (strcmp(entry->name, var_name) == 0) {
             return 1;
         }

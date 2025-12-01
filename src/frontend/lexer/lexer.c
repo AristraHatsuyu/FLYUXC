@@ -246,6 +246,97 @@ static int is_builtin_func_name(const char* name) {
     return 0;
 }
 
+/* 非 FLYUX 语法关键字检测表 */
+typedef struct {
+    const char* keyword;        /* Invalid keyword */
+    const char* flyux_equiv;    /* FLYUX equivalent */
+    const char* suggestion;     /* Suggestion message */
+} InvalidKeywordInfo;
+
+static const InvalidKeywordInfo INVALID_KEYWORDS[] = {
+    /* Variable declaration keywords */
+    {"let", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    {"const", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    {"var", ":=", "Use ':=' to declare variables, e.g.: x := 10"},
+    
+    /* Control flow keywords */
+    {"else", "{} {}", "FLYUX has no 'else' keyword, use the second block of if, e.g.: if (cond) { true_branch } { false_branch }"},
+    {"while", "L>", "Use 'L>' for loops, e.g.: L> (true_condition) { body }"},
+    {"for", "L>", "Use 'L>' for loops, e.g.: L> (i; i < 10; i++) { body }"},
+    {"do", "L>", "Use 'L>' for loops, e.g.: L> (condition) { body }"},
+    {"switch", "if", "FLYUX has no 'switch' statement, use multiple if conditions"},
+    {"case", "if", "FLYUX has no 'case' statement, use multiple if conditions"},
+    {"default", "if", "FLYUX has no 'default' statement, use the else branch of if"},
+    
+    /* Jump keywords */
+    {"return", "R>", "Use 'R>' to return values, e.g.: R> value"},
+    {"break", "B>", "Use 'B>' to break out of loops, e.g.: B> or B> @label"},
+    {"continue", "N>", "Use 'N>' to continue to next iteration, e.g.: N> or N> @label"},
+    
+    /* Function definition keywords */
+    {"function", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"def", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"fn", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    {"lambda", ":=", "FLYUX uses ':=' to define functions, e.g.: add := (a, b) { R> a + b }"},
+    
+    /* Exception handling keywords */
+    {"try", "T>", "Use 'T>' for exception handling, e.g.: T> { risky_code } (e) { handle_error }"},
+    {"catch", "T>", "Use 'T>' for exception handling, e.g.: T> { risky_code } (e) { handle_error }"},
+    {"finally", NULL, "FLYUX's T> structure has no finally block"},
+    {"throw", NULL, "FLYUX uses built-in error object mechanism"},
+    {"raise", NULL, "FLYUX uses built-in error object mechanism"},
+    
+    /* Class/object keywords */
+    {"class", "obj", "FLYUX uses 'obj' type to create objects, e.g.: person := {name: \"John\", age: 30}"},
+    {"new", NULL, "FLYUX does not need 'new' keyword, create objects directly"},
+    {"this", NULL, "FLYUX object methods have no 'this' keyword"},
+    {"self", NULL, "FLYUX object methods have no 'self' keyword"},
+    
+    /* Module keywords */
+    {"import", NULL, "FLYUX currently does not support module imports"},
+    {"export", NULL, "FLYUX currently does not support module exports"},
+    {"from", NULL, "FLYUX currently does not support module system"},
+    {"require", NULL, "FLYUX currently does not support module system"},
+    
+    /* Other common keywords */
+    {"async", NULL, "FLYUX currently does not support async programming"},
+    {"await", NULL, "FLYUX currently does not support async programming"},
+    {"yield", NULL, "FLYUX currently does not support generators"},
+    {"void", NULL, "FLYUX does not use 'void' type"},
+    {"int", "num", "FLYUX uses 'num' type to represent numbers"},
+    {"float", "num", "FLYUX uses 'num' type to represent numbers"},
+    {"double", "num", "FLYUX uses 'num' type to represent numbers"},
+    {"string", "str", "FLYUX uses 'str' type to represent strings"},
+    {"boolean", "bl", "FLYUX uses 'bl' type to represent booleans"},
+    {"bool", "bl", "FLYUX uses 'bl' type to represent booleans"},
+    {"undefined", "undef", "FLYUX uses 'undef' to represent undefined values"},
+    {"nil", "null", "FLYUX uses 'null' to represent null values"},
+    {"None", "null", "FLYUX uses 'null' to represent null values"},
+    {"True", "true", "FLYUX uses lowercase 'true'"},
+    {"False", "false", "FLYUX uses lowercase 'false'"},
+    {"elif", "if", "FLYUX has no 'elif', use nested if statements"},
+    {"elsif", "if", "FLYUX has no 'elsif', use nested if statements"},
+    {"unless", "if", "FLYUX has no 'unless', use if (!condition)"},
+    {"until", "L>", "FLYUX has no 'until', use 'L>' loop"},
+    {"in", ":", "FLYUX foreach loop uses ':', e.g.: L> (arr : item) { }"},
+    {"of", ":", "FLYUX foreach loop uses ':', e.g.: L> (arr : item) { }"},
+    {"and", "&&", "FLYUX uses '&&' for logical AND"},
+    {"or", "||", "FLYUX uses '||' for logical OR"},
+    {"not", "!", "FLYUX uses '!' for logical NOT"},
+    
+    {NULL, NULL, NULL}  /* End marker */
+};
+
+/* Check for invalid keywords, return info struct pointer, NULL if not found */
+static const InvalidKeywordInfo* check_invalid_keyword(const char* lexeme) {
+    for (int i = 0; INVALID_KEYWORDS[i].keyword != NULL; i++) {
+        if (strcmp(lexeme, INVALID_KEYWORDS[i].keyword) == 0) {
+            return &INVALID_KEYWORDS[i];
+        }
+    }
+    return NULL;
+}
+
 /* 关键字 / 类型 / 布尔字面量检查 */
 static TokenKind classify_identifier(const char* lexeme) {
     /* 关键字 */
@@ -343,10 +434,36 @@ static const char* token_kind_name(TokenKind kind) {
     }
 }
 
-/* 生成错误信息 */
-static char* make_unexpected_char_msg(char ch) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "Unexpected character: 0x%02X", (unsigned char)ch);
+/* 获取原始源码位置（从映射表查询） */
+static void get_original_position(size_t mapped_offset,
+                                  const SourceLocation* norm_source_map,
+                                  size_t norm_source_map_size,
+                                  const size_t* offset_map,
+                                  size_t offset_map_size,
+                                  int fallback_line, int fallback_col,
+                                  int* out_line, int* out_col) {
+    // 默认使用回退值
+    *out_line = fallback_line;
+    *out_col = fallback_col;
+    
+    // 如果有映射表，尝试查询原始位置
+    if (offset_map && offset_map_size > 0 && mapped_offset < offset_map_size &&
+        norm_source_map && norm_source_map_size > 0) {
+        size_t norm_offset = offset_map[mapped_offset];
+        if (norm_offset < norm_source_map_size) {
+            const SourceLocation* loc = &norm_source_map[norm_offset];
+            if (!loc->is_synthetic && loc->orig_line > 0) {
+                *out_line = loc->orig_line;
+                *out_col = loc->orig_column;
+            }
+        }
+    }
+}
+
+/* 生成错误信息 - 包含行号和列号 */
+static char* make_unexpected_char_msg(char ch, int line, int col) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Unexpected character at line %d, column %d: 0x%02X", line, col, (unsigned char)ch);
     return str_dup_n(buf, strlen(buf));
 }
 
@@ -609,6 +726,35 @@ LexerResult lexer_tokenize(const char* source,
                 col++;
             }
             size_t ident_len = i - start;
+            
+            /* Check for invalid X> format (single uppercase letter followed by >, not valid L>/R>/T>/B>/N>) */
+            if (ident_len == 1 && isupper((unsigned char)source[start]) 
+                && i < len && source[i] == '>'
+                && source[start] != 'L' && source[start] != 'R' && source[start] != 'T' 
+                && source[start] != 'B' && source[start] != 'N') {
+                /* Get original position for error reporting */
+                int orig_line, orig_col;
+                get_original_position(start_offset, norm_source_map, norm_source_map_size,
+                                      offset_map, offset_map_size,
+                                      start_line, start_col,
+                                      &orig_line, &orig_col);
+                
+                char error_buf[512];
+                snprintf(error_buf, sizeof(error_buf),
+                         "Error: Line %d, Column %d: Invalid statement type '%c>'\n"
+                         "  Hint: FLYUX supports these statement types:\n"
+                         "    L> - loop statement\n"
+                         "    R> - return statement\n"
+                         "    B> - break statement\n"
+                         "    N> - next/continue statement\n"
+                         "    T> - try/exception handling",
+                         orig_line, orig_col, source[start]);
+                
+                result.error_code = 1;
+                result.error_msg = str_dup_n(error_buf, strlen(error_buf));
+                goto fail;
+            }
+            
             char* lexeme = str_dup_n(source + start, ident_len);
             if (!lexeme) {
                 result.error_code = -1;
@@ -616,9 +762,42 @@ LexerResult lexer_tokenize(const char* source,
                 goto fail;
             }
 
+            /* Check for non-FLYUX keywords */
+            const InvalidKeywordInfo* inv_kw = check_invalid_keyword(lexeme);
+            if (inv_kw != NULL) {
+                /* Get original position for error reporting */
+                int orig_line, orig_col;
+                get_original_position(start_offset, norm_source_map, norm_source_map_size,
+                                      offset_map, offset_map_size,
+                                      start_line, start_col,
+                                      &orig_line, &orig_col);
+                
+                /* Generate detailed error message */
+                char error_buf[512];
+                if (inv_kw->flyux_equiv != NULL) {
+                    snprintf(error_buf, sizeof(error_buf),
+                             "Error: Line %d, Column %d: Invalid keyword '%s'\n"
+                             "  Hint: FLYUX uses '%s' instead\n"
+                             "  Suggestion: %s",
+                             orig_line, orig_col, inv_kw->keyword,
+                             inv_kw->flyux_equiv, inv_kw->suggestion);
+                } else {
+                    snprintf(error_buf, sizeof(error_buf),
+                             "Error: Line %d, Column %d: Invalid keyword '%s'\n"
+                             "  Suggestion: %s",
+                             orig_line, orig_col, inv_kw->keyword,
+                             inv_kw->suggestion);
+                }
+                
+                free(lexeme);
+                result.error_code = 1;
+                result.error_msg = str_dup_n(error_buf, strlen(error_buf));
+                goto fail;
+            }
+
             TokenKind kind = classify_identifier(lexeme);
 
-            /* emit_token 会自己再复制一份 lexeme，这里这份临时的要先 free 掉 */
+            /* emit_token will copy lexeme again, free this temporary one first */
             free(lexeme);
             if (!emit_token(&tokens, &result.count, &cap,
                             kind, source + start, ident_len, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
@@ -663,9 +842,18 @@ LexerResult lexer_tokenize(const char* source,
                         col++;
                     }
                 } else {
-                    /* 无效的科学计数法格式 */
+                    /* 无效的科学计数法格式 - 使用原始源码位置 */
+                    int orig_line, orig_col;
+                    get_original_position(start_offset, norm_source_map, norm_source_map_size,
+                                          offset_map, offset_map_size,
+                                          start_line, start_col,
+                                          &orig_line, &orig_col);
                     result.error_code = 1;
-                    result.error_msg = str_dup_n("Invalid number format: expected digit after exponent", strlen("Invalid number format: expected digit after exponent"));
+                    char error_buf[256];
+                    snprintf(error_buf, sizeof(error_buf), 
+                             "Invalid number format at line %d, column %d: expected digit after exponent",
+                             orig_line, orig_col);
+                    result.error_msg = str_dup_n(error_buf, strlen(error_buf));
                     goto fail;
                 }
             }
@@ -706,9 +894,18 @@ LexerResult lexer_tokenize(const char* source,
                 i++;
                 col++;
             } else {
-                /* 未闭合的字符串 */
+                /* 未闭合的字符串 - 使用原始源码位置 */
+                int orig_line, orig_col;
+                get_original_position(start, norm_source_map, norm_source_map_size,
+                                      offset_map, offset_map_size,
+                                      start_line_str, start_col_str,
+                                      &orig_line, &orig_col);
                 result.error_code = 1;
-                result.error_msg = str_dup_n("Unterminated string literal", strlen("Unterminated string literal"));
+                char error_buf[256];
+                snprintf(error_buf, sizeof(error_buf), 
+                         "Unterminated string literal at line %d, column %d",
+                         orig_line, orig_col);
+                result.error_msg = str_dup_n(error_buf, strlen(error_buf));
                 goto fail;
             }
 
@@ -744,9 +941,9 @@ LexerResult lexer_tokenize(const char* source,
             t->column = start_col_str;
             
             /* 设置原始源位置映射 */
-            if (offset_map && offset_map_size > 0 && (start_offset + start) < offset_map_size &&
+            if (offset_map && offset_map_size > 0 && start < offset_map_size &&
                 norm_source_map && norm_source_map_size > 0) {
-                size_t norm_offset = offset_map[start_offset + start];
+                size_t norm_offset = offset_map[start];
                 if (norm_offset < norm_source_map_size) {
                     const SourceLocation* loc = &norm_source_map[norm_offset];
                     if (loc->is_synthetic && norm_offset > 0) {
@@ -1165,9 +1362,14 @@ LexerResult lexer_tokenize(const char* source,
                 break;
         }
 
-        /* 未知字符 */
+        /* 未知字符 - 使用原始源码位置 */
+        int orig_line, orig_col;
+        get_original_position(i, norm_source_map, norm_source_map_size,
+                              offset_map, offset_map_size,
+                              line, col,
+                              &orig_line, &orig_col);
         result.error_code = 1;
-        result.error_msg = make_unexpected_char_msg(c);
+        result.error_msg = make_unexpected_char_msg(c, orig_line, orig_col);
         goto fail;
     }
 

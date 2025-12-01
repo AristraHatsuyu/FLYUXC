@@ -19,45 +19,45 @@ main:=(){
     sum := add(x, y);
     product := multiply(x, y);
     
-    print(sum);
-    print(product);
+    println(sum);
+    println(product);
     
     /* Increment operators */
     counter := 0;
     counter++;
     ++counter;
-    print(counter);
+    println(counter);
     
     /* For loop with all parts */
     total := 0;
     L>(i:=0; i<5; i++){
         total := total + i;
     };
-    print(total);
+    println(total);
     
     /* Nested computation */
     result := compute(5, 3);
-    print(result);
+    println(result);
     
     /* Arrays (read-only) */
     arr := [100, 200, 300];
-    print(arr[0]);
-    print(arr[1]);
+    println(arr[0]);
+    println(arr[1]);
     
     /* Objects (read-only) */
     data := {value: 999, name: "test"};
-    print(data.value);
+    println(data.value);
     
     /* Conditional */
     if(x > 5){
-        print(777);
+        println(777);
     }{
-        print(888);
+        println(888);
     };
     
     /* Complex expression */
     complex := (x + y) * 2 - 10 / 2;
-    print(complex);
+    println(complex);
     
-    print(42);
+    println(42);
 };
