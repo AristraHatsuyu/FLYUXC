@@ -366,6 +366,8 @@ Value* value_range(Value *start_val, Value *end_val, Value *step_val) {
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
     result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = elements;
     result->array_size = (size_t)count;

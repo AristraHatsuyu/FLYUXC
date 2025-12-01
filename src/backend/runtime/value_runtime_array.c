@@ -31,19 +31,27 @@ Value* value_push(Value *arr, Value *val) {
         return box_null_typed(VALUE_ARRAY);
     }
     
-    // 复制旧元素
+    // 复制旧元素（需要 retain，因为新数组也持有引用）
     for (size_t i = 0; i < old_size; i++) {
         new_elements[i] = old_elements[i];
+        if (new_elements[i]) {
+            value_retain(new_elements[i]);
+        }
     }
     
-    // 添加新元素
+    // 添加新元素（也需要 retain）
     new_elements[old_size] = val;
+    if (val) {
+        value_retain(val);
+    }
     
     // 创建新的 Value 对象
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
     result->ext_type = EXT_TYPE_NONE;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
     
@@ -74,10 +82,17 @@ Value* value_pop(Value *arr) {
     Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
     for (size_t i = 0; i < new_size; i++) {
         new_elements[i] = old_elements[i];
+        if (new_elements[i]) {
+            value_retain(new_elements[i]);
+        }
     }
     
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
     
@@ -108,10 +123,17 @@ Value* value_shift(Value *arr) {
     Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
     for (size_t i = 0; i < new_size; i++) {
         new_elements[i] = old_elements[i + 1];
+        if (new_elements[i]) {
+            value_retain(new_elements[i]);
+        }
     }
     
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
     
@@ -133,16 +155,25 @@ Value* value_unshift(Value *arr, Value *val) {
     size_t new_size = arr->array_size + 1;
     Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
     new_elements[0] = val;
+    if (val) {
+        value_retain(val);
+    }
     
     Value **old_elements = (Value**)arr->data.pointer;
     for (size_t i = 0; i < arr->array_size; i++) {
         new_elements[i+1] = old_elements[i];
+        if (new_elements[i+1]) {
+            value_retain(new_elements[i+1]);
+        }
     }
     
     // 创建新数组
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
     
@@ -169,6 +200,9 @@ Value* value_slice(Value *arr, Value *start, Value *end) {
         Value *empty = (Value*)malloc(sizeof(Value));
         empty->type = VALUE_ARRAY;
         empty->declared_type = VALUE_ARRAY;
+        empty->refcount = 1;
+        empty->flags = VALUE_FLAG_NONE;
+        empty->ext_type = EXT_TYPE_NONE;
         empty->data.pointer = NULL;
         empty->array_size = 0;
         return empty;
@@ -180,11 +214,17 @@ Value* value_slice(Value *arr, Value *start, Value *end) {
     
     for (size_t i = 0; i < new_size; i++) {
         new_elements[i] = old_elements[start_idx + i];
+        if (new_elements[i]) {
+            value_retain(new_elements[i]);
+        }
     }
     
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
     
@@ -210,14 +250,22 @@ Value* value_concat(Value *arr1, Value *arr2) {
     
     for (size_t i = 0; i < arr1->array_size; i++) {
         new_elements[i] = elem1[i];
+        if (new_elements[i]) {
+            value_retain(new_elements[i]);
+        }
     }
     for (size_t i = 0; i < arr2->array_size; i++) {
         new_elements[arr1->array_size + i] = elem2[i];
+        if (new_elements[arr1->array_size + i]) {
+            value_retain(new_elements[arr1->array_size + i]);
+        }
     }
     
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
     result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = new_size;
@@ -348,6 +396,9 @@ Value* value_create_array(int64_t size) {
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = elements;
     result->array_size = (size_t)size;
     
@@ -423,6 +474,9 @@ Value* value_sort(Value *arr, CompareFunc compare) {
     Value **old_elements = (Value**)arr->data.pointer;
     for (size_t i = 0; i < size; i++) {
         new_elements[i] = old_elements[i];
+        if (new_elements[i]) {
+            value_retain(new_elements[i]);
+        }
     }
     
     // 排序
@@ -437,6 +491,9 @@ Value* value_sort(Value *arr, CompareFunc compare) {
     Value *result = (Value*)malloc(sizeof(Value));
     result->type = VALUE_ARRAY;
     result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
     result->data.pointer = new_elements;
     result->array_size = size;
     

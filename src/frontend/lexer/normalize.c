@@ -784,6 +784,18 @@ static char* normalize_internal_newlines(const char* stmt) {
         free(result);
         return NULL;
     }
+    
+    // 为每个大括号层追踪进入时的圆括号和方括号深度
+    // 这样在代码块内部判断换行时，可以相对于当前层计算深度
+    int* brace_entry_paren = (int*)calloc(len + 2, sizeof(int));
+    int* brace_entry_bracket = (int*)calloc(len + 2, sizeof(int));
+    if (!brace_entry_paren || !brace_entry_bracket) {
+        free(result);
+        free(brace_is_block);
+        if (brace_entry_paren) free(brace_entry_paren);
+        if (brace_entry_bracket) free(brace_entry_bracket);
+        return NULL;
+    }
 
     int out_idx = 0;
     int in_str = 0;
@@ -830,10 +842,24 @@ static char* normalize_internal_newlines(const char* stmt) {
                 char prev = result[last];
                 // 经验规则：出现在 ) / } / ] 之后的 { 是代码块
                 // 出现在 = / := / , / : / [ / ( 之后的 { 是对象字面量
+                // 特殊处理：R> 后面的 { 是对象字面量（返回值）
                 if (prev == ')' || prev == '}' || prev == ']') {
                     is_block = 1;
                 } else if (prev == '=' || prev == ',' || prev == ':' || prev == '[' || prev == '(') {
                     is_block = 0;
+                } else if (prev == '>') {
+                    // 检查是否是 R> 或 .>
+                    // R> 后面是对象字面量（返回值）
+                    // .> 是方法链调用，后面不会直接跟 {
+                    int prev2_idx = last - 1;
+                    while (prev2_idx >= 0 && (result[prev2_idx] == ' ' || result[prev2_idx] == '\t')) {
+                        prev2_idx--;
+                    }
+                    if (prev2_idx >= 0 && result[prev2_idx] == 'R') {
+                        is_block = 0;  // R> { ... } 是返回对象字面量
+                    } else {
+                        is_block = 1;  // 其他情况默认为代码块
+                    }
                 } else {
                     // 其他情况（如操作符、标识符后），默认为代码块
                     is_block = 1;
@@ -843,8 +869,10 @@ static char* normalize_internal_newlines(const char* stmt) {
                 is_block = 1;
             }
 
-            // 入栈（下一个深度）
+            // 入栈（下一个深度），同时记录当前的括号深度
             brace_is_block[brace_depth + 1] = is_block;
+            brace_entry_paren[brace_depth + 1] = paren_depth;
+            brace_entry_bracket[brace_depth + 1] = bracket_depth;
             brace_depth++;
             result[out_idx++] = ch;
             continue;
@@ -888,17 +916,29 @@ static char* normalize_internal_newlines(const char* stmt) {
             bracket_depth--;
         }
 
-        /* 块内换行 → 分号（仅在不处于 () / [] 中；且换行后第一个非空不是 '}'；且当前是代码块而非对象字面量） */
-        if (ch == '\n' && brace_depth > 0 && paren_depth == 0 && bracket_depth == 0) {
+        /* 块内换行 → 分号
+         * 条件：
+         * 1. 在代码块内（brace_depth > 0）
+         * 2. 相对于当前代码块的圆括号/方括号深度为0
+         *    （使用进入代码块时记录的深度作为基准）
+         * 3. 换行后第一个非空不是 '}'
+         * 4. 当前层是代码块而非对象字面量
+         */
+        if (ch == '\n' && brace_depth > 0) {
+            // 计算相对于当前层的括号深度
+            int relative_paren = paren_depth - brace_entry_paren[brace_depth];
+            int relative_bracket = bracket_depth - brace_entry_bracket[brace_depth];
+            
             // 检查当前是否在代码块中（而不是对象字面量中）
             unsigned char is_block = brace_is_block[brace_depth];
             
             if (getenv("DEBUG_NORM")) {
-                fprintf(stderr, "[DEBUG] Newline at i=%d, brace_depth=%d, is_block=%d\n", i, brace_depth, is_block);
+                fprintf(stderr, "[DEBUG] Newline at i=%d, brace_depth=%d, is_block=%d, rel_paren=%d, rel_bracket=%d\n", 
+                        i, brace_depth, is_block, relative_paren, relative_bracket);
             }
             
-            // 只在代码块中添加分号，对象字面量中保留换行
-            if (is_block) {
+            // 只在代码块中，且不在相对括号内时添加分号
+            if (is_block && relative_paren == 0 && relative_bracket == 0) {
                 int j = i + 1;
                 while (j < (int)len && (stmt[j] == ' ' || stmt[j] == '\t' || stmt[j] == '\n')) {
                     j++;
@@ -938,6 +978,9 @@ static char* normalize_internal_newlines(const char* stmt) {
                     }
                     continue;
                 }
+            } else if (is_block) {
+                // 在代码块内但在相对括号内，跳过换行（不添加分号）
+                continue;
             } else {
                 // 对象字面量中的换行，转换为空格以便解析
                 result[out_idx++] = ' ';
@@ -951,6 +994,8 @@ static char* normalize_internal_newlines(const char* stmt) {
 
     result[out_idx] = '\0';
     free(brace_is_block);
+    free(brace_entry_paren);
+    free(brace_entry_bracket);
     return result;
 }
 

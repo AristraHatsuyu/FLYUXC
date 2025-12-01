@@ -833,7 +833,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            if (strcmp(callee->name, "upper") == 0 && call->arg_count == 1) {
+            if ((strcmp(callee->name, "upper") == 0 || strcmp(callee->name, "toUpper") == 0) && call->arg_count == 1) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_upper(%%struct.Value* %s)\n", result, arg);
@@ -841,7 +841,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            if (strcmp(callee->name, "lower") == 0 && call->arg_count == 1) {
+            if ((strcmp(callee->name, "lower") == 0 || strcmp(callee->name, "toLower") == 0) && call->arg_count == 1) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_lower(%%struct.Value* %s)\n", result, arg);
@@ -3027,14 +3027,14 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            if (strcmp(member->property, "upper") == 0) {
+            if (strcmp(member->property, "upper") == 0 || strcmp(member->property, "toUpper") == 0) {
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_upper(%%struct.Value* %s)\n", result, obj_value);
                 free(obj_value);
                 return result;
             }
             
-            if (strcmp(member->property, "lower") == 0) {
+            if (strcmp(member->property, "lower") == 0 || strcmp(member->property, "toLower") == 0) {
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_lower(%%struct.Value* %s)\n", result, obj_value);
                 free(obj_value);
