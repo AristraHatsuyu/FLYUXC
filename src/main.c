@@ -235,10 +235,8 @@ int main(int argc, char *argv[])
                     
                     codegen_generate(codegen, ast);
                     
-                    // 检查 codegen 是否有错误
+                    // 检查 codegen 是否有错误（错误已经在 codegen 内部输出）
                     if (codegen_has_error(codegen)) {
-                        fprintf(stderr, "%sCodegen error:%s %s\n", 
-                                COLOR_RED, COLOR_RESET, codegen_get_error(codegen));
                         has_errors = true;
                     }
                     

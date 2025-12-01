@@ -98,6 +98,7 @@ add_custom_target(generate_runtime
 file(GLOB_RECURSE FRONTEND_SOURCES "src/frontend/**/*.c")
 file(GLOB_RECURSE UTILS_SOURCES "src/utils/**/*.c")
 file(GLOB_RECURSE MIDDLE_SOURCES "src/middle/**/*.c")
+file(GLOB CORE_SOURCES "src/core/*.c")
 
 # Backend 源文件 - 排除 runtime 子目录（因为 runtime 使用 #include 聚合）
 file(GLOB BACKEND_CODEGEN_SOURCES "src/backend/codegen/*.c")
@@ -114,6 +115,7 @@ add_executable(${PROJECT_NAME}
     ${FRONTEND_SOURCES}
     ${UTILS_SOURCES}
     ${MIDDLE_SOURCES}
+    ${CORE_SOURCES}
     ${BACKEND_C_SOURCES}
 )
 

@@ -1,5 +1,6 @@
 #include "codegen_internal.h"
 #include "flyuxc/frontend/varmap.h"
+#include "flyuxc/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -170,51 +171,27 @@ static char *get_source_line(const char *source, int line_num) {
     return line;
 }
 
-/* 设置带位置信息的编译错误 */
-void codegen_set_error_at(CodeGen *gen, int line, int column, 
+/* 设置带位置信息的编译错误 - 直接输出到 stderr */
+void codegen_set_error_at(CodeGen *gen, int line, int column, int length,
                           const char *var_name, const char *message) {
     if (gen && !gen->has_error) {
         gen->has_error = 1;
         
-        // 尝试获取源代码行
-        char *src_line = NULL;
-        if (gen->original_source) {
-            src_line = get_source_line(gen->original_source, line);
-        }
+        // 构建消息（带变量名）
+        char full_message[512];
+        snprintf(full_message, sizeof(full_message), "%s '%s'", message, var_name);
         
-        // 创建位置指示器
-        char indicator[256] = {0};
-        int spaces = column - 1;
-        if (spaces > 200) spaces = 200;
-        for (int i = 0; i < spaces; i++) {
-            indicator[i] = ' ';
-        }
-        indicator[spaces] = '^';
-        indicator[spaces + 1] = '\0';
+        // 使用传入的长度，如果为0则默认使用变量名长度
+        int error_length = length > 0 ? length : (int)strlen(var_name);
         
-        // 构建完整错误消息
-        size_t buf_size = 512;
-        if (src_line) buf_size += strlen(src_line);
+        // 直接使用统一的错误报告接口输出
+        report_error_at(ERR_ERROR, PHASE_CODEGEN,
+                        gen->original_source,
+                        line, column, error_length,
+                        full_message);
         
-        char *error_buf = malloc(buf_size);
-        if (error_buf) {
-            if (src_line) {
-                snprintf(error_buf, buf_size,
-                         "Error at line %d, column %d: %s '%s'\n"
-                         "    %d | %s\n"
-                         "      | %s",
-                         line, column, message, var_name,
-                         line, src_line,
-                         indicator);
-            } else {
-                snprintf(error_buf, buf_size,
-                         "Error at line %d, column %d: %s '%s'",
-                         line, column, message, var_name);
-            }
-            gen->error_message = error_buf;
-        }
-        
-        if (src_line) free(src_line);
+        // 保存简单的错误标记（不再需要完整消息）
+        gen->error_message = strdup(full_message);
     }
 }
 
@@ -278,6 +255,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                             const char *original_name = codegen_lookup_original_name(gen, decl->name);
                             const char *display_name = original_name ? original_name : decl->name;
                             codegen_set_error_at(gen, stmt->loc.orig_line, stmt->loc.orig_column,
+                                                 stmt->loc.orig_length,
                                                  display_name,
                                                  "Global variable must be initialized with a literal value");
                             return;

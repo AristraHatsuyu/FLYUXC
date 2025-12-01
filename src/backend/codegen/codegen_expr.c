@@ -98,8 +98,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 const char *original_name = codegen_lookup_original_name(gen, id->name);
                 const char *display_name = original_name ? original_name : id->name;
                 
+                // 使用显示名称的长度作为错误区域长度
+                int name_length = (int)strlen(display_name);
+                
                 // 使用节点的位置信息
                 codegen_set_error_at(gen, node->loc.orig_line, node->loc.orig_column,
+                                     name_length,
                                      display_name, "Undefined variable");
                 
                 // 返回一个 undef 值以继续生成（但会因为 has_error 而失败）
@@ -2716,7 +2720,11 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 const char *original_name = codegen_lookup_original_name(gen, callee->name);
                 const char *display_name = original_name ? original_name : callee->name;
                 
+                // 使用显示名称的长度作为错误区域长度
+                int name_length = (int)strlen(display_name);
+                
                 codegen_set_error_at(gen, node->loc.orig_line, node->loc.orig_column,
+                                     name_length,
                                      display_name, "Undefined function");
                 
                 // 返回一个 undef 值以继续生成

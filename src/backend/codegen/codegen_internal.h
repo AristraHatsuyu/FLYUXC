@@ -11,7 +11,7 @@
 void codegen_set_error(CodeGen *gen, const char *message);
 
 /* 设置带位置信息的编译错误 */
-void codegen_set_error_at(CodeGen *gen, int line, int column, 
+void codegen_set_error_at(CodeGen *gen, int line, int column, int length,
                           const char *var_name, const char *message);
 
 /* 从映射表中查找映射后名字对应的原始名字 */

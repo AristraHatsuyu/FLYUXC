@@ -1,4 +1,5 @@
 #include "flyuxc/frontend/parser.h"
+#include "flyuxc/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -111,153 +112,18 @@ static void error_at(Parser *p, Token *token, const char *message) {
         display_column = token->column;
     }
     
-    // 如果长度为1，只显示单个位置；否则显示范围
-    if (token->orig_length <= 1) {
-        fprintf(stderr, "\033[31mError\033[0m at line %d, column %d: %s\n", 
-                display_line, display_column, message);
-    } else {
-        fprintf(stderr, "\033[31mError\033[0m at line %d, column %d-%d: %s\n", 
-                display_line, display_column, display_column + token->orig_length - 1, message);
-    }
-    
-    // 如果有原始源码，显示错误上下文
-    if (p->original_source && display_line > 0) {
-        const char *src = p->original_source;
-        int current_line = 1;
-        const char *line_start = src;
-        const char *line_end = NULL;
-        
-        // 找到错误所在行
-        while (*src && current_line < display_line) {
-            if (*src == '\n') {
-                current_line++;
-                line_start = src + 1;
-            }
-            src++;
-        }
-        
-        // 找到行尾
-        line_end = line_start;
-        while (*line_end && *line_end != '\n' && *line_end != '\r') {
-            line_end++;
-        }
-        
-        // 显示行号和源代码行，用红色高亮错误区间
-        fprintf(stderr, "\033[36m%5d |\033[0m ", display_line);
-        
-        // 按UTF-8字符遍历，正确处理高亮
-        const char *ptr = line_start;
-        int char_pos = 1;  // 字符位置（非字节）
-        int error_start_char = display_column;
-        int error_end_char = display_column + token->orig_length - 1;
-        
-        while (ptr < line_end) {
-            unsigned char c = (unsigned char)*ptr;
-            int char_bytes = 1;
-            
-            // 计算UTF-8字符的字节数
-            if (c >= 0xF0) char_bytes = 4;
-            else if (c >= 0xE0) char_bytes = 3;
-            else if (c >= 0xC0) char_bytes = 2;
-            
-            // 判断当前字符是否在错误区间内
-            if (char_pos >= error_start_char && char_pos <= error_end_char) {
-                if (char_pos == error_start_char) {
-                    fprintf(stderr, "\033[31m");  // 开始红色高亮
-                }
-            }
-            
-            // 输出完整的UTF-8字符
-            for (int i = 0; i < char_bytes && ptr + i < line_end; i++) {
-                fputc(ptr[i], stderr);
-            }
-            ptr += char_bytes;
-            
-            // 判断是否需要结束红色高亮
-            if (char_pos == error_end_char) {
-                fprintf(stderr, "\033[0m");  // 结束红色高亮
-            }
-            
-            char_pos++;
-        }
-        
-        // 确保关闭颜色
-        fprintf(stderr, "\033[0m\n");
-        
-        // 显示箭头指示器
-        fprintf(stderr, "      \033[36m|\033[0m ");
-        
-        // 计算箭头位置（考虑 UTF-8 字符的显示宽度）
-        ptr = line_start;
-        int visual_column = 1;
-        char_pos = 1;
-        
-        // 找到错误起始的视觉列
-        while (ptr < line_end && char_pos < display_column) {
-            unsigned char c = (unsigned char)*ptr;
-            int char_bytes = 1;
-            int display_width = 1;
-            
-            if (c >= 0xF0) {
-                char_bytes = 4;
-                display_width = 2;  // Emoji 通常占两个显示宽度
-            } else if (c >= 0xE0) {
-                char_bytes = 3;
-                display_width = 2;  // 中文占两个显示宽度
-            } else if (c >= 0xC0) {
-                char_bytes = 2;
-            }
-            
-            visual_column += display_width;
-            ptr += char_bytes;
-            char_pos++;
-        }
-        
-        // 输出空格到错误起始位置
-        for (int i = 1; i < visual_column; i++) {
-            fprintf(stderr, " ");
-        }
-        
-        // 计算错误区间的视觉长度
-        int error_visual_length = 0;
-        int remaining_chars = token->orig_length;
-        while (ptr < line_end && remaining_chars > 0) {
-            unsigned char c = (unsigned char)*ptr;
-            int char_bytes = 1;
-            int display_width = 1;
-            
-            if (c >= 0xF0) {
-                char_bytes = 4;
-                display_width = 2;
-            } else if (c >= 0xE0) {
-                char_bytes = 3;
-                display_width = 2;
-            } else if (c >= 0xC0) {
-                char_bytes = 2;
-            }
-            
-            error_visual_length += display_width;
-            ptr += char_bytes;
-            remaining_chars--;
-        }
-        
-        // 显示红色波浪线
-        fprintf(stderr, "\033[31m");
-        if (error_visual_length > 0) {
-            for (int i = 0; i < error_visual_length && i < 50; i++) {
-                fprintf(stderr, "^");
-            }
-        } else {
-            fprintf(stderr, "^");
-        }
-        fprintf(stderr, "\033[0m\n");
-    }
+    // 使用统一的错误报告接口
+    report_error_at(ERR_ERROR, PHASE_PARSER,
+                    p->original_source,
+                    display_line, display_column, 
+                    token->orig_length > 0 ? token->orig_length : 1,
+                    message);
     
     p->had_error = true;
     p->error_count++;
 }
 
-// 警告函数：类似 error_at 但用黄色显示
+// 警告函数
 static void warning_at(Parser *p, Token *token, const char *message) {
     // 只使用原始源码位置
     int display_line = token->orig_line;
@@ -269,135 +135,12 @@ static void warning_at(Parser *p, Token *token, const char *message) {
         display_column = token->column;
     }
     
-    // 如果长度为1，只显示单个位置；否则显示范围
-    if (token->orig_length <= 1) {
-        fprintf(stderr, "\033[33mWarning\033[0m at line %d, column %d: %s\n", 
-                display_line, display_column, message);
-    } else {
-        fprintf(stderr, "\033[33mWarning\033[0m at line %d, column %d-%d: %s\n", 
-                display_line, display_column, display_column + token->orig_length - 1, message);
-    }
-    
-    // 如果有原始源码，显示警告上下文
-    if (p->original_source && display_line > 0) {
-        const char *src = p->original_source;
-        int current_line = 1;
-        const char *line_start = src;
-        const char *line_end = NULL;
-        
-        // 找到警告所在行
-        while (*src && current_line < display_line) {
-            if (*src == '\n') {
-                current_line++;
-                line_start = src + 1;
-            }
-            src++;
-        }
-        
-        // 找到行尾
-        line_end = line_start;
-        while (*line_end && *line_end != '\n' && *line_end != '\r') {
-            line_end++;
-        }
-        
-        // 显示行号和源代码行，用黄色高亮警告区间
-        fprintf(stderr, "\033[36m%5d |\033[0m ", display_line);
-        
-        // 按UTF-8字符遍历，正确处理高亮
-        const char *ptr = line_start;
-        int char_pos = 1;
-        int warn_start_char = display_column;
-        int warn_end_char = display_column + token->orig_length - 1;
-        
-        while (ptr < line_end) {
-            unsigned char c = (unsigned char)*ptr;
-            int char_bytes = 1;
-            
-            if (c >= 0xF0) char_bytes = 4;
-            else if (c >= 0xE0) char_bytes = 3;
-            else if (c >= 0xC0) char_bytes = 2;
-            
-            if (char_pos >= warn_start_char && char_pos <= warn_end_char) {
-                if (char_pos == warn_start_char) {
-                    fprintf(stderr, "\033[33m");
-                }
-            }
-            
-            for (int i = 0; i < char_bytes && ptr + i < line_end; i++) {
-                fputc(ptr[i], stderr);
-            }
-            ptr += char_bytes;
-            
-            if (char_pos == warn_end_char) {
-                fprintf(stderr, "\033[0m");
-            }
-            
-            char_pos++;
-        }
-        fprintf(stderr, "\033[0m\n");
-        
-        // 显示指示器
-        fprintf(stderr, "\033[36m      |\033[0m ");
-        
-        // 计算视觉列位置
-        ptr = line_start;
-        int visual_column = 1;
-        char_pos = 1;
-        
-        while (ptr < line_end && char_pos < display_column) {
-            unsigned char c = (unsigned char)*ptr;
-            int char_bytes = 1;
-            int display_width = 1;
-            
-            if (c >= 0xF0) {
-                char_bytes = 4;
-                display_width = 2;
-            } else if (c >= 0xE0) {
-                char_bytes = 3;
-                display_width = 2;
-            } else if (c >= 0xC0) {
-                char_bytes = 2;
-            }
-            
-            visual_column += display_width;
-            ptr += char_bytes;
-            char_pos++;
-        }
-        
-        for (int i = 1; i < visual_column; i++) {
-            fputc(' ', stderr);
-        }
-        
-        // 计算警告区间的视觉长度
-        int warn_visual_length = 0;
-        int remaining_chars = token->orig_length;
-        while (ptr < line_end && remaining_chars > 0) {
-            unsigned char c = (unsigned char)*ptr;
-            int char_bytes = 1;
-            int display_width = 1;
-            
-            if (c >= 0xF0) {
-                char_bytes = 4;
-                display_width = 2;
-            } else if (c >= 0xE0) {
-                char_bytes = 3;
-                display_width = 2;
-            } else if (c >= 0xC0) {
-                char_bytes = 2;
-            }
-            
-            warn_visual_length += display_width;
-            ptr += char_bytes;
-            remaining_chars--;
-        }
-        
-        if (warn_visual_length < 1) warn_visual_length = 1;
-        
-        for (int i = 0; i < warn_visual_length; i++) {
-            fputc('^', stderr);
-        }
-        fprintf(stderr, "\n");
-    }
+    // 使用统一的错误报告接口
+    report_error_at(ERR_WARNING, PHASE_PARSER,
+                    p->original_source,
+                    display_line, display_column,
+                    token->orig_length > 0 ? token->orig_length : 1,
+                    message);
     
     p->warning_count++;
 }
