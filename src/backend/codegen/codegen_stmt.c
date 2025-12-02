@@ -131,6 +131,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     if (init_val) {
                         // 释放中间值，但保留要赋给变量的值
                         temp_value_release_except(gen, init_val);
+                        // P2: 变量声明赋值需要 retain，因为变量持有引用
+                        fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %s)\n", init_val);
                         fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                                 init_val, decl->name);
                         free(init_val);
@@ -210,6 +212,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", old_val);
                         free(old_val);
                         
+                        // P2: 赋值给变量时需要 retain，因为变量持有引用
+                        fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %s)\n", value);
                         fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                                 value, target->name);
                     } else {
@@ -222,6 +226,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         }
                         // 释放中间值，但保留要赋给变量的值
                         temp_value_release_except(gen, value);
+                        // P2: 新变量赋值也需要 retain
+                        fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %s)\n", value);
                         fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
                                 value, target->name);
                     }
@@ -812,6 +818,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 char *element = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_array_get(%%struct.Value* %s, %%struct.Value* %s)\n",
                         element, array, index_value);
+                // P2: for-each 循环变量需要 retain
+                fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %s)\n", element);
                 fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n", element, item_var);
                 
                 free(curr_index);
@@ -1004,12 +1012,24 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 output_target = gen->code_buf;
             }
             
+            // 获取闭包捕获的变量（如果有的话）
+            CapturedVars *captured = gen->current_captured;
+            
             // 函数签名 - 使用 Value* 类型
             fprintf(output_target, "\ndefine %%struct.Value* @%s(", func_llvm_name);
             
+            // 先输出普通参数
             for (size_t i = 0; i < func->param_count; i++) {
                 if (i > 0) fprintf(output_target, ", ");
                 fprintf(output_target, "%%struct.Value* %%param_%s", func->params[i]);
+            }
+            
+            // 然后输出捕获的变量作为额外参数
+            if (captured && captured->count > 0) {
+                for (size_t i = 0; i < captured->count; i++) {
+                    if (func->param_count > 0 || i > 0) fprintf(output_target, ", ");
+                    fprintf(output_target, "%%struct.Value* %%captured_%s", captured->names[i]);
+                }
             }
             
             fprintf(output_target, ") {\n");
@@ -1041,6 +1061,18 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // P2 修复：参数不添加到作用域跟踪器！
                 // 参数的生命周期由调用者管理，函数不应该释放参数
                 // scope_add_local(func_scope, func->params[i]); // 移除
+            }
+            
+            // 为捕获的变量创建局部变量
+            if (captured && captured->count > 0) {
+                for (size_t i = 0; i < captured->count; i++) {
+                    fprintf(output_target, "  %%%s = alloca %%struct.Value*\n", captured->names[i]);
+                    fprintf(output_target, "  store %%struct.Value* %%captured_%s, %%struct.Value** %%%s\n",
+                            captured->names[i], captured->names[i]);
+                    // 注册捕获变量到符号表，使其在函数体内可见
+                    register_symbol(gen, captured->names[i]);
+                    // 捕获变量不添加到作用域跟踪器（同参数一样，由调用者管理）
+                }
             }
             
             // 切换到函数体缓冲区，设置函数作用域

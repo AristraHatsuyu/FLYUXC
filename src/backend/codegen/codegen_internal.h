@@ -60,6 +60,12 @@ int is_symbol_defined(CodeGen *gen, const char *var_name);
 /* 检查变量是否是全局变量 */
 int is_global_var(CodeGen *gen, const char *var_name);
 
+/* 注册函数名到函数表 */
+void register_function(CodeGen *gen, const char *func_name);
+
+/* 检查名字是否是函数 */
+int is_function_name(CodeGen *gen, const char *name);
+
 /* ============================================================================
  * 作用域跟踪函数声明 - codegen_utils.c (P2: 作用域退出清理)
  * ============================================================================ */
@@ -145,5 +151,13 @@ void codegen_stmt(CodeGen *gen, ASTNode *node);
 
 /* 收集需要在entry块alloca的catch参数 */
 void collect_catch_params(CodeGen *gen, ASTNode *node, FILE *entry_buf);
+
+/* ============================================================================
+ * 闭包分析声明 - codegen_closure.c
+ * ============================================================================ */
+
+/* 分析匿名函数，收集需要捕获的外部变量 */
+CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body,
+                                    char **params, size_t param_count);
 
 #endif /* FLYUXC_CODEGEN_INTERNAL_H */

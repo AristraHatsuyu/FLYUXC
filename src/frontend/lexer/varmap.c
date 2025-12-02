@@ -224,10 +224,10 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     "createDir", "removeDir", "listDir", "dirExists",
     "parseJSON", "toJSON",
     
-    /* 字符串操作 (17) */
+    /* 字符串操作 (15) */
     "substr", "indexOf", "replace", "split", "join",
-    "toUpper", "toLower", "trim", "startsWith", "endsWith", "contains",
-    "len", "charAt", "upper", "lower",
+    "upper", "lower", "trim", "startsWith", "endsWith", "contains",
+    "len", "charAt",
     
     /* 数学函数 (13) */
     "abs", "floor", "ceil", "round", "sqrt", "pow",

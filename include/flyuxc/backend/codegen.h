@@ -64,6 +64,9 @@ typedef struct TempValueStack {
     int count;                      /* 临时值数量 */
 } TempValueStack;
 
+/* 前向声明 */
+typedef struct CapturedVars CapturedVars;
+
 /* 代码生成器结构 */
 typedef struct CodeGen {
     FILE *output;           /* 最终输出文件 */
@@ -93,6 +96,9 @@ typedef struct CodeGen {
     size_t varmap_count;    /* 映射表大小 */
     /* 原始源代码（用于错误消息中显示源码行） */
     const char *original_source;
+    /* 闭包捕获变量 - 用于嵌套函数/匿名函数 */
+    CapturedVars *current_captured;  /* 当前正在生成的闭包的捕获变量 */
+    SymbolEntry *functions;  /* 函数名表 - 顶层定义的函数 */
 } CodeGen;
 
 /* 创建代码生成器 */
@@ -115,5 +121,37 @@ const char *codegen_get_error(CodeGen *gen);
 
 /* 释放代码生成器 */
 void codegen_free(CodeGen *gen);
+
+/* ========================================
+ * 闭包捕获变量分析
+ * ======================================== */
+
+/* 捕获变量列表 - 完整定义（前面有前向声明） */
+struct CapturedVars {
+    char **names;           /* 捕获的变量名数组 */
+    size_t count;           /* 变量数量 */
+    size_t capacity;        /* 数组容量 */
+};
+
+/* 创建捕获变量列表 */
+CapturedVars *captured_vars_create(void);
+
+/* 添加捕获变量（如果不存在） */
+void captured_vars_add(CapturedVars *cv, const char *name);
+
+/* 检查变量是否已在列表中 */
+int captured_vars_contains(CapturedVars *cv, const char *name);
+
+/* 释放捕获变量列表 */
+void captured_vars_free(CapturedVars *cv);
+
+/* 分析匿名函数，收集需要捕获的外部变量 
+ * gen: 代码生成器（用于检查已定义的符号）
+ * func_node: 函数AST节点
+ * params: 函数参数名数组
+ * param_count: 参数数量
+ * 返回：捕获的变量列表（调用者需释放） */
+CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body, 
+                                    char **params, size_t param_count);
 
 #endif /* FLYUXC_CODEGEN_H */

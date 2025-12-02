@@ -29,6 +29,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->objects = NULL;
     gen->symbols = NULL;
     gen->globals = NULL;  /* 初始无全局变量 */
+    gen->functions = NULL;  /* 初始无函数表 */
     gen->current_var_name = NULL;
     gen->in_try_catch = 0;  /* 初始不在 Try-Catch 块中 */
     gen->try_catch_label = NULL;
@@ -44,6 +45,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->varmap_entries = NULL;  /* 初始无映射表 */
     gen->varmap_count = 0;  /* 初始映射表大小为0 */
     gen->original_source = NULL;  /* 初始无原始源代码 */
+    gen->current_captured = NULL;  /* 初始无闭包捕获变量 */
     
     return gen;
 }
@@ -105,6 +107,15 @@ void codegen_free(CodeGen *gen) {
             free(sym->name);
             free(sym);
             sym = next_sym;
+        }
+        
+        // 释放函数表
+        SymbolEntry *func = gen->functions;
+        while (func) {
+            SymbolEntry *next_func = func->next;
+            free(func->name);
+            free(func);
+            func = next_func;
         }
         
         // 释放中间值栈
@@ -287,6 +298,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                     fprintf(stderr, "[DEBUG CODEGEN] Registering function: %s\n", func->name);
                 }
                 register_symbol(gen, func->name);
+                register_function(gen, func->name);  // 同时注册到函数表
             } else if (stmt->kind == AST_VAR_DECL) {
                 // 检查是否是函数赋值（name := (params) { body }）
                 ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
@@ -296,6 +308,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                         fprintf(stderr, "[DEBUG CODEGEN] Registering VAR_DECL function: %s\n", decl->name);
                     }
                     register_symbol(gen, decl->name);
+                    register_function(gen, decl->name);  // 同时注册到函数表
                 }
             }
         }
@@ -521,6 +534,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_floor(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_ceil(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_round(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_round2(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_sqrt(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_pow(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_min(%%struct.Value*, %%struct.Value*)\n");

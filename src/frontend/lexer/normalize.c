@@ -950,9 +950,12 @@ static char* normalize_internal_newlines(const char* stmt) {
                         last--;
                     }
                     
+                    // 获取下一行第一个非空白字符
+                    char next_char = stmt[j];
+                    
                     if (getenv("DEBUG_NORM")) {
                         fprintf(stderr, "[DEBUG] last=%d, last_char='%c', next_char='%c'\n", 
-                                last, last >= 0 ? result[last] : '?', stmt[j]);
+                                last, last >= 0 ? result[last] : '?', next_char);
                     }
                     
                     // 如果已经有分号、或者是开括号，则不添加
@@ -960,6 +963,37 @@ static char* normalize_internal_newlines(const char* stmt) {
                         // 跳过换行
                         if (getenv("DEBUG_NORM")) {
                             fprintf(stderr, "[DEBUG] Skipping semicolon (already have delimiter)\n");
+                        }
+                        continue;
+                    }
+                    
+                    // 如果行末是运算符，说明表达式未完成，不添加分号
+                    // 支持: + - * / % & | ^ < > = ! ~ , :
+                    // 也包括复合运算符的第一个字符如 && || >= <= != ==
+                    if (last >= 0) {
+                        char lc = result[last];
+                        if (lc == '+' || lc == '-' || lc == '*' || lc == '/' || lc == '%' ||
+                            lc == '&' || lc == '|' || lc == '^' || lc == '<' || lc == '>' ||
+                            lc == '=' || lc == '!' || lc == '~' || lc == ',' || lc == ':' ||
+                            lc == '[' || lc == '?') {
+                            // 行末是运算符，跳过分号
+                            if (getenv("DEBUG_NORM")) {
+                                fprintf(stderr, "[DEBUG] Skipping semicolon (line ends with operator '%c')\n", lc);
+                            }
+                            continue;
+                        }
+                    }
+                    
+                    // 如果下一行开头是运算符，说明表达式未完成，不添加分号
+                    // 支持: + - * / % & | ^ . ?
+                    // 注意：不包括 < > = ! 因为它们可能是比较表达式的开始
+                    if (next_char == '+' || next_char == '-' || next_char == '*' || 
+                        next_char == '/' || next_char == '%' || next_char == '&' ||
+                        next_char == '|' || next_char == '^' || next_char == '.' ||
+                        next_char == '?') {
+                        // 下一行以运算符开头，跳过分号
+                        if (getenv("DEBUG_NORM")) {
+                            fprintf(stderr, "[DEBUG] Skipping semicolon (next line starts with operator '%c')\n", next_char);
                         }
                         continue;
                     }

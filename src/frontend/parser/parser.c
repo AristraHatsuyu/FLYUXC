@@ -208,30 +208,10 @@ void parser_free(Parser *p) {
  * ============================================================================ */
 
 static ASTNode *parse_postfix(Parser *p);
+static ASTNode *parse_unary(Parser *p);
 
 static ASTNode *parse_primary(Parser *p) {
     Token *token = current_token(p);
-    
-    // 前缀一元运算符: !, -, +, ++, --
-    if (match(p, TK_BANG) || match(p, TK_MINUS) || match(p, TK_PLUS) || 
-        match(p, TK_PLUS_PLUS) || match(p, TK_MINUS_MINUS)) {
-        Token *op_token = &p->tokens[p->current - 1];
-        ASTNode *operand = parse_primary(p);
-        
-        // 如果操作数解析失败，返回 NULL 避免创建无效节点
-        if (operand == NULL) {
-            error_at(p, current_token(p), "Expected operand after unary operator");
-            return NULL;
-        }
-        
-        ASTNode *node = ast_node_create(AST_UNARY_EXPR, token_to_loc(op_token));
-        ASTUnaryExpr *unary = (ASTUnaryExpr *)malloc(sizeof(ASTUnaryExpr));
-        unary->op = op_token->kind;
-        unary->operand = operand;
-        unary->is_postfix = false;  // 前缀运算符
-        node->data = unary;
-        return node;
-    }
     
     // 数字字面量
     if (match(p, TK_NUM)) {
@@ -640,9 +620,38 @@ static ASTNode *parse_postfix(Parser *p) {
     return expr;
 }
 
+// 一元运算符: !, -, +, ++, --
+// 优先级高于幂运算，但低于后缀运算（成员访问、数组索引）
+// 所以 !cell.hot 解析为 !(cell.hot)，而不是 (!cell).hot
+static ASTNode *parse_unary(Parser *p) {
+    // 前缀一元运算符: !, -, +, ++, --
+    if (match(p, TK_BANG) || match(p, TK_MINUS) || match(p, TK_PLUS) || 
+        match(p, TK_PLUS_PLUS) || match(p, TK_MINUS_MINUS)) {
+        Token *op_token = &p->tokens[p->current - 1];
+        // 递归调用 parse_unary 处理连续前缀运算符如 !!x 或 --x
+        ASTNode *operand = parse_unary(p);
+        
+        if (operand == NULL) {
+            error_at(p, current_token(p), "Expected operand after unary operator");
+            return NULL;
+        }
+        
+        ASTNode *node = ast_node_create(AST_UNARY_EXPR, token_to_loc(op_token));
+        ASTUnaryExpr *unary = (ASTUnaryExpr *)malloc(sizeof(ASTUnaryExpr));
+        unary->op = op_token->kind;
+        unary->operand = operand;
+        unary->is_postfix = false;  // 前缀运算符
+        node->data = unary;
+        return node;
+    }
+    
+    // 不是前缀运算符，解析后缀表达式
+    return parse_postfix(p);
+}
+
 // 幂运算 (右结合: 2**3**2 = 2**(3**2) = 512)
 static ASTNode *parse_power(Parser *p) {
-    ASTNode *left = parse_postfix(p);
+    ASTNode *left = parse_unary(p);  // 修改：调用 parse_unary 而不是 parse_postfix
     
     if (match(p, TK_POWER)) {
         Token *op_token = &p->tokens[p->current - 1];

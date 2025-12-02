@@ -234,7 +234,7 @@ T> {
 #### 方法链调用（.>）
 ```flyux
 array.>len.>🐮🐴(2)       // 函数🐮🐴具有两个参数，.>左边作为第一个参数
-object.>toStr.>toUpper
+object.>toStr.>upper
 ```
 
 #### 属性访问（.）
@@ -713,16 +713,16 @@ arr := split("a,b,c", ",")  // ["a", "b", "c"]
 s := join([1, 2, 3], ",")   // "1,2,3"
 ```
 
-#### toUpper(str)
+#### upper(str)
 转换为大写。
 ```flyux
-s := toUpper("hello")       // "HELLO"
+s := upper("hello")        // "HELLO"
 ```
 
-#### toLower(str)
+#### lower(str)
 转换为小写。
 ```flyux
-s := toLower("HELLO")       // "hello"
+s := lower("HELLO")        // "hello"
 ```
 
 #### trim(str)
@@ -1336,7 +1336,7 @@ arr := range(0, 10, 2)      // [0, 2, 4, 6, 8]
 // 字符串处理
 text := "  Hello, FLYUX!  "
 text = trim(text)
-text = toUpper(text)
+text = upper(text)
 print(text)  // "HELLO, FLYUX!"
 
 // 数组操作

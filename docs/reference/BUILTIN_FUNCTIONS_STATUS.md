@@ -33,8 +33,8 @@
 - ⬜ `replace(str, old, new)`
 - ⬜ `split(str, delimiter)`
 - ⬜ `join(array, delimiter)`
-- ⬜ `toUpper(str)`
-- ⬜ `toLower(str)`
+- ⬜ `upper(str)`
+- ⬜ `lower(str)`
 - ⬜ `trim(str)`
 - ⬜ `startsWith(str, prefix)`
 - ⬜ `endsWith(str, suffix)`

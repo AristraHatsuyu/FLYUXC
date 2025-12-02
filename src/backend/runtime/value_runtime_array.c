@@ -346,7 +346,9 @@ Value* value_index_of_array(Value *arr, Value *val) {
     
     for (size_t i = 0; i < arr->array_size; i++) {
         Value *eq = value_equals(elements[i], val);
-        if (eq && eq->type == VALUE_BOOL && eq->data.number != 0) {
+        int is_equal = (eq && eq->type == VALUE_BOOL && eq->data.number != 0);
+        value_release(eq);  // 释放临时值
+        if (is_equal) {
             return box_number((double)i);
         }
     }
@@ -370,7 +372,9 @@ Value* value_includes(Value *arr, Value *val) {
     
     for (size_t i = 0; i < arr->array_size; i++) {
         Value *eq = value_equals(elements[i], val);
-        if (eq && eq->type == VALUE_BOOL && eq->data.number != 0) {
+        int is_equal = (eq && eq->type == VALUE_BOOL && eq->data.number != 0);
+        value_release(eq);  // 释放临时值
+        if (is_equal) {
             return box_bool(1);
         }
     }

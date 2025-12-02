@@ -80,15 +80,15 @@ println("\n=== 错误处理测试 ===")
 
 T> {
     result := charAt("abc", 10)  // 越界访问
-    println("这行不应该输出")
+    println("这行应该输出")
 } (err) {
-    println("捕获到错误:", err.message)
-    println("错误类型:", err.type)
+    println("不应该输出错误:", err.message)
+    println("不应该输出错误类型:", err.type)
 }
 
 T> {
-    result := toInt("not a number")
-    println("这行也不应该输出")
+    result := toInt("not a number")!
+    println("这行不应该输出")
 } (err) {
     println("捕获到转换错误:", err.message)
 }

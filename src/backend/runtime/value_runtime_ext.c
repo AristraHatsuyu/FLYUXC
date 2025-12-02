@@ -312,9 +312,9 @@ Value* value_is_arr(Value *v) {
     return box_bool(v && v->type == VALUE_ARRAY);
 }
 
-/* isObj(value) - 检查是否为对象类型（不包括数组） */
+/* isObj(value) - 检查是否为对象类型（包括数组，因为数组是对象的子类型） */
 Value* value_is_obj(Value *v) {
-    return box_bool(v && v->type == VALUE_OBJECT);
+    return box_bool(v && (v->type == VALUE_OBJECT || v->type == VALUE_ARRAY));
 }
 
 /* isNull(value) - 检查是否为 null */
@@ -885,7 +885,7 @@ char* value_typeof(Value *v) {
         case VALUE_STRING: return "str";
         case VALUE_BOOL: return "bl";
         case VALUE_NULL: return "null";
-        case VALUE_ARRAY: return "arr";
+        case VALUE_ARRAY: return "obj";  // 数组也是对象类型
         case VALUE_OBJECT: return "obj";
         default: return "unknown";
     }

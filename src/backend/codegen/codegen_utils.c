@@ -163,6 +163,24 @@ int is_global_var(CodeGen *gen, const char *var_name) {
     return 0;
 }
 
+/* 注册函数名到函数表 */
+void register_function(CodeGen *gen, const char *func_name) {
+    SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+    entry->name = strdup(func_name);
+    entry->next = gen->functions;
+    gen->functions = entry;
+}
+
+/* 检查名字是否是函数 */
+int is_function_name(CodeGen *gen, const char *name) {
+    for (SymbolEntry *entry = gen->functions; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* ============================================================================
  * 作用域跟踪函数实现 (P2: 作用域退出清理)
  * ============================================================================ */

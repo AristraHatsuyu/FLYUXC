@@ -40,7 +40,7 @@ Value* value_ceil(Value* num) {
     return box_number(ceil(num->data.number));
 }
 
-/* round(num) -> num - 四舍五入 */
+/* round(num, digits?) -> num - 四舍五入，可选指定小数位数 */
 Value* value_round(Value* num) {
     if (!num || num->type != VALUE_NUMBER) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(round) argument must be a number");
@@ -49,6 +49,23 @@ Value* value_round(Value* num) {
     
     set_runtime_status(FLYUX_OK, NULL);
     return box_number(round(num->data.number));
+}
+
+/* round(num, digits) -> num - 四舍五入到指定小数位数 */
+Value* value_round2(Value* num, Value* digits) {
+    if (!num || num->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(round) first argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    if (!digits || digits->type != VALUE_NUMBER) {
+        set_runtime_status(FLYUX_TYPE_ERROR, "(round) second argument must be a number");
+        return box_null_typed(VALUE_NUMBER);
+    }
+    
+    set_runtime_status(FLYUX_OK, NULL);
+    int d = (int)digits->data.number;
+    double multiplier = pow(10.0, d);
+    return box_number(round(num->data.number * multiplier) / multiplier);
 }
 
 /* sqrt(num) -> num - 平方根 */

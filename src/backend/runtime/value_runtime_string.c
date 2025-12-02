@@ -4,13 +4,87 @@
  */
 
 /* ============================================================================
+ * UTF-8 辅助函数
+ * ============================================================================
+ */
+
+/*
+ * 计算 UTF-8 字符串的字符数（不是字节数）
+ */
+static size_t utf8_strlen(const char *s) {
+    size_t count = 0;
+    while (*s) {
+        // UTF-8 continuation bytes 以 10xxxxxx 开头，跳过它们
+        if ((*s & 0xC0) != 0x80) {
+            count++;
+        }
+        s++;
+    }
+    return count;
+}
+
+/*
+ * 获取第 n 个 UTF-8 字符的字节偏移量
+ * 返回 -1 表示索引超出范围
+ */
+static int utf8_char_to_byte_offset(const char *s, int char_index) {
+    int byte_offset = 0;
+    int char_count = 0;
+    
+    while (s[byte_offset]) {
+        if (char_count == char_index) {
+            return byte_offset;
+        }
+        // 跳过当前字符的所有字节
+        if ((s[byte_offset] & 0x80) == 0) {
+            // ASCII 字符（1 字节）
+            byte_offset += 1;
+        } else if ((s[byte_offset] & 0xE0) == 0xC0) {
+            // 2 字节字符
+            byte_offset += 2;
+        } else if ((s[byte_offset] & 0xF0) == 0xE0) {
+            // 3 字节字符
+            byte_offset += 3;
+        } else if ((s[byte_offset] & 0xF8) == 0xF0) {
+            // 4 字节字符
+            byte_offset += 4;
+        } else {
+            // 无效的 UTF-8，当作单字节处理
+            byte_offset += 1;
+        }
+        char_count++;
+    }
+    
+    // 如果 char_index 正好等于字符数，返回字符串末尾偏移量
+    if (char_count == char_index) {
+        return byte_offset;
+    }
+    
+    return -1;  // 索引超出范围
+}
+
+/*
+ * 获取单个 UTF-8 字符的字节长度
+ */
+static int utf8_char_byte_length(const char *s) {
+    if (!s || !*s) return 0;
+    
+    unsigned char c = (unsigned char)*s;
+    if ((c & 0x80) == 0) return 1;       // ASCII
+    if ((c & 0xE0) == 0xC0) return 2;    // 2 字节
+    if ((c & 0xF0) == 0xE0) return 3;    // 3 字节
+    if ((c & 0xF8) == 0xF0) return 4;    // 4 字节
+    return 1;  // 无效的 UTF-8
+}
+
+/* ============================================================================
  * 字符串处理函数
  * ============================================================================
  */
 
 /*
  * len(value) - 获取长度
- * 字符串：返回字符数
+ * 字符串：返回字符数（UTF-8 字符）
  * 数组：返回元素个数
  * 对象：返回字段个数
  * 其他：返回0
@@ -25,7 +99,8 @@ Value* value_len(Value *v) {
     
     switch (v->type) {
         case VALUE_STRING:
-            return box_number((double)v->string_length);
+            // 返回 UTF-8 字符数，而不是字节数
+            return box_number((double)utf8_strlen((const char*)v->data.pointer));
         case VALUE_ARRAY:
         case VALUE_OBJECT:
             return box_number((double)v->array_size);
@@ -37,7 +112,7 @@ Value* value_len(Value *v) {
 
 /*
  * charAt(str, index) - 获取指定位置的字符或数组元素
- * 支持字符串和数组
+ * 支持字符串和数组，字符串索引是 UTF-8 字符索引
  */
 Value* value_char_at(Value *str, Value *index) {
     set_runtime_status(FLYUX_OK, NULL);
@@ -62,26 +137,43 @@ Value* value_char_at(Value *str, Value *index) {
     // 支持字符串访问
     if (!str || str->type != VALUE_STRING) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(charAt) requires string or array");
-        return box_string("");
+        return box_null_typed(VALUE_STRING);
     }
     
     if (!index || index->type != VALUE_NUMBER) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(charAt) requires numeric index");
-        return box_string("");
+        return box_null_typed(VALUE_STRING);
     }
     
+    const char *s = (const char*)str->data.pointer;
     int idx = (int)index->data.number;
-    if (idx < 0 || idx >= (int)str->string_length) {
+    size_t char_count = utf8_strlen(s);
+    
+    if (idx < 0 || idx >= (int)char_count) {
         set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(charAt) index out of range");
+        return box_null_typed(VALUE_STRING);
+    }
+    
+    // 找到第 idx 个 UTF-8 字符的字节偏移量
+    int byte_offset = utf8_char_to_byte_offset(s, idx);
+    if (byte_offset < 0) {
         return box_string("");
     }
     
-    char result[2] = {((char*)str->data.pointer)[idx], '\0'};
-    return box_string_owned(strdup(result));
+    // 获取该字符的字节长度
+    int char_len = utf8_char_byte_length(s + byte_offset);
+    
+    // 复制该字符
+    char *result = (char*)malloc(char_len + 1);
+    memcpy(result, s + byte_offset, char_len);
+    result[char_len] = '\0';
+    
+    return box_string_owned(result);
 }
 
 /*
  * substr(str, start, length) - 获取子字符串
+ * start 和 length 都是 UTF-8 字符索引，不是字节索引
  */
 Value* value_substr(Value *str, Value *start, Value *length) {
     set_runtime_status(FLYUX_OK, NULL);
@@ -96,21 +188,39 @@ Value* value_substr(Value *str, Value *start, Value *length) {
         return box_string("");
     }
     
+    const char *s = (const char*)str->data.pointer;
+    size_t char_count = utf8_strlen(s);
     int start_idx = (int)start->data.number;
-    int len = (length && length->type == VALUE_NUMBER) ? (int)length->data.number : str->string_length;
+    int len = (length && length->type == VALUE_NUMBER) 
+              ? (int)length->data.number 
+              : (int)char_count - start_idx;
     
-    if (start_idx < 0 || start_idx >= (int)str->string_length) {
+    if (start_idx < 0 || start_idx >= (int)char_count) {
         return box_string("");
     }
     
     if (len < 0) len = 0;
-    if (start_idx + len > (int)str->string_length) {
-        len = str->string_length - start_idx;
+    if (start_idx + len > (int)char_count) {
+        len = (int)char_count - start_idx;
     }
     
-    char *result = (char*)malloc(len + 1);
-    memcpy(result, ((char*)str->data.pointer) + start_idx, len);
-    result[len] = '\0';
+    // 找到起始字符的字节偏移量
+    int start_byte = utf8_char_to_byte_offset(s, start_idx);
+    if (start_byte < 0) {
+        return box_string("");
+    }
+    
+    // 找到结束字符后一个位置的字节偏移量
+    int end_byte = utf8_char_to_byte_offset(s, start_idx + len);
+    if (end_byte < 0) {
+        // 如果超出范围，使用字符串末尾
+        end_byte = (int)str->string_length;
+    }
+    
+    int byte_len = end_byte - start_byte;
+    char *result = (char*)malloc(byte_len + 1);
+    memcpy(result, s + start_byte, byte_len);
+    result[byte_len] = '\0';
     
     return box_string_owned(result);
 }
@@ -118,6 +228,7 @@ Value* value_substr(Value *str, Value *start, Value *length) {
 /*
  * indexOf(str/arr, substr/value) - 查找子字符串位置或数组元素索引
  * 支持字符串和数组两种类型
+ * 对于字符串，返回 UTF-8 字符索引
  */
 Value* value_index_of(Value *str, Value *substr) {
     set_runtime_status(FLYUX_OK, NULL);
@@ -127,7 +238,9 @@ Value* value_index_of(Value *str, Value *substr) {
         Value **elements = (Value**)str->data.pointer;
         for (size_t i = 0; i < str->array_size; i++) {
             Value *eq = value_equals(elements[i], substr);
-            if (eq && eq->type == VALUE_BOOL && eq->data.number != 0) {
+            int is_equal = (eq && eq->type == VALUE_BOOL && eq->data.number != 0);
+            value_release(eq);  // 释放 value_equals 返回的临时值
+            if (is_equal) {
                 return box_number((double)i);
             }
         }
@@ -145,7 +258,25 @@ Value* value_index_of(Value *str, Value *substr) {
     const char *pos = strstr(haystack, needle);
     
     if (pos) {
-        return box_number((double)(pos - haystack));
+        // 计算字节偏移量对应的字符索引
+        int byte_offset = (int)(pos - haystack);
+        // 计算从字符串开头到 pos 位置有多少个 UTF-8 字符
+        int char_index = 0;
+        for (int i = 0; i < byte_offset; ) {
+            if ((haystack[i] & 0x80) == 0) {
+                i += 1;  // ASCII
+            } else if ((haystack[i] & 0xE0) == 0xC0) {
+                i += 2;  // 2 字节
+            } else if ((haystack[i] & 0xF0) == 0xE0) {
+                i += 3;  // 3 字节
+            } else if ((haystack[i] & 0xF8) == 0xF0) {
+                i += 4;  // 4 字节
+            } else {
+                i += 1;  // 无效 UTF-8
+            }
+            char_index++;
+        }
+        return box_number((double)char_index);
     }
     return box_number(-1);
 }
@@ -269,40 +400,55 @@ Value* value_join(Value *arr, Value *separator) {
     const char *sep = (separator && separator->type == VALUE_STRING)
                       ? (const char*)separator->data.pointer : ",";
     
-    if (arr->array_size == 0) {
+    size_t arr_size = arr->array_size;
+    if (arr_size == 0) {
         return box_string("");
     }
     
-    // 计算总长度
-    size_t total_len = 0;
     Value **elements = (Value**)arr->data.pointer;
+    size_t sep_len = strlen(sep);
     
-    for (size_t i = 0; i < arr->array_size; i++) {
-        Value *str_val = value_to_str(elements[i]);
-        total_len += strlen((char*)str_val->data.pointer);
-        if (i < arr->array_size - 1) {
-            total_len += strlen(sep);
+    // 一次性转换所有元素为字符串并缓存
+    Value **str_vals = (Value**)malloc(arr_size * sizeof(Value*));
+    const char **strs = (const char**)malloc(arr_size * sizeof(const char*));
+    size_t *lens = (size_t*)malloc(arr_size * sizeof(size_t));
+    
+    // 计算总长度，同时缓存转换结果
+    size_t total_len = 0;
+    for (size_t i = 0; i < arr_size; i++) {
+        str_vals[i] = value_to_str(elements[i]);
+        strs[i] = (const char*)str_vals[i]->data.pointer;
+        lens[i] = strlen(strs[i]);
+        total_len += lens[i];
+        if (i < arr_size - 1) {
+            total_len += sep_len;
         }
     }
     
-    // 构建结果
+    // 构建结果字符串
     char *result = (char*)malloc(total_len + 1);
     char *ptr = result;
     
-    for (size_t i = 0; i < arr->array_size; i++) {
-        Value *str_val = value_to_str(elements[i]);
-        const char *str = (const char*)str_val->data.pointer;
-        size_t len = strlen(str);
-        memcpy(ptr, str, len);
-        ptr += len;
+    for (size_t i = 0; i < arr_size; i++) {
+        memcpy(ptr, strs[i], lens[i]);
+        ptr += lens[i];
         
-        if (i < arr->array_size - 1) {
-            size_t sep_len = strlen(sep);
+        if (i < arr_size - 1) {
             memcpy(ptr, sep, sep_len);
             ptr += sep_len;
         }
     }
     *ptr = '\0';
+    
+    // 释放所有临时 Value
+    for (size_t i = 0; i < arr_size; i++) {
+        value_release(str_vals[i]);
+    }
+    
+    // 释放辅助数组
+    free(str_vals);
+    free(strs);
+    free(lens);
     
     return box_string_owned(result);
 }
