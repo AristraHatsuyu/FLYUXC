@@ -3,6 +3,9 @@
  * Module: value_runtime_cast.c
  */
 
+/* 前向声明 */
+Value* value_delete_field(Value *obj, Value *field_name);
+
 /* ============================================================================
  * 类型转换函数
  * ============================================================================
@@ -338,7 +341,7 @@ Value* value_get_field(Value *obj, Value *field_name) {
  *   value_set_field(obj, box_string("name"), box_string("Alice"))
  */
 Value* value_set_field(Value *obj, Value *field_name, Value *value) {
-    if (!obj || !field_name || !value) {
+    if (!obj || !field_name) {
         return box_bool(0);
     }
     
@@ -350,6 +353,11 @@ Value* value_set_field(Value *obj, Value *field_name, Value *value) {
     // 检查field_name是否为字符串
     if (field_name->type != VALUE_STRING) {
         return box_bool(0);
+    }
+    
+    // 特殊处理：如果 value 是 undef，则删除该键（类似 JS 的 delete）
+    if (!value || value->type == VALUE_UNDEF) {
+        return value_delete_field(obj, field_name);
     }
     
     const char *key = (const char*)field_name->data.pointer;
@@ -605,9 +613,10 @@ Value* value_entries(Value *obj) {
  * 行为：
  *   - 如果是数组且 index 是数字，设置数组元素
  *   - 如果是对象且 index 是字符串，设置对象字段
+ *   - 如果 value 是 undef，对于对象会删除键
  */
 Value* value_set_index(Value *obj, Value *index, Value *value) {
-    if (!obj || !index || !value) {
+    if (!obj || !index) {
         return box_bool(0);
     }
     
@@ -622,12 +631,14 @@ Value* value_set_index(Value *obj, Value *index, Value *value) {
         }
         
         size_t idx = (size_t)idx_double;
-        elements[idx] = value;
+        // 数组元素赋值 undef 就是设置为 undef（不删除元素，保持数组长度）
+        elements[idx] = value ? value : box_undef();
         return box_bool(1);
     }
     
     // 如果是对象且索引是字符串
     if (obj->type == VALUE_OBJECT && index->type == VALUE_STRING) {
+        // value_set_field 会处理 undef 删除逻辑
         return value_set_field(obj, index, value);
     }
     

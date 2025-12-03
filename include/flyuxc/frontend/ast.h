@@ -34,6 +34,7 @@ typedef enum ASTNodeKind {
     /* ===== 表达式 (Expressions) ===== */
     AST_BINARY_EXPR,     /* 二元表达式: a + b */
     AST_UNARY_EXPR,      /* 一元表达式: !a, -b */
+    AST_TERNARY_EXPR,    /* 三元表达式: cond ? true_val : false_val */
     AST_CALL_EXPR,       /* 函数调用: f(a, b) */
     AST_MEMBER_EXPR,     /* 成员访问: obj.prop */
     AST_INDEX_EXPR,      /* 索引访问: arr[0] */
@@ -195,6 +196,13 @@ typedef struct ASTUnaryExpr {
     bool is_postfix;         /* true: i++, false: ++i */
 } ASTUnaryExpr;
 
+/* 三元表达式: condition ? true_value : false_value */
+typedef struct ASTTernaryExpr {
+    ASTNode *condition;      /* 条件表达式 */
+    ASTNode *true_value;     /* 条件为真时的值 */
+    ASTNode *false_value;    /* 条件为假时的值 */
+} ASTTernaryExpr;
+
 /* 函数调用: f(a, b, c) 或 f(a, b, c)! */
 typedef struct ASTCallExpr {
     ASTNode *callee;         /* 被调用的函数（通常是IDENTIFIER） */
@@ -340,6 +348,10 @@ ASTNode *ast_binary_expr_create(TokenKind op, ASTNode *left, ASTNode *right,
 
 /* 创建一元表达式节点 */
 ASTNode *ast_unary_expr_create(TokenKind op, ASTNode *operand, SourceLocation loc);
+
+/* 创建三元表达式节点 */
+ASTNode *ast_ternary_expr_create(ASTNode *condition, ASTNode *true_value, 
+                                  ASTNode *false_value, SourceLocation loc);
 
 /* 创建函数调用节点 */
 ASTNode *ast_call_expr_create(ASTNode *callee, ASTNode **args, size_t arg_count,

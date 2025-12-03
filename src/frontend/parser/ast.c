@@ -73,6 +73,15 @@ void ast_node_free(ASTNode *node) {
             break;
         }
         
+        case AST_TERNARY_EXPR: {
+            ASTTernaryExpr *expr = (ASTTernaryExpr *)node->data;
+            ast_node_free(expr->condition);
+            ast_node_free(expr->true_value);
+            ast_node_free(expr->false_value);
+            free(expr);
+            break;
+        }
+        
         case AST_CALL_EXPR: {
             ASTCallExpr *call = (ASTCallExpr *)node->data;
             ast_node_free(call->callee);
@@ -350,6 +359,7 @@ const char *ast_kind_name(ASTNodeKind kind) {
         case AST_FUNC_DECL: return "FUNC_DECL";
         case AST_BLOCK: return "BLOCK";
         case AST_BINARY_EXPR: return "BINARY_EXPR";
+        case AST_TERNARY_EXPR: return "TERNARY_EXPR";
         case AST_CALL_EXPR: return "CALL_EXPR";
         case AST_IDENTIFIER: return "IDENTIFIER";
         case AST_NUM_LITERAL: return "NUM_LITERAL";
@@ -383,6 +393,13 @@ void ast_print(ASTNode *node, int indent) {
             ast_print(expr->right, indent + 1);
             break;
         }
+        case AST_TERNARY_EXPR: {
+            ASTTernaryExpr *expr = (ASTTernaryExpr *)node->data;
+            ast_print(expr->condition, indent + 1);
+            ast_print(expr->true_value, indent + 1);
+            ast_print(expr->false_value, indent + 1);
+            break;
+        }
         case AST_IDENTIFIER: {
             ASTIdentifier *id = (ASTIdentifier *)node->data;
             for (int i = 0; i < indent + 1; i++) printf("  ");
@@ -405,6 +422,18 @@ ASTNode *ast_unary_expr_create(TokenKind op, ASTNode *operand, SourceLocation lo
     expr->op = op;
     expr->operand = operand;
     expr->is_postfix = false;  // 默认为前缀
+    node->data = expr;
+    return node;
+}
+
+// 三元表达式
+ASTNode *ast_ternary_expr_create(ASTNode *condition, ASTNode *true_value, 
+                                  ASTNode *false_value, SourceLocation loc) {
+    ASTNode *node = ast_node_create(AST_TERNARY_EXPR, loc);
+    ASTTernaryExpr *expr = (ASTTernaryExpr *)malloc(sizeof(ASTTernaryExpr));
+    expr->condition = condition;
+    expr->true_value = true_value;
+    expr->false_value = false_value;
     node->data = expr;
     return node;
 }

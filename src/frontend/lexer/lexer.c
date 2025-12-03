@@ -411,6 +411,8 @@ static const char* token_kind_name(TokenKind kind) {
         case TK_BIT_OR:         return "BIT_OR";
         case TK_BIT_XOR:        return "BIT_XOR";
 
+        case TK_QUESTION:       return "QUESTION";
+
         case TK_KW_IF:          return "KW_IF";
         case TK_KW_LOOP:        return "KW_LOOP";
         case TK_KW_RETURN:      return "KW_RETURN";
@@ -556,7 +558,14 @@ static int emit_token(Token** tokens,
                 // 计算长度
                 if (all_same_pos || first_loc == last_loc) {
                     // 所有字符映射到同一位置，或只有一个字符
+                    // 对于varmap替换的标识符，使用orig_length
+                    // 对于普通标识符（orig_length=1），使用lexeme_len
                     total_orig_len = first_loc->orig_length;
+                    if (total_orig_len == 1 && lexeme_len > 1) {
+                        // 普通多字符标识符，orig_length只记录了单个字符
+                        // 使用实际的token长度
+                        total_orig_len = (int)lexeme_len;
+                    }
                 } else if (first_loc->orig_line == last_loc->orig_line) {
                     // 同一行：用跨度计算
                     total_orig_len = (last_loc->orig_column - first_loc->orig_column) + last_loc->orig_length;
@@ -1280,6 +1289,16 @@ LexerResult lexer_tokenize(const char* source,
                 /* 位异或 */
                 if (!emit_token(&tokens, &result.count, &cap,
                                 TK_BIT_XOR, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+                i++; col++;
+                continue;
+            case '?':
+                /* 三元运算符问号 */
+                if (!emit_token(&tokens, &result.count, &cap,
+                                TK_QUESTION, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
                     result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                     goto fail;

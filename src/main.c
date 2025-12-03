@@ -90,8 +90,11 @@ int main(int argc, char *argv[])
         free(source_code);
 
         if (norm_result.error_code != 0) {
-            fprintf(stderr, "%sNormalization error:%s %s\n", COLOR_RED, COLOR_RESET, 
-                    norm_result.error_msg ? norm_result.error_msg : "Unknown error");
+            // 如果 error_msg 非空才打印（空字符串表示错误已通过全局接口输出）
+            if (norm_result.error_msg && norm_result.error_msg[0] != '\0') {
+                fprintf(stderr, "%sNormalization error:%s %s\n", COLOR_RED, COLOR_RESET, 
+                        norm_result.error_msg);
+            }
             normalize_result_free(&norm_result);
             return 1;
         }

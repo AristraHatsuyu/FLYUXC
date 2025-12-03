@@ -377,3 +377,37 @@ CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body,
     
     return captured;
 }
+
+/* 复制捕获变量列表 */
+CapturedVars *captured_vars_copy(CapturedVars *cv) {
+    if (!cv) return NULL;
+    
+    CapturedVars *copy = captured_vars_create();
+    for (size_t i = 0; i < cv->count; i++) {
+        captured_vars_add(copy, cv->names[i]);
+    }
+    return copy;
+}
+
+/* 注册闭包映射 - 记录变量存储了哪个闭包函数 */
+void register_closure_mapping(CodeGen *gen, const char *var_name, 
+                              const char *func_name, CapturedVars *captured) {
+    ClosureMapping *mapping = (ClosureMapping *)malloc(sizeof(ClosureMapping));
+    mapping->var_name = strdup(var_name);
+    mapping->func_name = strdup(func_name);
+    mapping->captured = captured_vars_copy(captured);
+    mapping->next = gen->closure_mappings;
+    gen->closure_mappings = mapping;
+}
+
+/* 查找闭包映射 - 检查变量是否存储了闭包 */
+ClosureMapping *find_closure_mapping(CodeGen *gen, const char *var_name) {
+    ClosureMapping *m = gen->closure_mappings;
+    while (m) {
+        if (strcmp(m->var_name, var_name) == 0) {
+            return m;
+        }
+        m = m->next;
+    }
+    return NULL;
+}

@@ -168,6 +168,7 @@ static ASTNode *parse_equality(Parser *p);
 static ASTNode *parse_comparison(Parser *p);
 static ASTNode *parse_logical_and(Parser *p);
 static ASTNode *parse_logical_or(Parser *p);
+static ASTNode *parse_ternary(Parser *p);
 static ASTNode *parse_var_declaration(Parser *p);
 static ASTNode *parse_block(Parser *p);
 
@@ -772,8 +773,29 @@ static ASTNode *parse_logical_or(Parser *p) {
     return left;
 }
 
+// 三元运算符: condition ? true_expr : false_expr
+// 优先级低于逻辑或，右结合
+static ASTNode *parse_ternary(Parser *p) {
+    ASTNode *condition = parse_logical_or(p);
+    
+    if (match(p, TK_QUESTION)) {
+        Token *op_token = &p->tokens[p->current - 1];
+        ASTNode *true_value = parse_expression(p);  // 允许嵌套三元
+        
+        if (!match(p, TK_COLON)) {
+            error_at(p, current_token(p), "Expected ':' in ternary expression");
+            return condition;
+        }
+        
+        ASTNode *false_value = parse_ternary(p);  // 右结合
+        return ast_ternary_expr_create(condition, true_value, false_value, token_to_loc(op_token));
+    }
+    
+    return condition;
+}
+
 static ASTNode *parse_expression(Parser *p) {
-    return parse_logical_or(p);
+    return parse_ternary(p);
 }
 
 /* ============================================================================
@@ -1235,6 +1257,16 @@ static ASTNode *parse_var_declaration(Parser *p) {
         char error_msg[256];
         snprintf(error_msg, sizeof(error_msg), 
                 "Cannot use reserved keyword '%s' as variable name", 
+                name_token->lexeme);
+        error_at(p, name_token, error_msg);
+        return NULL;
+    }
+    
+    // 检查是否使用了内置函数名作为变量名
+    if (name_token->kind == TK_BUILTIN_FUNC) {
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), 
+                "Cannot use built-in function name '%s' as variable name", 
                 name_token->lexeme);
         error_at(p, name_token, error_msg);
         return NULL;

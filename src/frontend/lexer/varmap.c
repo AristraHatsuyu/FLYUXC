@@ -436,6 +436,62 @@ static int looks_like_typed_definition(const char* src, size_t len, size_t ident
     return 0;
 }
 
+/* ========== 辅助宏：同时写入 out 和 offset_map ========== */
+
+/* 确保 out 和 offset_map 有足够容量 */
+#define ENSURE_CAPACITY(needed) do { \
+    while (out_idx + (needed) >= out_cap) { \
+        out_cap *= 2; \
+        char* new_out = (char*)realloc(out, out_cap); \
+        if (!new_out) { \
+            result.error_code = -1; \
+            result.error_msg = str_dup_n("Memory allocation failed", 25); \
+            free(out); free(offset_map); \
+            for (size_t k = 0; k < entry_count; k++) { \
+                free(entries[k].original); \
+                free(entries[k].mapped); \
+            } \
+            free(entries); \
+            return result; \
+        } \
+        out = new_out; \
+    } \
+    while (out_idx + (needed) >= offset_map_cap) { \
+        offset_map_cap *= 2; \
+        size_t* new_map = (size_t*)realloc(offset_map, offset_map_cap * sizeof(size_t)); \
+        if (!new_map) { \
+            result.error_code = -1; \
+            result.error_msg = str_dup_n("Memory allocation failed for offset_map", 41); \
+            free(out); free(offset_map); \
+            for (size_t k = 0; k < entry_count; k++) { \
+                free(entries[k].original); \
+                free(entries[k].mapped); \
+            } \
+            free(entries); \
+            return result; \
+        } \
+        offset_map = new_map; \
+    } \
+} while(0)
+
+/* 写入单个字符到 out，同时记录 offset_map */
+#define EMIT_CHAR(ch, src_offset) do { \
+    ENSURE_CAPACITY(1); \
+    out[out_idx] = (ch); \
+    offset_map[out_idx] = (src_offset); \
+    out_idx++; \
+} while(0)
+
+/* 写入多个字符（映射后的标识符），所有字符都映射到同一个源位置 */
+#define EMIT_STR_MAPPED(str, str_len, src_offset) do { \
+    ENSURE_CAPACITY(str_len); \
+    memcpy(out + out_idx, str, str_len); \
+    for (size_t _k = 0; _k < (str_len); _k++) { \
+        offset_map[out_idx + _k] = (src_offset); \
+    } \
+    out_idx += (str_len); \
+} while(0)
+
 /* ========== 主映射逻辑 ========== */
 
 VarMapResult flyux_varmap_process(const char* normalized_source,
@@ -466,6 +522,16 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
         result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
         return result;
     }
+    
+    /* 同时分配 offset_map，在主循环中填充 */
+    size_t offset_map_cap = out_cap;
+    size_t* offset_map = (size_t*)malloc(offset_map_cap * sizeof(size_t));
+    if (!offset_map) {
+        free(out);
+        result.error_code = -1;
+        result.error_msg = str_dup_n("Memory allocation failed for offset_map", 41);
+        return result;
+    }
 
     VarMapEntry* entries = NULL;
     size_t entry_count = 0;
@@ -483,38 +549,14 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
 
         /* 字符串内照抄 */
         if (escape) {
-            if (out_idx + 1 >= out_cap) {
-                out_cap *= 2;
-                char* new_out = (char*)realloc(out, out_cap);
-                if (!new_out) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    free(out);
-                    varmap_result_free(&result);
-                    return result;
-                }
-                out = new_out;
-            }
-            out[out_idx++] = c;
+            EMIT_CHAR(c, i);
             escape = 0;
             i++;
             continue;
         }
 
         if (c == '\\') {
-            if (out_idx + 1 >= out_cap) {
-                out_cap *= 2;
-                char* new_out = (char*)realloc(out, out_cap);
-                if (!new_out) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    free(out);
-                    varmap_result_free(&result);
-                    return result;
-                }
-                out = new_out;
-            }
-            out[out_idx++] = c;
+            EMIT_CHAR(c, i);
             escape = 1;
             i++;
             continue;
@@ -522,19 +564,7 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
 
         if (!in_str && (c == '"' || c == 39)) {  /* 39 is '\'' */
             /* 进入字符串 */
-            if (out_idx + 1 >= out_cap) {
-                out_cap *= 2;
-                char* new_out = (char*)realloc(out, out_cap);
-                if (!new_out) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    free(out);
-                    varmap_result_free(&result);
-                    return result;
-                }
-                out = new_out;
-            }
-            out[out_idx++] = c;
+            EMIT_CHAR(c, i);
             in_str = 1;
             str_quote = c;
             i++;
@@ -543,19 +573,7 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
 
         if (in_str && c == str_quote) {
             /* 退出字符串 */
-            if (out_idx + 1 >= out_cap) {
-                out_cap *= 2;
-                char* new_out = (char*)realloc(out, out_cap);
-                if (!new_out) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    free(out);
-                    varmap_result_free(&result);
-                    return result;
-                }
-                out = new_out;
-            }
-            out[out_idx++] = c;
+            EMIT_CHAR(c, i);
             in_str = 0;
             str_quote = 0;
             i++;
@@ -564,19 +582,7 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
 
         if (in_str) {
             /* 字符串内容照抄 */
-            if (out_idx + 1 >= out_cap) {
-                out_cap *= 2;
-                char* new_out = (char*)realloc(out, out_cap);
-                if (!new_out) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    free(out);
-                    varmap_result_free(&result);
-                    return result;
-                }
-                out = new_out;
-            }
-            out[out_idx++] = c;
+            EMIT_CHAR(c, i);
             i++;
             continue;
         }
@@ -682,6 +688,7 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
                         else if (after_char == '+' || after_char == '-' || after_char == '*' || after_char == '/') is_var_usage = 1;  // operators
                         else if (after_char == '<' || after_char == '>' || after_char == '!' || after_char == '&' || after_char == '|') is_var_usage = 1;  // comparison/logic
                         else if (after_char == ')' || after_char == ',' || after_char == ';' || after_char == '}') is_var_usage = 1;  // expression/statement end
+                        else if (after_char == '?' || after_char == ':') is_var_usage = 1;  // ternary operator
                         else if (after_char == '\0') is_var_usage = 1;  // end of file
                     }
                     
@@ -730,10 +737,12 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
 
                 int is_object_key = 0;
                 if (after == ':') {
-                    /* 区分类型注解/变量定义、对象 key、以及 foreach 循环中的迭代变量 */
+                    /* 区分类型注解/变量定义、对象 key、三元运算符、以及 foreach 循环中的迭代变量 */
                     // 检查是否是 foreach: L> (arr : item) 或 L>arr:item
                     // 向前搜索，看是否有 "L>" 后面跟 "(" 或直接跟标识符
                     int is_foreach = 0;
+                    int is_ternary = 0;
+                    
                     if (start >= 2) {
                         // 向前搜索 L> (，允许中间有空格
                         size_t k = start - 1;
@@ -760,7 +769,45 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
                         }
                     }
                     
-                    if (!is_foreach && !looks_like_typed_definition(normalized_source, len, j)) {
+                    // 检查是否是三元运算符的一部分：向前搜索 ?
+                    // 三元表达式: cond ? true_val : false_val
+                    // 如果在 : 之前找到 ? (在同一表达式中)，说明这是三元运算符
+                    if (!is_foreach && start > 0) {
+                        int paren_depth = 0;
+                        int brace_depth = 0;
+                        int bracket_depth = 0;
+                        for (size_t k = start - 1; k > 0; k--) {
+                            char ch = normalized_source[k];
+                            // 跳过括号内部
+                            if (ch == ')') paren_depth++;
+                            else if (ch == '(') {
+                                if (paren_depth > 0) paren_depth--;
+                                else break;  // 到达表达式开始
+                            }
+                            else if (ch == '}') brace_depth++;
+                            else if (ch == '{') {
+                                if (brace_depth > 0) brace_depth--;
+                                else break;  // 对象字面量开始
+                            }
+                            else if (ch == ']') bracket_depth++;
+                            else if (ch == '[') {
+                                if (bracket_depth > 0) bracket_depth--;
+                                else break;
+                            }
+                            else if (paren_depth == 0 && brace_depth == 0 && bracket_depth == 0) {
+                                if (ch == '?') {
+                                    is_ternary = 1;
+                                    break;
+                                }
+                                // 到达语句边界就停止
+                                if (ch == ';' || ch == ':' && k > 0 && normalized_source[k-1] == '=') {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!is_foreach && !is_ternary && !looks_like_typed_definition(normalized_source, len, j)) {
                         is_object_key = 1;
                     }
                 }
@@ -807,169 +854,29 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
                     /* is_property_access：对象属性名一律不改名 */
                 }
 
-                /* 写出 token（要么映射名，要么原名） */
-                if (out_idx + replacement_len + 1 >= out_cap) {
-                    while (out_idx + replacement_len + 1 >= out_cap) {
-                        out_cap *= 2;
-                    }
-                    char* new_out = (char*)realloc(out, out_cap);
-                    if (!new_out) {
-                        result.error_code = -1;
-                        result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                        free(out);
-                        for (size_t k = 0; k < entry_count; k++) {
-                            free(entries[k].original);
-                            free(entries[k].mapped);
-                        }
-                        free(entries);
-                        return result;
-                    }
-                    out = new_out;
-                }
-
-                memcpy(out + out_idx, replacement, replacement_len);
-                out_idx += replacement_len;
+                /* 写出 token（要么映射名，要么原名）
+                 * 使用 EMIT_STR_MAPPED 将所有输出字符映射到原始标识符的起始位置
+                 */
+                EMIT_STR_MAPPED(replacement, replacement_len, start);
 
                 i = j;
                 continue;
             }
 
             /* 不满足 token 边界，按普通字符抄 */
-            if (out_idx + 1 >= out_cap) {
-                out_cap *= 2;
-                char* new_out = (char*)realloc(out, out_cap);
-                if (!new_out) {
-                    result.error_code = -1;
-                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                    free(out);
-                    for (size_t k = 0; k < entry_count; k++) {
-                        free(entries[k].original);
-                        free(entries[k].mapped);
-                    }
-                    free(entries);
-                    return result;
-                }
-                out = new_out;
-            }
-            out[out_idx++] = c;
+            EMIT_CHAR(c, i);
             i++;
             continue;
         }
 
         /* 其他字符照抄 */
-        if (out_idx + 1 >= out_cap) {
-            out_cap *= 2;
-            char* new_out = (char*)realloc(out, out_cap);
-            if (!new_out) {
-                result.error_code = -1;
-                result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
-                free(out);
-                for (size_t k = 0; k < entry_count; k++) {
-                    free(entries[k].original);
-                    free(entries[k].mapped);
-                }
-                free(entries);
-                return result;
-            }
-            out = new_out;
-        }
-        out[out_idx++] = c;
+        EMIT_CHAR(c, i);
         i++;
     }
 
     out[out_idx] = '\0';
 
-    // 构建 offset_map：映射输出偏移到输入偏移
-    // offset_map[i] = j 表示输出字符i对应输入字符j
-    size_t* offset_map = malloc(out_idx * sizeof(size_t));
-    if (!offset_map) {
-        free(out);
-        for (size_t k = 0; k < entry_count; k++) {
-            free(entries[k].original);
-            free(entries[k].mapped);
-        }
-        free(entries);
-        result.error_code = -1;
-        result.error_msg = str_dup_n("Memory allocation failed for offset_map", 41);
-        return result;
-    }
-    
-    // 重新扫描normalized_source和out，建立偏移映射
-    size_t norm_i = 0, map_i = 0;
-    int in_string = 0, in_escape = 0;
-    
-    while (norm_i < len && map_i < out_idx) {
-        // 处理转义和字符串（与上面逻辑一致）
-        if (in_escape) {
-            offset_map[map_i++] = norm_i++;
-            in_escape = 0;
-            continue;
-        }
-        
-        if (normalized_source[norm_i] == '\\') {
-            in_escape = 1;
-            offset_map[map_i++] = norm_i++;
-            continue;
-        }
-        
-        if (normalized_source[norm_i] == '"' || normalized_source[norm_i] == '\'') {
-            in_string = !in_string;
-            offset_map[map_i++] = norm_i++;
-            continue;
-        }
-        
-        if (in_string) {
-            offset_map[map_i++] = norm_i++;
-            continue;
-        }
-        
-        // 检查是否是标识符开头
-        if (is_ident_start(normalized_source[norm_i])) {
-            size_t ident_start = norm_i;
-            size_t ident_len = 0;
-            while (norm_i < len && is_ident_char(normalized_source[norm_i])) {
-                ident_len++;
-                norm_i++;
-            }
-            
-            // 检查是否是对象key（标识符后面是 : 且不是类型定义）
-            int is_object_key = 0;
-            if (norm_i < len && normalized_source[norm_i] == ':') {
-                if (!looks_like_typed_definition(normalized_source, len, norm_i)) {
-                    is_object_key = 1;
-                }
-            }
-            
-            // 检查是否被映射（对象key不参与映射）
-            int was_mapped = 0;
-            if (!is_object_key) {
-                for (size_t e = 0; e < entry_count; e++) {
-                    size_t orig_len = strlen(entries[e].original);
-                    if (orig_len == ident_len && 
-                        strncmp(normalized_source + ident_start, entries[e].original, ident_len) == 0) {
-                        // 这个标识符被映射了
-                        size_t mapped_len = strlen(entries[e].mapped);
-                        // 映射后的所有字符都指向原标识符的起始位置
-                        for (size_t k = 0; k < mapped_len; k++) {
-                            offset_map[map_i++] = ident_start;
-                        }
-                        was_mapped = 1;
-                        break;
-                    }
-                }
-            }
-            
-            if (!was_mapped) {
-                // 未映射，1:1对应
-                for (size_t k = 0; k < ident_len; k++) {
-                    offset_map[map_i++] = ident_start + k;
-                }
-            }
-        } else {
-            // 非标识符，1:1映射
-            offset_map[map_i++] = norm_i++;
-        }
-    }
+    // offset_map 已在主循环中构建完成
 
     result.mapped_source = out;
     result.entries = entries;

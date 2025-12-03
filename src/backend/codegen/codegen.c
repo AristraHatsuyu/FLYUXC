@@ -30,6 +30,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->symbols = NULL;
     gen->globals = NULL;  /* 初始无全局变量 */
     gen->functions = NULL;  /* 初始无函数表 */
+    gen->closure_mappings = NULL;  /* 初始无闭包映射 */
     gen->current_var_name = NULL;
     gen->in_try_catch = 0;  /* 初始不在 Try-Catch 块中 */
     gen->try_catch_label = NULL;
@@ -116,6 +117,19 @@ void codegen_free(CodeGen *gen) {
             free(func->name);
             free(func);
             func = next_func;
+        }
+        
+        // 释放闭包映射
+        ClosureMapping *mapping = gen->closure_mappings;
+        while (mapping) {
+            ClosureMapping *next_mapping = mapping->next;
+            free(mapping->var_name);
+            free(mapping->func_name);
+            if (mapping->captured) {
+                captured_vars_free(mapping->captured);
+            }
+            free(mapping);
+            mapping = next_mapping;
         }
         
         // 释放中间值栈
@@ -440,11 +454,18 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_null_typed(i32)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_null_preserve_type(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n");
-    fprintf(gen->output, "declare %%struct.Value* @box_object(i8*, i64)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_object(i8*, i64)\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_function(i8*, %%struct.Value**, i32, i32)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");
     fprintf(gen->output, "declare double @unbox_number(%%struct.Value*)\n");
-    fprintf(gen->output, "declare i8* @unbox_string(%%struct.Value*)\n\n");
+    fprintf(gen->output, "declare i8* @unbox_string(%%struct.Value*)\n");
+    fprintf(gen->output, "declare i8* @unbox_function_ptr(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value** @get_function_captured(%%struct.Value*)\n");
+    fprintf(gen->output, "declare i32 @get_function_captured_count(%%struct.Value*)\n");
+    fprintf(gen->output, "declare i32 @get_function_param_count(%%struct.Value*)\n");
+    fprintf(gen->output, "declare i32 @value_is_function(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @call_function_value(%%struct.Value*, %%struct.Value**, i32)\n\n");
     
     fprintf(gen->output, ";; Utility functions\n");
     fprintf(gen->output, "declare i32 @value_is_truthy(%%struct.Value*)\n");

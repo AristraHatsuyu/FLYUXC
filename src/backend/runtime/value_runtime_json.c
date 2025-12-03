@@ -276,13 +276,43 @@ static void append_char(char** buffer, size_t* size, size_t* capacity, char c) {
     (*buffer)[*size] = '\0';
 }
 
-/* 前向声明 */
-static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_t* capacity);
+/* 循环引用检测栈 - 用于追踪正在序列化的对象/数组 */
+#define MAX_JSON_DEPTH 256
 
-/* 将值序列化为 JSON */
-static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_t* capacity) {
+/* 前向声明 */
+static void serialize_value_to_json_impl(Value* v, char** buffer, size_t* size, size_t* capacity,
+                                         Value** visited, int* visited_count);
+
+/* 检查值是否在访问栈中（循环引用） */
+static int is_circular_ref(Value* v, Value** visited, int visited_count) {
+    if (v->type != VALUE_ARRAY && v->type != VALUE_OBJECT) {
+        return 0;  // 只有数组和对象需要检查循环引用
+    }
+    for (int i = 0; i < visited_count; i++) {
+        if (visited[i] == v) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 将值序列化为 JSON（内部实现，带循环引用检测） */
+static void serialize_value_to_json_impl(Value* v, char** buffer, size_t* size, size_t* capacity,
+                                         Value** visited, int* visited_count) {
     if (!v) {
         append_string(buffer, size, capacity, "null");
+        return;
+    }
+    
+    // 检查循环引用
+    if (is_circular_ref(v, visited, *visited_count)) {
+        append_string(buffer, size, capacity, "\"[Circular]\"");
+        return;
+    }
+    
+    // 检查深度限制
+    if (*visited_count >= MAX_JSON_DEPTH) {
+        append_string(buffer, size, capacity, "\"[Max Depth Exceeded]\"");
         return;
     }
     
@@ -331,13 +361,20 @@ static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_
             append_string(buffer, size, capacity, "null");
             break;
         case VALUE_ARRAY: {
+            // 将当前数组加入访问栈
+            visited[*visited_count] = v;
+            (*visited_count)++;
+            
             append_char(buffer, size, capacity, '[');
             Value** arr = (Value**)v->data.pointer;
             for (long i = 0; i < v->array_size; i++) {
                 if (i > 0) append_char(buffer, size, capacity, ',');
-                serialize_value_to_json(arr[i], buffer, size, capacity);
+                serialize_value_to_json_impl(arr[i], buffer, size, capacity, visited, visited_count);
             }
             append_char(buffer, size, capacity, ']');
+            
+            // 从访问栈中移除
+            (*visited_count)--;
             break;
         }
         case VALUE_OBJECT: {
@@ -361,6 +398,10 @@ static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_
                 }
                 append_char(buffer, size, capacity, '"');
             } else {
+                // 将当前对象加入访问栈
+                visited[*visited_count] = v;
+                (*visited_count)++;
+                
                 // 普通对象
                 append_char(buffer, size, capacity, '{');
                 ObjectEntry* entries = (ObjectEntry*)v->data.pointer;
@@ -374,15 +415,25 @@ static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_
                     append_char(buffer, size, capacity, ':');
                     
                     // 值
-                    serialize_value_to_json(entries[i].value, buffer, size, capacity);
+                    serialize_value_to_json_impl(entries[i].value, buffer, size, capacity, visited, visited_count);
                 }
                 append_char(buffer, size, capacity, '}');
+                
+                // 从访问栈中移除
+                (*visited_count)--;
             }
             break;
         }
         default:
             append_string(buffer, size, capacity, "null");
     }
+}
+
+/* 包装函数 - 保持原有接口 */
+static void serialize_value_to_json(Value* v, char** buffer, size_t* size, size_t* capacity) {
+    Value* visited[MAX_JSON_DEPTH];
+    int visited_count = 0;
+    serialize_value_to_json_impl(v, buffer, size, capacity, visited, &visited_count);
 }
 
 /* toJSON(obj) -> str - 将值转换为 JSON 字符串 */

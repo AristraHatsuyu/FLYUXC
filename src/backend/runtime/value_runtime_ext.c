@@ -133,6 +133,195 @@ Value* box_undef() {
     return v;
 }
 
+/* ============================================================================
+ * 函数值 (VALUE_FUNCTION) 支持
+ * 用于闭包和高阶函数：存储函数指针 + 捕获的变量
+ * ============================================================================ */
+
+/* FunctionObject 结构体 */
+typedef struct FunctionObject {
+    void *func_ptr;       /* 函数指针 */
+    Value **captured;     /* 捕获的变量数组 */
+    int captured_count;   /* 捕获变量数量 */
+    int param_count;      /* 函数参数数量 */
+} FunctionObject;
+
+/* VALUE_FUNCTION 的类型常量 */
+#define VALUE_FUNCTION 7
+
+/* Box function - 创建一个函数值
+ * @param func_ptr: 函数指针
+ * @param captured: 捕获的变量数组（可为 NULL）
+ * @param captured_count: 捕获变量数量
+ * @param param_count: 函数参数数量
+ */
+Value* box_function(void *func_ptr, Value **captured, int captured_count, int param_count) {
+    FunctionObject *fn = (FunctionObject*)malloc(sizeof(FunctionObject));
+    fn->func_ptr = func_ptr;
+    fn->param_count = param_count;
+    fn->captured_count = captured_count;
+    
+    /* 复制捕获的变量引用 */
+    if (captured_count > 0 && captured) {
+        fn->captured = (Value**)malloc(sizeof(Value*) * captured_count);
+        for (int i = 0; i < captured_count; i++) {
+            fn->captured[i] = captured[i];
+            /* 增加引用计数，因为函数持有这些变量的引用 */
+            if (fn->captured[i]) {
+                value_retain(fn->captured[i]);
+            }
+        }
+    } else {
+        fn->captured = NULL;
+    }
+    
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_FUNCTION;
+    v->declared_type = VALUE_FUNCTION;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
+    v->ext_type = EXT_TYPE_NONE;
+    v->data.pointer = fn;
+    v->array_size = 0;
+    v->string_length = 0;
+    return v;
+}
+
+/* 获取函数指针 */
+void* unbox_function_ptr(Value *v) {
+    if (!v || v->type != VALUE_FUNCTION) return NULL;
+    FunctionObject *fn = (FunctionObject*)v->data.pointer;
+    return fn ? fn->func_ptr : NULL;
+}
+
+/* 获取捕获的变量数组 */
+Value** get_function_captured(Value *v) {
+    if (!v || v->type != VALUE_FUNCTION) return NULL;
+    FunctionObject *fn = (FunctionObject*)v->data.pointer;
+    return fn ? fn->captured : NULL;
+}
+
+/* 获取捕获变量数量 */
+int get_function_captured_count(Value *v) {
+    if (!v || v->type != VALUE_FUNCTION) return 0;
+    FunctionObject *fn = (FunctionObject*)v->data.pointer;
+    return fn ? fn->captured_count : 0;
+}
+
+/* 获取参数数量 */
+int get_function_param_count(Value *v) {
+    if (!v || v->type != VALUE_FUNCTION) return 0;
+    FunctionObject *fn = (FunctionObject*)v->data.pointer;
+    return fn ? fn->param_count : 0;
+}
+
+/* 检查是否是函数值 */
+int value_is_function(Value *v) {
+    return v && v->type == VALUE_FUNCTION;
+}
+
+/* 间接调用函数值
+ * @param func_val: 函数值（VALUE_FUNCTION 类型）
+ * @param args: 参数数组
+ * @param arg_count: 参数数量
+ * @return: 函数返回值
+ *
+ * 实现说明：
+ * 由于C语言无法直接进行可变参数的间接函数调用，
+ * 我们使用函数指针类型转换来实现。
+ * 支持0-10个参数的函数调用。
+ */
+Value* call_function_value(Value *func_val, Value **args, int arg_count) {
+    if (!func_val || func_val->type != VALUE_FUNCTION) {
+        fprintf(stderr, "Error: call_function_value called with non-function value\n");
+        return box_undef();
+    }
+    
+    FunctionObject *fn = (FunctionObject*)func_val->data.pointer;
+    if (!fn || !fn->func_ptr) {
+        fprintf(stderr, "Error: call_function_value called with null function pointer\n");
+        return box_undef();
+    }
+    
+    // 计算总参数数量 = 传入参数 + 捕获变量
+    int total_args = arg_count + fn->captured_count;
+    
+    // 构建完整参数数组
+    Value **full_args = NULL;
+    if (total_args > 0) {
+        full_args = (Value**)malloc(sizeof(Value*) * total_args);
+        // 先复制传入参数
+        for (int i = 0; i < arg_count; i++) {
+            full_args[i] = args ? args[i] : NULL;
+        }
+        // 再复制捕获变量
+        for (int i = 0; i < fn->captured_count; i++) {
+            full_args[arg_count + i] = fn->captured ? fn->captured[i] : NULL;
+        }
+    }
+    
+    // 根据参数数量调用函数
+    Value* result = NULL;
+    
+    typedef Value* (*Func0)(void);
+    typedef Value* (*Func1)(Value*);
+    typedef Value* (*Func2)(Value*, Value*);
+    typedef Value* (*Func3)(Value*, Value*, Value*);
+    typedef Value* (*Func4)(Value*, Value*, Value*, Value*);
+    typedef Value* (*Func5)(Value*, Value*, Value*, Value*, Value*);
+    typedef Value* (*Func6)(Value*, Value*, Value*, Value*, Value*, Value*);
+    typedef Value* (*Func7)(Value*, Value*, Value*, Value*, Value*, Value*, Value*);
+    typedef Value* (*Func8)(Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*);
+    typedef Value* (*Func9)(Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*);
+    typedef Value* (*Func10)(Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*, Value*);
+    
+    switch (total_args) {
+        case 0:
+            result = ((Func0)fn->func_ptr)();
+            break;
+        case 1:
+            result = ((Func1)fn->func_ptr)(full_args[0]);
+            break;
+        case 2:
+            result = ((Func2)fn->func_ptr)(full_args[0], full_args[1]);
+            break;
+        case 3:
+            result = ((Func3)fn->func_ptr)(full_args[0], full_args[1], full_args[2]);
+            break;
+        case 4:
+            result = ((Func4)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3]);
+            break;
+        case 5:
+            result = ((Func5)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3], full_args[4]);
+            break;
+        case 6:
+            result = ((Func6)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3], full_args[4], full_args[5]);
+            break;
+        case 7:
+            result = ((Func7)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3], full_args[4], full_args[5], full_args[6]);
+            break;
+        case 8:
+            result = ((Func8)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3], full_args[4], full_args[5], full_args[6], full_args[7]);
+            break;
+        case 9:
+            result = ((Func9)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3], full_args[4], full_args[5], full_args[6], full_args[7], full_args[8]);
+            break;
+        case 10:
+            result = ((Func10)fn->func_ptr)(full_args[0], full_args[1], full_args[2], full_args[3], full_args[4], full_args[5], full_args[6], full_args[7], full_args[8], full_args[9]);
+            break;
+        default:
+            fprintf(stderr, "Error: call_function_value does not support %d arguments (max 10)\n", total_args);
+            result = box_undef();
+            break;
+    }
+    
+    if (full_args) {
+        free(full_args);
+    }
+    
+    return result ? result : box_undef();
+}
+
 /* Box null with declared type - for typed variables */
 Value* box_null_typed(int decl_type) {
     Value *v = (Value*)malloc(sizeof(Value));
@@ -518,17 +707,65 @@ static void print_smart_number(double num, int use_colors) {
     }
 }
 
-/* 递归打印数组内容为JSON格式，支持嵌套层级的彩虹括号 */
-static void print_array_json_depth(Value **arr, long size, int depth);
-static void print_object_json_depth(ObjectEntry *entries, long count, int depth);
-static void print_extended_object_meta_depth(Value *v, int depth);
+/* 循环引用检测 - 用于打印时追踪正在访问的对象/数组 */
+#define MAX_PRINT_DEPTH 64
+typedef struct {
+    Value* visited[MAX_PRINT_DEPTH];
+    int count;
+} PrintVisitedStack;
 
-static void print_value_json_depth(Value *v, int depth) {
+static int print_is_circular(Value* v, PrintVisitedStack* stack) {
+    if (!v || (v->type != VALUE_ARRAY && v->type != VALUE_OBJECT)) {
+        return 0;
+    }
+    for (int i = 0; i < stack->count; i++) {
+        if (stack->visited[i] == v) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int print_push_visited(Value* v, PrintVisitedStack* stack) {
+    if (stack->count >= MAX_PRINT_DEPTH) {
+        return 0;  // 达到深度限制
+    }
+    stack->visited[stack->count++] = v;
+    return 1;
+}
+
+static void print_pop_visited(PrintVisitedStack* stack) {
+    if (stack->count > 0) {
+        stack->count--;
+    }
+}
+
+/* 带循环检测的打印函数前向声明 */
+static void print_array_json_depth_safe(Value *arr_value, int depth, PrintVisitedStack *stack);
+static void print_object_json_depth_safe(Value *obj_value, int depth, PrintVisitedStack *stack);
+static void print_extended_object_meta_depth(Value *v, int depth);
+static void print_value_json_depth_safe(Value *v, int depth, PrintVisitedStack *stack);
+
+static void print_value_json_depth_safe(Value *v, int depth, PrintVisitedStack *stack) {
     int use_colors = should_use_colors();
     
     if (!v) {
         if (use_colors) printf("%snull%s", COLOR_GRAY, COLOR_RESET);
         else printf("null");
+        return;
+    }
+    
+    // 检查循环引用
+    if (print_is_circular(v, stack)) {
+        if (use_colors) printf("%s[Circular]%s", COLOR_GRAY, COLOR_RESET);
+        else printf("[Circular]");
+        return;
+    }
+    
+    // 检查深度限制
+    if (depth >= MAX_PRINT_DEPTH) {
+        if (use_colors) printf("%s[...]%s", COLOR_GRAY, COLOR_RESET);
+        else printf("[...]");
         return;
     }
     
@@ -560,8 +797,7 @@ static void print_value_json_depth(Value *v, int depth) {
             else printf("undef");
             break;
         case VALUE_ARRAY: {
-            Value **nested = (Value **)v->data.pointer;
-            print_array_json_depth(nested, v->array_size, depth);
+            print_array_json_depth_safe(v, depth, stack);
             break;
         }
         case VALUE_OBJECT: {
@@ -569,8 +805,7 @@ static void print_value_json_depth(Value *v, int depth) {
             if (v->ext_type != EXT_TYPE_NONE) {
                 print_extended_object_meta_depth(v, depth);
             } else {
-                ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
-                print_object_json_depth(entries, v->array_size, depth);
+                print_object_json_depth_safe(v, depth, stack);
             }
             break;
         }
@@ -580,9 +815,15 @@ static void print_value_json_depth(Value *v, int depth) {
     }
 }
 
-static void print_array_json_depth(Value **arr, long size, int depth) {
+static void print_array_json_depth_safe(Value *arr_value, int depth, PrintVisitedStack *stack) {
     int use_colors = should_use_colors();
     const char* bracket_color = use_colors ? bracket_colors[depth % NUM_BRACKET_COLORS] : "";
+    
+    Value **arr = (Value **)arr_value->data.pointer;
+    long size = arr_value->array_size;
+    
+    // 将数组加入访问栈
+    print_push_visited(arr_value, stack);
     
     if (use_colors) printf("%s", bracket_color);
     printf("[");
@@ -590,23 +831,26 @@ static void print_array_json_depth(Value **arr, long size, int depth) {
     
     for (long i = 0; i < size; i++) {
         if (i > 0) printf(", ");
-        print_value_json_depth(arr[i], depth + 1);
+        print_value_json_depth_safe(arr[i], depth + 1, stack);
     }
     
     if (use_colors) printf("%s", bracket_color);
     printf("]");
     if (use_colors) printf("%s", COLOR_RESET);
+    
+    // 从访问栈移除
+    print_pop_visited(stack);
 }
 
-/* 递归打印数组内容为JSON格式（兼容接口）*/
-static void print_array_json(Value **arr, long size) {
-    print_array_json_depth(arr, size, 0);
-}
-
-/* 打印对象内容为JSON格式 */
-static void print_object_json_depth(ObjectEntry *entries, long count, int depth) {
+static void print_object_json_depth_safe(Value *obj_value, int depth, PrintVisitedStack *stack) {
     int use_colors = should_use_colors();
     const char* bracket_color = use_colors ? bracket_colors[depth % NUM_BRACKET_COLORS] : "";
+    
+    ObjectEntry *entries = (ObjectEntry *)obj_value->data.pointer;
+    long count = obj_value->array_size;
+    
+    // 将对象加入访问栈
+    print_push_visited(obj_value, stack);
     
     if (use_colors) printf("%s", bracket_color);
     printf("{ ");
@@ -619,12 +863,50 @@ static void print_object_json_depth(ObjectEntry *entries, long count, int depth)
         printf("%s: ", entries[i].key);
         
         // 打印值
-        print_value_json_depth(entries[i].value, depth + 1);
+        print_value_json_depth_safe(entries[i].value, depth + 1, stack);
     }
     
     if (use_colors) printf("%s", bracket_color);
     printf(" }");
     if (use_colors) printf("%s", COLOR_RESET);
+    
+    // 从访问栈移除
+    print_pop_visited(stack);
+}
+
+/* 兼容接口 - 创建新的访问栈 */
+static void print_value_json_depth(Value *v, int depth) {
+    PrintVisitedStack stack = {0};
+    print_value_json_depth_safe(v, depth, &stack);
+}
+
+static void print_array_json_depth(Value **arr, long size, int depth) {
+    // 创建临时 Value 来追踪
+    Value temp_arr;
+    temp_arr.type = VALUE_ARRAY;
+    temp_arr.data.pointer = arr;
+    temp_arr.array_size = size;
+    
+    PrintVisitedStack stack = {0};
+    print_array_json_depth_safe(&temp_arr, depth, &stack);
+}
+
+/* 递归打印数组内容为JSON格式（兼容接口）*/
+static void print_array_json(Value **arr, long size) {
+    print_array_json_depth(arr, size, 0);
+}
+
+/* 打印对象内容为JSON格式 */
+static void print_object_json_depth(ObjectEntry *entries, long count, int depth) {
+    // 创建临时 Value 来追踪
+    Value temp_obj;
+    temp_obj.type = VALUE_OBJECT;
+    temp_obj.data.pointer = entries;
+    temp_obj.array_size = count;
+    temp_obj.ext_type = EXT_TYPE_NONE;
+    
+    PrintVisitedStack stack = {0};
+    print_object_json_depth_safe(&temp_obj, depth, &stack);
 }
 
 /* Print extended object meta information */
@@ -690,7 +972,7 @@ static void print_extended_object_meta(Value *v) {
     print_extended_object_meta_depth(v, 0);
 }
 
-/* Print a value */
+/* Print a value with circular reference detection */
 void value_print(Value *v) {
     int use_colors = should_use_colors();
     
@@ -726,16 +1008,16 @@ void value_print(Value *v) {
             else printf("undef");
             break;
         case VALUE_ARRAY: {
-            /* 输出JSON格式的数组 */
+            /* 输出JSON格式的数组（带循环检测）*/
             Value **arr = (Value **)v->data.pointer;
             if (!arr || v->array_size == 0) {
-                int use_colors = should_use_colors();
                 const char* bracket_color = use_colors ? bracket_colors[0] : "";
                 if (use_colors) printf("%s", bracket_color);
                 printf("[]");
                 if (use_colors) printf("%s", COLOR_RESET);
             } else {
-                print_array_json(arr, v->array_size);
+                PrintVisitedStack stack = {0};
+                print_array_json_depth_safe(v, 0, &stack);
             }
             break;
         }
@@ -746,16 +1028,33 @@ void value_print(Value *v) {
                 break;
             }
             
-            /* 输出JSON格式的普通对象 */
+            /* 输出JSON格式的普通对象（带循环检测）*/
             ObjectEntry *entries = (ObjectEntry *)v->data.pointer;
             if (!entries || v->array_size == 0) {
-                int use_colors = should_use_colors();
                 const char* bracket_color = use_colors ? bracket_colors[0] : "";
                 if (use_colors) printf("%s", bracket_color);
                 printf("{}");
                 if (use_colors) printf("%s", COLOR_RESET);
             } else {
-                print_object_json_depth(entries, v->array_size, 0);
+                PrintVisitedStack stack = {0};
+                print_object_json_depth_safe(v, 0, &stack);
+            }
+            break;
+        }
+        case VALUE_FUNCTION: {
+            /* 打印函数信息 */
+            FunctionObject *fn = (FunctionObject*)v->data.pointer;
+            if (fn) {
+                if (use_colors) {
+                    printf("\033[36m[Function: %p, params=%d, captured=%d]\033[0m",
+                           fn->func_ptr, fn->param_count, fn->captured_count);
+                } else {
+                    printf("[Function: %p, params=%d, captured=%d]",
+                           fn->func_ptr, fn->param_count, fn->captured_count);
+                }
+            } else {
+                if (use_colors) printf("\033[36m[Function: null]\033[0m");
+                else printf("[Function: null]");
             }
             break;
         }
@@ -887,6 +1186,7 @@ char* value_typeof(Value *v) {
         case VALUE_NULL: return "null";
         case VALUE_ARRAY: return "obj";  // 数组也是对象类型
         case VALUE_OBJECT: return "obj";
+        case VALUE_FUNCTION: return "fn";  // 函数类型
         default: return "unknown";
     }
 }

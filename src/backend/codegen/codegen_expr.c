@@ -313,6 +313,83 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             return result;
         }
         
+        case AST_TERNARY_EXPR: {
+            // 三元运算符: condition ? true_value : false_value
+            // 使用 alloca + store/load 模式避免 phi 节点的复杂性
+            ASTTernaryExpr *ternary = (ASTTernaryExpr *)node->data;
+            
+            // 分配结果存储
+            char *result_ptr = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = alloca %%struct.Value*, align 8\n", result_ptr);
+            
+            // 保存临时值栈（这样条件表达式和分支表达式的中间值都会在隔离环境中）
+            TempValueStack *saved_stack = gen->temp_values;
+            gen->temp_values = NULL;
+            
+            // 生成条件表达式（在隔离的栈环境中）
+            char *cond_val = codegen_expr(gen, ternary->condition);
+            
+            // 检查条件是否为真
+            char *truthy = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, cond_val);
+            
+            // 条件值在分支前释放（在主块中，可以被dominate）
+            fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", cond_val);
+            
+            // 清理条件表达式产生的临时值注册（已手动释放）
+            temp_value_clear(gen);
+            
+            char *cond_bool = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", cond_bool, truthy);
+            
+            // 生成标签
+            char *then_label = new_label(gen);
+            char *else_label = new_label(gen);
+            char *end_label = new_label(gen);
+            
+            // 条件跳转
+            fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", cond_bool, then_label, else_label);
+            
+            // then 分支
+            fprintf(gen->code_buf, "%s:\n", then_label);
+            char *true_val = codegen_expr(gen, ternary->true_value);
+            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s, align 8\n", true_val, result_ptr);
+            // 清除分支内产生的临时值注册（不生成release，因为值已存储）
+            temp_value_clear(gen);
+            fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+            
+            // else 分支
+            fprintf(gen->code_buf, "%s:\n", else_label);
+            char *false_val = codegen_expr(gen, ternary->false_value);
+            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s, align 8\n", false_val, result_ptr);
+            // 清除分支内产生的临时值注册
+            temp_value_clear(gen);
+            fprintf(gen->code_buf, "  br label %%%s\n", end_label);
+            
+            // 恢复临时值栈
+            gen->temp_values = saved_stack;
+            
+            // 合并点 - 加载结果
+            fprintf(gen->code_buf, "%s:\n", end_label);
+            char *result = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s, align 8\n", result, result_ptr);
+            
+            // 注册最终结果
+            temp_value_register(gen, result);
+            
+            free(cond_val);
+            free(truthy);
+            free(cond_bool);
+            free(then_label);
+            free(else_label);
+            free(end_label);
+            free(result_ptr);
+            free(true_val);
+            free(false_val);
+            
+            return result;
+        }
+        
         case AST_CALL_EXPR: {
             ASTCallExpr *call = (ASTCallExpr *)node->data;
             
@@ -2965,13 +3042,138 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 普通函数调用 - 检查函数是否已定义
+            // 普通函数调用 - 检查是否是函数名还是变量名
             // 注意：函数名经过 varmap 处理后是 _XXXXX 格式
             if (getenv("DEBUG_CODEGEN")) {
-                fprintf(stderr, "[DEBUG CODEGEN] Checking function call: %s, is_defined=%d\n", 
-                        callee->name, is_symbol_defined(gen, callee->name));
+                fprintf(stderr, "[DEBUG CODEGEN] Checking function call: %s, is_function=%d, is_symbol=%d\n", 
+                        callee->name, is_function_name(gen, callee->name), is_symbol_defined(gen, callee->name));
             }
-            if (!is_symbol_defined(gen, callee->name)) {
+            
+            // 区分函数名和变量名
+            int is_func = is_function_name(gen, callee->name);
+            int is_sym = is_symbol_defined(gen, callee->name);
+            
+            if (is_func) {
+                // 直接函数调用 - callee 是一个已定义的函数名
+                char **arg_regs = NULL;
+                if (call->arg_count > 0) {
+                    arg_regs = (char **)malloc(call->arg_count * sizeof(char *));
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        arg_regs[i] = codegen_expr(gen, call->args[i]);
+                    }
+                }
+                
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @%s(", result, callee->name);
+                
+                for (size_t i = 0; i < call->arg_count; i++) {
+                    if (i > 0) fprintf(gen->code_buf, ", ");
+                    fprintf(gen->code_buf, "%%struct.Value* %s", arg_regs[i]);
+                }
+                
+                fprintf(gen->code_buf, ")\n");
+                
+                if (arg_regs) {
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        free(arg_regs[i]);
+                    }
+                    free(arg_regs);
+                }
+                
+                return result;
+            } else if (is_sym) {
+                // 变量调用 - callee 是一个变量，可能存储函数值
+                // 需要在运行时检查类型并间接调用
+                
+                // 计算参数（必须在分支之前，以确保临时值在正确的基本块中）
+                char **arg_regs = NULL;
+                if (call->arg_count > 0) {
+                    arg_regs = (char **)malloc(call->arg_count * sizeof(char *));
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        arg_regs[i] = codegen_expr(gen, call->args[i]);
+                    }
+                }
+                
+                // 创建参数数组（在分支之前）
+                char *args_array = new_temp(gen);
+                char *args_ptr = new_temp(gen);
+                if (call->arg_count > 0) {
+                    fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]\n", args_array, call->arg_count);
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        char *slot = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
+                                slot, call->arg_count, call->arg_count, args_array, i);
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", arg_regs[i], slot);
+                        free(slot);
+                    }
+                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 0\n",
+                            args_ptr, call->arg_count, call->arg_count, args_array);
+                } else {
+                    fprintf(gen->code_buf, "  %s = inttoptr i64 0 to [0 x %%struct.Value*]*\n", args_array);
+                    fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value**\n", args_ptr);
+                }
+                
+                // 加载变量值
+                char *func_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load potential function value\n", 
+                        func_val, callee->name);
+                
+                // 检查是否是函数类型
+                char *is_func_check = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_function(%%struct.Value* %s)\n", is_func_check, func_val);
+                
+                // 分支：是函数则调用，否则报错
+                char *call_label = new_label(gen);
+                char *error_label = new_label(gen);
+                char *merge_label = new_label(gen);
+                
+                char *is_func_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_func_bool, is_func_check);
+                fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_func_bool, call_label, error_label);
+                
+                // 函数调用分支
+                fprintf(gen->code_buf, "%s:\n", call_label);
+                
+                // 调用运行时辅助函数
+                char *call_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @call_function_value(%%struct.Value* %s, %%struct.Value** %s, i32 %zu)\n",
+                        call_result, func_val, args_ptr, call->arg_count);
+                
+                fprintf(gen->code_buf, "  br label %%%s\n", merge_label);
+                
+                // 错误分支
+                fprintf(gen->code_buf, "%s:\n", error_label);
+                char *error_result = new_temp(gen);
+                fprintf(gen->code_buf, "  ; ERROR: trying to call non-function value\n");
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", error_result);
+                fprintf(gen->code_buf, "  br label %%%s\n", merge_label);
+                
+                // 合并分支
+                fprintf(gen->code_buf, "%s:\n", merge_label);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = phi %%struct.Value* [ %s, %%%s ], [ %s, %%%s ]\n",
+                        result, call_result, call_label, error_result, error_label);
+                
+                // 清理
+                if (arg_regs) {
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        free(arg_regs[i]);
+                    }
+                    free(arg_regs);
+                }
+                free(func_val);
+                free(is_func_check);
+                free(call_label);
+                free(error_label);
+                free(merge_label);
+                free(is_func_bool);
+                free(args_array);
+                free(args_ptr);
+                free(call_result);
+                free(error_result);
+                
+                return result;
+            } else {
                 // 未定义的函数 - 报错
                 const char *original_name = codegen_lookup_original_name(gen, callee->name);
                 const char *display_name = original_name ? original_name : callee->name;
@@ -2989,33 +3191,6 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                         result, callee->name);
                 return result;
             }
-            
-            char **arg_regs = NULL;
-            if (call->arg_count > 0) {
-                arg_regs = (char **)malloc(call->arg_count * sizeof(char *));
-                for (size_t i = 0; i < call->arg_count; i++) {
-                    arg_regs[i] = codegen_expr(gen, call->args[i]);
-                }
-            }
-            
-            char *result = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @%s(", result, callee->name);
-            
-            for (size_t i = 0; i < call->arg_count; i++) {
-                if (i > 0) fprintf(gen->code_buf, ", ");
-                fprintf(gen->code_buf, "%%struct.Value* %s", arg_regs[i]);
-            }
-            
-            fprintf(gen->code_buf, ")\n");
-            
-            if (arg_regs) {
-                for (size_t i = 0; i < call->arg_count; i++) {
-                    free(arg_regs[i]);
-                }
-                free(arg_regs);
-            }
-            
-            return result;
         }
         
         case AST_ARRAY_LITERAL: {
@@ -3332,46 +3507,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
         
         case AST_INDEX_EXPR: {
             // 实现数组索引访问：arr[index]
+            // 注意：不再使用栈数组快速路径优化，因为数组可能被修改
+            // (例如 arr[i] = undef 会修改堆上的数组对象，而非栈上的alloca)
+            // 所以必须使用 value_index() 运行时函数来保证正确性
             ASTIndexExpr *idx_expr = (ASTIndexExpr *)node->data;
             
-            // 先尝试作为简单标识符处理（优化路径）
-            if (idx_expr->object->kind == AST_IDENTIFIER) {
-                ASTIdentifier *arr_ident = (ASTIdentifier *)idx_expr->object->data;
-                const char *arr_name = arr_ident->name;
-                
-                // 查找数组元数据
-                ArrayMetadata *meta = find_array(gen, arr_name);
-                if (meta) {
-                    // 是已知的静态数组，使用快速路径
-                    // 计算索引值
-                    char *index_val = codegen_expr(gen, idx_expr->index);
-                    
-                    // 将 Value* 索引转换为 i64（先 unbox 为 double）
-                    char *index_double = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", 
-                            index_double, index_val);
-                    char *index_i64 = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = fptosi double %s to i64\n", index_i64, index_double);
-                    
-                    // 使用 getelementptr 获取元素地址（现在是 %struct.Value*）
-                    char *elem_ptr = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %s\n",
-                            elem_ptr, meta->elem_count, meta->elem_count, meta->array_ptr, index_i64);
-                    
-                    // 加载并返回元素
-                    char *elem = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s\n", elem, elem_ptr);
-                    
-                    free(index_val);
-                    free(index_double);
-                    free(index_i64);
-                    free(elem_ptr);
-                    
-                    return elem;
-                }
-            }
-            
-            // 通用路径：对象是任意表达式，使用运行时函数
+            // 通用路径：使用运行时函数
             char *obj_val = codegen_expr(gen, idx_expr->object);
             char *index_val = codegen_expr(gen, idx_expr->index);
             
@@ -3387,13 +3528,21 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
         
         case AST_FUNC_DECL: {
             // 函数声明作为表达式（嵌套函数/匿名函数）
-            // 将函数体写入全局区，返回函数指针
+            // 将函数体写入全局区，返回函数值（包含函数指针和捕获变量）
             ASTFuncDecl *func = (ASTFuncDecl *)node->data;
             
-            // 保存当前代码缓冲区状态
+            // 分析闭包捕获的变量
+            CapturedVars *captured = analyze_captured_vars(gen, func->body, 
+                                                           func->params, func->param_count);
+            
+            // 保存当前状态
             FILE *saved_code_buf = gen->code_buf;
             FILE *saved_entry_alloca = gen->entry_alloca_buf;
-            TempValueStack *saved_temp_values = gen->temp_values;  // 保存临时值栈
+            TempValueStack *saved_temp_values = gen->temp_values;
+            CapturedVars *saved_captured = gen->current_captured;
+            
+            // 设置闭包捕获变量
+            gen->current_captured = captured;
             gen->temp_values = NULL;  // 函数使用新的临时值栈
             
             // 创建临时缓冲区用于生成函数代码
@@ -3404,10 +3553,11 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 生成函数定义
             codegen_stmt(gen, node);
             
-            // 恢复代码缓冲区
+            // 恢复代码缓冲区和状态
             gen->code_buf = saved_code_buf;
             gen->entry_alloca_buf = saved_entry_alloca;
-            gen->temp_values = saved_temp_values;  // 恢复临时值栈
+            gen->temp_values = saved_temp_values;
+            gen->current_captured = saved_captured;
             
             // 将函数代码追加到 globals_buf
             rewind(func_buf);
@@ -3417,11 +3567,82 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             }
             fclose(func_buf);
             
-            // 返回 null 作为函数值（FLYUX 中函数赋值暂不支持真正的函数指针语义）
-            // 实际调用时会通过函数名直接调用
+            // 创建函数值：包含函数指针和捕获变量
             char *temp = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()  ; function '%s'\n", 
-                    temp, func->name);
+            
+            // 计算参数数量（普通参数 + 捕获变量）
+            int total_params = (int)func->param_count;
+            if (captured && captured->count > 0) {
+                total_params += (int)captured->count;
+            }
+            
+            if (captured && captured->count > 0) {
+                // 有捕获变量：创建捕获变量数组
+                char *captured_array = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]  ; captured vars array\n",
+                        captured_array, captured->count);
+                
+                // 填充捕获变量
+                for (size_t i = 0; i < captured->count; i++) {
+                    char *captured_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                            captured_val, captured->names[i]);
+                    char *slot_ptr = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
+                            slot_ptr, captured->count, captured->count, captured_array, i);
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n",
+                            captured_val, slot_ptr);
+                    free(captured_val);
+                    free(slot_ptr);
+                }
+                
+                // 获取数组指针
+                char *captured_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 0\n",
+                        captured_ptr, captured->count, captured->count, captured_array);
+                
+                // 获取函数指针
+                char *func_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = bitcast %%struct.Value* (", func_ptr);
+                // 函数签名：普通参数 + 捕获变量
+                for (int i = 0; i < total_params; i++) {
+                    if (i > 0) fprintf(gen->code_buf, ", ");
+                    fprintf(gen->code_buf, "%%struct.Value*");
+                }
+                fprintf(gen->code_buf, ")* @%s to i8*\n", func->name);
+                
+                // 调用 box_function
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu)  ; closure '%s'\n",
+                        temp, func_ptr, captured_ptr, captured->count, func->param_count, func->name);
+                
+                free(captured_array);
+                free(captured_ptr);
+                free(func_ptr);
+            } else {
+                // 无捕获变量：直接创建函数值
+                char *func_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = bitcast %%struct.Value* (", func_ptr);
+                for (size_t i = 0; i < func->param_count; i++) {
+                    if (i > 0) fprintf(gen->code_buf, ", ");
+                    fprintf(gen->code_buf, "%%struct.Value*");
+                }
+                fprintf(gen->code_buf, ")* @%s to i8*\n", func->name);
+                
+                // 调用 box_function（captured 为 null）
+                char *null_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value**\n", null_ptr);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 0, i32 %zu)  ; function '%s'\n",
+                        temp, func_ptr, null_ptr, func->param_count, func->name);
+                
+                free(func_ptr);
+                free(null_ptr);
+            }
+            
+            // 清理捕获变量结构
+            if (captured) {
+                captured_vars_free(captured);
+            }
+            
             return temp;
         }
         

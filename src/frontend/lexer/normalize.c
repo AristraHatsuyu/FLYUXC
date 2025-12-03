@@ -1,5 +1,6 @@
 // normalize.c
 #include "flyuxc/frontend/normalize.h"
+#include "flyuxc/error.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -178,98 +179,29 @@ static char* validate_variable_declarations(const char* source) {
 }
 
 /**
- * Get a specific line from source code
- * Returns a newly allocated string containing the line (caller must free)
- */
-static char* get_source_line(const char* source, int line_num) {
-    if (!source || line_num < 1) return NULL;
-    
-    const char* p = source;
-    int current_line = 1;
-    
-    // Find the start of the target line
-    while (*p && current_line < line_num) {
-        if (*p == '\n') {
-            current_line++;
-        }
-        p++;
-    }
-    
-    if (!*p && current_line < line_num) return NULL;
-    
-    // Find the end of the line
-    const char* line_start = p;
-    while (*p && *p != '\n') {
-        p++;
-    }
-    
-    size_t line_len = p - line_start;
-    char* line = malloc(line_len + 1);
-    if (!line) return NULL;
-    
-    memcpy(line, line_start, line_len);
-    line[line_len] = '\0';
-    return line;
-}
-
-/**
- * Create a formatted error message with source line and position indicator
- * Similar to parser error format:
- *   Error at line X, column Y: message
- *       X | source_line
- *         |      ^
+ * Create a formatted error message using global error module
+ * Directly outputs colored error using report_error_at, returns empty string
+ * to signal error to caller without duplicating output
  */
 static char* create_formatted_error(const char* source, int line, int column,
                                    const char* keyword, const char* flyux_equiv,
                                    const char* suggestion) {
-    char* src_line = get_source_line(source, line);
+    // 构建简短的主消息（不包含 Hint 和 Suggestion）
+    char message[256];
+    snprintf(message, sizeof(message), "Invalid keyword '%s'", keyword);
     
-    // Build the error message with proper formatting
-    size_t buf_size = 1024;
-    if (src_line) buf_size += strlen(src_line);
-    if (suggestion) buf_size += strlen(suggestion);
+    // 使用全局错误接口输出带颜色的错误（包含源码行和指示符）
+    int keyword_len = (int)strlen(keyword);
+    report_error_at(ERR_ERROR, PHASE_LEXER, source, line, column, keyword_len, message);
     
-    char* error_buf = malloc(buf_size);
-    if (!error_buf) {
-        free(src_line);
-        return NULL;
-    }
-    
-    // Create position indicator (spaces followed by ^)
-    char indicator[256] = {0};
-    int spaces = column - 1;
-    if (spaces > 200) spaces = 200;  // Limit to prevent buffer overflow
-    for (int i = 0; i < spaces; i++) {
-        indicator[i] = ' ';
-    }
-    indicator[spaces] = '^';
-    indicator[spaces + 1] = '\0';
-    
+    // 在源码行下方输出 Hint 和 Suggestion
     if (flyux_equiv != NULL) {
-        snprintf(error_buf, buf_size,
-                 "Error at line %d, column %d: Invalid keyword '%s'\n"
-                 "    %d | %s\n"
-                 "      | %s\n"
-                 "  Hint: FLYUX uses '%s' instead\n"
-                 "  Suggestion: %s",
-                 line, column, keyword,
-                 line, src_line ? src_line : "(unable to read line)",
-                 indicator,
-                 flyux_equiv, suggestion);
-    } else {
-        snprintf(error_buf, buf_size,
-                 "Error at line %d, column %d: Invalid keyword '%s'\n"
-                 "    %d | %s\n"
-                 "      | %s\n"
-                 "  Suggestion: %s",
-                 line, column, keyword,
-                 line, src_line ? src_line : "(unable to read line)",
-                 indicator,
-                 suggestion);
+        fprintf(stderr, "\033[32m  Hint:\033[0m FLYUX uses '%s' instead\n", flyux_equiv);
     }
+    fprintf(stderr, "\033[32m  Suggestion:\033[0m %s\n", suggestion);
     
-    free(src_line);
-    return error_buf;
+    // 返回空字符串标记有错误（caller 会检查是否为非空）
+    return strdup("");
 }
 
 /* Non-FLYUX syntax keyword detection table */
@@ -405,9 +337,11 @@ static int is_keyword_defined_before(const char* source, const char* current_pos
 /**
  * 检测非法关键字
  * 在源码中查找非 FLYUX 的关键字，如 let, const, var, return, break, continue 等
+ * @param source 去注释后的源码（用于检测）
+ * @param original_source 原始源码（用于显示错误）
  * 返回错误消息（需要调用者释放），如果没有错误返回 NULL
  */
-static char* check_invalid_keywords(const char* source) {
+static char* check_invalid_keywords(const char* source, const char* original_source) {
     if (!source) return NULL;
     
     const char* p = source;
@@ -416,6 +350,9 @@ static char* check_invalid_keywords(const char* source) {
     int in_string = 0;
     char str_quote = 0;
     int escape = 0;
+    
+    // 用于错误显示的源码
+    const char* display_source = original_source ? original_source : source;
     
     while (*p) {
         // 处理转义
@@ -531,7 +468,7 @@ static char* check_invalid_keywords(const char* source) {
                     // For break/continue, if followed by semicolon/newline/} etc., it's used as a statement
                     if (is_break_continue) {
                         if (*after == '\0' || *after == '\n' || *after == ';' || *after == '}') {
-                            return create_formatted_error(source, start_line, start_column,
+                            return create_formatted_error(display_source, start_line, start_column,
                                                           INVALID_KEYWORDS[i].keyword,
                                                           INVALID_KEYWORDS[i].flyux_equiv,
                                                           INVALID_KEYWORDS[i].suggestion);
@@ -698,7 +635,7 @@ static char* check_invalid_keywords(const char* source) {
                     // Other keywords not restricted for now, allow as variable names
                     
                     if (should_error) {
-                        return create_formatted_error(source, start_line, start_column,
+                        return create_formatted_error(display_source, start_line, start_column,
                                                       INVALID_KEYWORDS[i].keyword,
                                                       INVALID_KEYWORDS[i].flyux_equiv,
                                                       INVALID_KEYWORDS[i].suggestion);
@@ -1068,7 +1005,8 @@ NormalizeResult flyux_normalize(const char* source_code) {
     }
     
     // Step 1.4: 检测非法关键字（如 let, const, var, return 等）
-    char* keyword_error = check_invalid_keywords(no_comments);
+    // 传入原始源代码用于显示，去注释后的代码用于检测
+    char* keyword_error = check_invalid_keywords(no_comments, source_code);
     if (keyword_error) {
         result.error_msg = keyword_error;
         result.error_code = -1;

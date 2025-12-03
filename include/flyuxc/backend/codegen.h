@@ -99,7 +99,16 @@ typedef struct CodeGen {
     /* 闭包捕获变量 - 用于嵌套函数/匿名函数 */
     CapturedVars *current_captured;  /* 当前正在生成的闭包的捕获变量 */
     SymbolEntry *functions;  /* 函数名表 - 顶层定义的函数 */
+    struct ClosureMapping *closure_mappings;  /* 变量到闭包函数的映射 */
 } CodeGen;
+
+/* 闭包映射 - 追踪哪些变量存储了闭包函数 */
+typedef struct ClosureMapping {
+    char *var_name;          /* 存储闭包的变量名（映射后） */
+    char *func_name;         /* 实际的闭包函数名 */
+    CapturedVars *captured;  /* 该闭包需要的捕获变量 */
+    struct ClosureMapping *next;
+} ClosureMapping;
 
 /* 创建代码生成器 */
 CodeGen *codegen_create(FILE *output);
@@ -145,6 +154,9 @@ int captured_vars_contains(CapturedVars *cv, const char *name);
 /* 释放捕获变量列表 */
 void captured_vars_free(CapturedVars *cv);
 
+/* 复制捕获变量列表 */
+CapturedVars *captured_vars_copy(CapturedVars *cv);
+
 /* 分析匿名函数，收集需要捕获的外部变量 
  * gen: 代码生成器（用于检查已定义的符号）
  * func_node: 函数AST节点
@@ -153,5 +165,12 @@ void captured_vars_free(CapturedVars *cv);
  * 返回：捕获的变量列表（调用者需释放） */
 CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body, 
                                     char **params, size_t param_count);
+
+/* 注册闭包映射 - 记录变量存储了哪个闭包函数 */
+void register_closure_mapping(CodeGen *gen, const char *var_name, 
+                              const char *func_name, CapturedVars *captured);
+
+/* 查找闭包映射 - 检查变量是否存储了闭包 */
+ClosureMapping *find_closure_mapping(CodeGen *gen, const char *var_name);
 
 #endif /* FLYUXC_CODEGEN_H */

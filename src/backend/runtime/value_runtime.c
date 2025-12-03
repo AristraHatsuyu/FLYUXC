@@ -19,7 +19,7 @@
 
 #define FLYUXC_VERSION "0.1"
 
-/* ANSI Color codes (JS console style) */
+/* ANSI Color codes */
 #define COLOR_NUM      "\033[38;5;151m"      /* 数字 (浅青色) */
 #define ANSI_RED_BROWN  "\033[38;5;173m" /* 字符串 (红褐色) */
 #define ANSI_BLUE       "\033[34m"      /* 布尔值 */

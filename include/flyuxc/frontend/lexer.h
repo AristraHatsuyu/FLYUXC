@@ -60,6 +60,9 @@ typedef enum TokenKind {
     TK_BIT_OR,    /* | */
     TK_BIT_XOR,   /* ^ */
 
+    /* 三元运算符 */
+    TK_QUESTION,  /* ? */
+
     /* 关键字 */
     TK_KW_IF,      /* if */
     TK_KW_LOOP,    /* L> */

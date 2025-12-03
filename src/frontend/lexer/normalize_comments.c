@@ -11,6 +11,7 @@
 
 /**
  * 检查当前位置是否在字符串内
+ * 正确处理注释：跳过注释内的引号
  * @param text 文本
  * @param pos 当前位置
  * @return 1表示在字符串内，0表示不在
@@ -21,22 +22,54 @@ static int is_in_string(const char* text, int pos) {
     int escape = 0;
     
     for (int i = 0; i < pos && text[i] != '\0'; i++) {
+        // 处理转义字符
         if (escape) {
             escape = 0;
             continue;
         }
         
-        if (text[i] == '\\') {
+        if (text[i] == '\\' && in_str) {
             escape = 1;
             continue;
         }
         
-        if (!in_str && (text[i] == '"' || text[i] == 39)) {  /* 39 is '\'' */
-            in_str = 1;
-            str_quote = text[i];
-        } else if (in_str && text[i] == str_quote) {
-            in_str = 0;
-            str_quote = 0;
+        // 如果不在字符串内，检查是否是注释开始
+        if (!in_str) {
+            // 检查行注释 //
+            if (text[i] == '/' && text[i + 1] == '/') {
+                // 跳过到行尾
+                while (i < pos && text[i] != '\0' && text[i] != '\n') {
+                    i++;
+                }
+                if (text[i] == '\n') i--;  // 让外层循环处理换行
+                continue;
+            }
+            
+            // 检查块注释 /* */
+            if (text[i] == '/' && text[i + 1] == '*') {
+                i += 2;
+                // 跳过到块注释结束
+                while (i < pos && text[i] != '\0') {
+                    if (text[i] == '*' && text[i + 1] == '/') {
+                        i++;  // 跳过 */
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
+            
+            // 检查字符串开始
+            if (text[i] == '"' || text[i] == '\'') {
+                in_str = 1;
+                str_quote = text[i];
+            }
+        } else {
+            // 在字符串内，检查字符串结束
+            if (text[i] == str_quote) {
+                in_str = 0;
+                str_quote = 0;
+            }
         }
     }
     
