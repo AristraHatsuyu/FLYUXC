@@ -289,8 +289,8 @@ static const InvalidKeywordInfo INVALID_KEYWORDS[] = {
     /* Class/object keywords */
     {"class", "obj", "FLYUX uses 'obj' type to create objects, e.g.: person := {name: \"John\", age: 30}"},
     {"new", NULL, "FLYUX does not need 'new' keyword, create objects directly"},
-    {"this", NULL, "FLYUX object methods have no 'this' keyword"},
-    {"self", NULL, "FLYUX object methods have no 'self' keyword"},
+    {"this", "self", "FLYUX uses 'self' keyword in object methods, e.g.: self.property"},
+    /* self is now a valid keyword */
     
     /* Module keywords */
     {"import", NULL, "FLYUX currently does not support module imports"},
@@ -341,6 +341,7 @@ static const InvalidKeywordInfo* check_invalid_keyword(const char* lexeme) {
 static TokenKind classify_identifier(const char* lexeme) {
     /* 关键字 */
     if (strcmp(lexeme, "if") == 0)    return TK_KW_IF;
+    if (strcmp(lexeme, "self") == 0)  return TK_SELF;  /* self 关键字 */
     /* 注意: break 和 next 已被移除，只使用 B> 和 N> 语法 */
 
     /* 类型 */
@@ -412,6 +413,12 @@ static const char* token_kind_name(TokenKind kind) {
         case TK_BIT_XOR:        return "BIT_XOR";
 
         case TK_QUESTION:       return "QUESTION";
+        case TK_QUESTION_DOT:   return "QUESTION_DOT";
+        case TK_NULLISH_COALESCE: return "NULLISH_COALESCE";
+        case TK_SPREAD:         return "SPREAD";
+        case TK_DOT_AT:         return "DOT_AT";
+        case TK_AT:             return "AT";
+        case TK_SELF:           return "SELF";
 
         case TK_KW_IF:          return "KW_IF";
         case TK_KW_LOOP:        return "KW_LOOP";
@@ -771,38 +778,11 @@ LexerResult lexer_tokenize(const char* source,
                 goto fail;
             }
 
-            /* Check for non-FLYUX keywords */
-            const InvalidKeywordInfo* inv_kw = check_invalid_keyword(lexeme);
-            if (inv_kw != NULL) {
-                /* Get original position for error reporting */
-                int orig_line, orig_col;
-                get_original_position(start_offset, norm_source_map, norm_source_map_size,
-                                      offset_map, offset_map_size,
-                                      start_line, start_col,
-                                      &orig_line, &orig_col);
-                
-                /* Generate detailed error message */
-                char error_buf[512];
-                if (inv_kw->flyux_equiv != NULL) {
-                    snprintf(error_buf, sizeof(error_buf),
-                             "Error: Line %d, Column %d: Invalid keyword '%s'\n"
-                             "  Hint: FLYUX uses '%s' instead\n"
-                             "  Suggestion: %s",
-                             orig_line, orig_col, inv_kw->keyword,
-                             inv_kw->flyux_equiv, inv_kw->suggestion);
-                } else {
-                    snprintf(error_buf, sizeof(error_buf),
-                             "Error: Line %d, Column %d: Invalid keyword '%s'\n"
-                             "  Suggestion: %s",
-                             orig_line, orig_col, inv_kw->keyword,
-                             inv_kw->suggestion);
-                }
-                
-                free(lexeme);
-                result.error_code = 1;
-                result.error_msg = str_dup_n(error_buf, strlen(error_buf));
-                goto fail;
-            }
+            /* 
+             * 注意：无效关键词检测已移除
+             * 原因：lexer 无法区分上下文，例如 { fn: xxx } 中的 fn 作为对象属性名是合法的
+             * 关键词检测现在由 parser 在正确的上下文中进行
+             */
 
             TokenKind kind = classify_identifier(lexeme);
 
@@ -989,9 +969,29 @@ LexerResult lexer_tokenize(const char* source,
 
         /* 操作符 & 标点 */
 
-        /* . 或 .> */
+        /* ... 或 .@ 或 .> 或 . */
         if (c == '.') {
-            if (i + 1 < len && source[i + 1] == '>') {
+            if (i + 2 < len && source[i + 1] == '.' && source[i + 2] == '.') {
+                /* ... 展开运算符 */
+                if (!emit_token(&tokens, &result.count, &cap,
+                                TK_SPREAD, source + i, 3, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+                i += 3;
+                col += 3;
+            } else if (i + 1 < len && source[i + 1] == '@') {
+                /* .@ 未绑定方法访问 */
+                if (!emit_token(&tokens, &result.count, &cap,
+                                TK_DOT_AT, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                    result.error_code = -1;
+                    result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                    goto fail;
+                }
+                i += 2;
+                col += 2;
+            } else if (i + 1 < len && source[i + 1] == '>') {
                 if (!emit_token(&tokens, &result.count, &cap,
                                 TK_DOT_CHAIN, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                     result.error_code = -1;
@@ -1093,6 +1093,19 @@ LexerResult lexer_tokenize(const char* source,
                 i++;
                 col++;
             }
+            continue;
+        }
+
+        /* @ 解绑运算符 */
+        if (c == '@') {
+            if (!emit_token(&tokens, &result.count, &cap,
+                            TK_AT, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                result.error_code = -1;
+                result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                goto fail;
+            }
+            i++;
+            col++;
             continue;
         }
 
@@ -1296,6 +1309,28 @@ LexerResult lexer_tokenize(const char* source,
                 i++; col++;
                 continue;
             case '?':
+                /* ?. 可选链访问 */
+                if (i + 1 < len && source[i + 1] == '.') {
+                    if (!emit_token(&tokens, &result.count, &cap,
+                                    TK_QUESTION_DOT, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                        result.error_code = -1;
+                        result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                        goto fail;
+                    }
+                    i += 2; col += 2;
+                    continue;
+                }
+                /* ?? 空值合并运算符 */
+                if (i + 1 < len && source[i + 1] == '?') {
+                    if (!emit_token(&tokens, &result.count, &cap,
+                                    TK_NULLISH_COALESCE, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                        result.error_code = -1;
+                        result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                        goto fail;
+                    }
+                    i += 2; col += 2;
+                    continue;
+                }
                 /* 三元运算符问号 */
                 if (!emit_token(&tokens, &result.count, &cap,
                                 TK_QUESTION, source + i, 1, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {

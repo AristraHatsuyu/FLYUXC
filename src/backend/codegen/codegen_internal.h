@@ -160,4 +160,7 @@ void collect_catch_params(CodeGen *gen, ASTNode *node, FILE *entry_buf);
 CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body,
                                     char **params, size_t param_count);
 
+/* 检查最近分析的函数是否使用了 self 关键字 */
+bool closure_analysis_uses_self(void);
+
 #endif /* FLYUXC_CODEGEN_INTERNAL_H */

@@ -247,8 +247,8 @@ static const InvalidKeywordInfo INVALID_KEYWORDS[] = {
     /* Class/object keywords */
     {"class", "obj", "FLYUX uses 'obj' type to create objects, e.g.: person := {name: \"John\", age: 30}"},
     {"new", NULL, "FLYUX does not need 'new' keyword, create objects directly"},
-    {"this", NULL, "FLYUX object methods have no 'this' keyword"},
-    {"self", NULL, "FLYUX object methods have no 'self' keyword"},
+    {"this", "self", "FLYUX uses 'self' keyword in object methods, e.g.: self.property"},
+    /* self is now a valid keyword */
     
     /* Module keywords */
     {"import", NULL, "FLYUX currently does not support module imports"},

@@ -184,6 +184,9 @@ static int is_reserved_identifier(const char* name, size_t len) {
     /* 关键字 if */
     if (len == 2 && name[0]=='i' && name[1]=='f') return 1;
 
+    /* self 关键字（对象方法隐式参数） */
+    if (len == 4 && name[0]=='s' && name[1]=='e' && name[2]=='l' && name[3]=='f') return 1;
+
     /* 注意: break 和 next 已不再是保留字，改用 B> 和 N> 语法 */
 
     /* L / R / T / B / N 用于 L> / R> / T> / B> / N>，简单起见直接视为保留 */
@@ -311,8 +314,8 @@ static const InvalidKeywordInfo INVALID_KEYWORDS[] = {
     /* Class/object keywords */
     {"class", "obj", "FLYUX uses 'obj' type to create objects, e.g.: person := {name: \"John\", age: 30}"},
     {"new", NULL, "FLYUX does not need 'new' keyword, create objects directly"},
-    {"this", NULL, "FLYUX object methods have no 'this' keyword"},
-    {"self", NULL, "FLYUX object methods have no 'self' keyword"},
+    {"this", "self", "FLYUX uses 'self' keyword in object methods, e.g.: self.property"},
+    /* self is now a valid keyword */
     
     /* Module keywords */
     {"import", NULL, "FLYUX currently does not support module imports"},
@@ -726,13 +729,25 @@ VarMapResult flyux_varmap_process(const char* normalized_source,
                 char after  = (j < len) ? normalized_source[j] : '\0';
 
                 int is_method_after_chain = 0;   /* .>methodName */
-                int is_property_access    = 0;   /* obj.property */
+                int is_property_access    = 0;   /* obj.property or obj.@property */
+                int is_spread_expr        = 0;   /* ...expr spread 操作符 */
+                
                 if (before == '>' && start >= 2 && normalized_source[start - 2] == '.') {
                     /* ".>method" 场景 */
                     is_method_after_chain = 1;
-                } else if (before == '.') {
-                    /* 普通属性访问 obj.prop */
+                } else if (before == '@' && start >= 2 && normalized_source[start - 2] == '.') {
+                    /* ".@property" 解绑属性访问 */
                     is_property_access = 1;
+                } else if (before == '.') {
+                    /* 检查是否是 spread 语法 "..." */
+                    /* ...obj 的情况: 前面是 . 且前两个字符也是 . */
+                    if (start >= 3 && normalized_source[start - 2] == '.' && normalized_source[start - 3] == '.') {
+                        /* 这是 spread 语法 ...identifier */
+                        is_spread_expr = 1;
+                    } else {
+                        /* 普通属性访问 obj.prop */
+                        is_property_access = 1;
+                    }
                 }
 
                 int is_object_key = 0;

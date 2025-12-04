@@ -1,6 +1,6 @@
 # FLYUX 语言语法规范 - 完整参考
 
-**更新日期**: 2025-12-01
+**更新日期**: 2025-12-04
 
 ## 📌 语法快速参考
 
@@ -243,6 +243,27 @@ object.property
 object.nestedObj.deepProperty
 ```
 
+#### 可选链访问（?.）
+```flyux
+// 格式: 对象?.属性
+// 如果对象是 null/undef，返回 undef；否则访问属性
+// 如果属性不存在，返回 undef（不抛出错误）
+
+person := { name: "Alice" }
+println(person?.name)       // "Alice"
+println(person?.address)    // undef (属性不存在)
+
+nullObj:[obj] = null
+println(nullObj?.name)      // undef (对象是 null)
+
+// 链式可选链访问
+user := { profile: { nickname: "Bob" } }
+println(user?.profile?.nickname)  // "Bob"
+
+emptyUser := {}
+println(emptyUser?.profile?.nickname)  // undef
+```
+
 #### 数组/对象索引
 ```flyux
 array[0]
@@ -250,6 +271,45 @@ object.key
 object["key"]
 array[idx]
 object[keystr]
+```
+
+#### 可选链索引访问（?[]）
+```flyux
+// 格式: 对象?[索引]
+// 如果对象是 null/undef，返回 undef
+// 如果数组索引越界或对象键不存在，返回 undef（不抛出错误）
+
+arr := [1, 2, 3]
+println(arr?[0])           // 1
+println(arr?[100])         // undef (越界)
+
+nullArr:[obj] = null
+println(nullArr?[0])       // undef
+
+obj := { x: 10 }
+println(obj?["x"])         // 10
+println(obj?["nonexistent"])  // undef (键不存在)
+```
+
+#### 可选链 vs 非可选链的错误处理
+```flyux
+// 可选链 (?. 和 ?[]): 静默失败，返回 undef
+person?.missing            // undef
+arr?[100]                  // undef
+
+// 非可选链 (. 和 []): 失败时抛出错误
+// - 在 T> 块中：错误被捕获
+// - 在 T> 块外：程序终止
+
+// T> 块内的非可选链访问会被捕获
+T> {
+    result := person.missing  // 抛出错误
+} (err) {
+    println(err.message)      // "(getField) Field not found"
+}
+
+// T> 块外的非可选链访问会终止程序
+person.missing                // 程序终止
 ```
 
 ### 7. 运算符
@@ -319,6 +379,25 @@ a | b      // 位或
 a ^ b      // 位异或
 ```
 
+#### 空值合并运算符 (??)
+```flyux
+// 格式: 左表达式 ?? 右表达式
+// 如果左表达式是 null 或 undef，返回右表达式；否则返回左表达式
+// 注意: 0、false、"" 空字符串 不是 nullish 值，不会触发右边表达式
+
+a := null ?? "default"      // "default"
+b := undef ?? 100           // 100
+c := 0 ?? 100               // 0 (0 不是 null/undef)
+d := false ?? true          // false (false 不是 null/undef)
+e := "" ?? "empty"          // "" (空字符串不是 null/undef)
+
+// 链式使用
+result := a ?? b ?? c ?? "fallback"
+
+// 与可选链配合使用
+name := user?.profile?.nickname ?? "Anonymous"
+```
+
 ### 8. 字面量
 
 #### 数字字面量
@@ -352,6 +431,153 @@ a ^ b      // 位异或
 { nested: { deep: { value: 42 } } }   // 嵌套对象
 ```
 
+---
+
+## 🔗 Self 绑定机制
+
+FLYUX 采用隐式 `self` 机制，使对象方法能够稳定地访问自身，避免 JavaScript 中 `this` 丢失的问题。
+
+### 基本原则
+
+1. **隐式 self**: 对象方法内部可以使用 `self` 关键字访问所属对象，无需显式声明
+2. **自动绑定**: 通过 `.` 访问方法时，会自动绑定 `self` 为该对象
+3. **绑定稳定**: 绑定后的方法无论如何传递或调用，`self` 都不会改变
+
+### 基本用法
+
+```flyux
+// 定义包含方法的对象
+person := {
+    name: "Alice",
+    greet: () {
+        R> "Hello, " + self.name  // self 指向 person
+    }
+}
+
+person.greet()  // "Hello, Alice"
+
+// 绑定方法赋值给变量后仍然有效
+boundGreet := person.greet
+boundGreet()    // "Hello, Alice" (self 仍指向 person)
+```
+
+### 方法访问语法
+
+#### 绑定访问（.）- 默认行为
+```flyux
+// obj.method 返回绑定了 self = obj 的方法
+bound := person.greet    // self 已绑定为 person
+bound()                  // 永远以 person 作为 self
+```
+
+#### 未绑定访问（.@）
+```flyux
+// obj.@method 返回未绑定的原始函数
+unbound := person.@greet  // 获取未绑定的方法
+
+// 未绑定方法赋值到另一个对象时，会自动重新绑定
+other := {
+    name: "Bob",
+    greet: person.@greet  // 自动绑定为 other
+}
+other.greet()            // "Hello, Bob"
+```
+
+#### 索引访问的绑定行为
+```flyux
+key := "greet"
+
+// obj[key] - 绑定访问（等同于 obj.method）
+bound := person[key]
+bound()                  // "Hello, Alice"
+
+// obj@[key] - 未绑定访问（等同于 obj.@method）
+unbound := person@[key]
+// 需要重新绑定才能正确使用
+```
+
+### 多层对象的 self 作用域
+
+在方法内创建嵌套对象时，每层对象有自己的 `self`：
+
+```flyux
+builder := {
+    value: "outer",
+    build: () {
+        inner := {
+            value: "inner",
+            get: () {
+                R> self.value  // self 指向 inner，不是 builder
+            }
+        }
+        R> inner.get() + " & " + self.value  // 外层 self 指向 builder
+    }
+}
+
+builder.build()  // "inner & outer"
+```
+
+如需在内层访问外层对象，可以先保存到变量：
+
+```flyux
+outer := {
+    value: "outer",
+    build: () {
+        outerSelf := self  // 保存外层 self
+        inner := {
+            value: "inner",
+            get: () {
+                R> self.value + " from " + outerSelf.value
+            }
+        }
+        R> inner.get()
+    }
+}
+```
+
+### 链式调用模式
+
+```flyux
+builder := {
+    value: "",
+    append: (s) {
+        self.value = self.value + s
+        R> self  // 返回 self 以支持链式调用
+    },
+    get: () {
+        R> self.value
+    }
+}
+
+builder.append("Hello").append(" ").append("World")
+builder.get()  // "Hello World"
+```
+
+### Self 与错误处理
+
+方法调用的错误处理遵循标准规则：
+
+```flyux
+obj := {
+    riskyMethod: () {
+        // 可能出错的操作
+        R> self.nonexistent  // 属性不存在
+    }
+}
+
+// 不带 ! - 在 T> 块外会终止程序
+obj.riskyMethod()  // 程序终止
+
+// 在 T> 块中可以捕获错误
+T> {
+    obj.riskyMethod()
+} (err) {
+    println("捕获错误: " + err.message)
+}
+```
+
+---
+
 ### 9. 关键字与保留字
 
 #### 语言关键字
@@ -365,8 +591,14 @@ a ^ b      // 位异或
 - `=` - 赋值
 - `.>` - 方法链调用
 - `.` - 属性访问
+- `.@` - 未绑定方法访问
+- `?.` - 可选链属性访问
+- `?[]` - 可选链索引访问
+- `@[]` - 未绑定索引访问
+- `??` - 空值合并运算符
 - `!` - 错误抛出后缀（用于函数调用）
 - `:` - 对象键分隔符 / 循环标签分隔符
+- `self` - 当前对象引用（方法内部）
 
 #### 保留类型（不能用作变量名）
 - `num` - 数字类型
@@ -1195,18 +1427,40 @@ object := merge({a: 1}, {b: 2}, {a: 3})  // {a: 3, b: 2}
 ```
 
 #### clone(obj)
-浅拷贝对象。
+浅拷贝对象或数组。创建新的顶层容器，但嵌套的对象/数组仍是引用。
 ```flyux
-object1 := {a: 1, b: 2}
-object2 := clone(object1)
+// 浅拷贝对象
+original := {a: 1, nested: {x: 10}}
+copy := clone(original)
+copy.a = 999           // original.a 仍是 1
+copy.nested.x = 888    // original.nested.x 也变成 888（嵌套对象是引用）
+
+// 浅拷贝数组
+arr := [1, 2, {x: 10}]
+arrCopy := clone(arr)
 ```
 
 #### deepClone(obj)
-深拷贝对象。
+深拷贝对象或数组。递归复制所有嵌套内容，创建完全独立的副本。
 ```flyux
-object1 := {a: {b: 1}}
-object2 := deepClone(object1)
+original := {a: 1, nested: {x: 10}}
+copy := deepClone(original)
+copy.a = 999           // original.a 仍是 1
+copy.nested.x = 888    // original.nested.x 仍是 10（完全独立）
+
+// 深拷贝嵌套数组
+arr := [[1, 2], [3, 4]]
+arrCopy := deepClone(arr)
 ```
+
+> **对象赋值语义说明**：
+> 在 FLYUX 中，对象和数组的赋值是**引用传递**（和 JavaScript 行为一致）：
+> ```flyux
+> obj1 := {x: 1}
+> obj2 := obj1        // obj2 和 obj1 指向同一个对象
+> obj2.x = 999        // obj1.x 也变成 999
+> ```
+> 如需创建独立副本，使用 `clone()` 或 `deepClone()`。
 
 ---
 
@@ -1408,10 +1662,20 @@ print("Result:", result)
 
 ---
 
-**文档版本**: 3.2
-**最后更新**: 2025-12-01
+**文档版本**: 3.3
+**最后更新**: 2025-12-04
 
 ## 📝 更新历史
+
+### 版本 3.3 (2025-12-04)
+- ✅ 添加 **Self 绑定机制**文档：隐式 self、自动绑定、绑定稳定性
+- ✅ 添加 `.@` 未绑定方法访问语法
+- ✅ 添加 `@[]` 未绑定索引访问语法
+- ✅ 添加 `?.` **可选链属性访问**：安全访问可能为 null/undef 的对象属性
+- ✅ 添加 `?[]` **可选链索引访问**：安全的数组/对象索引访问
+- ✅ 添加 `??` **空值合并运算符**：提供 null/undef 时的默认值
+- ✅ 添加 `? :` **三元运算符**：提供三元运算式条件判断
+- ✅ 完善错误处理机制文档：可选链 vs 非可选链的行为差异
 
 ### 版本 3.2 (2025-12-01)
 - ✅ 统一循环语法：所有循环必须使用括号形式

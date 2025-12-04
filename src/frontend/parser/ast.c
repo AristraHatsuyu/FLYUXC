@@ -152,6 +152,28 @@ void ast_node_free(ASTNode *node) {
             break;
         }
         
+        case AST_ARRAY_LITERAL: {
+            ASTArrayLiteral *arr = (ASTArrayLiteral *)node->data;
+            for (size_t i = 0; i < arr->elem_count; i++) {
+                ast_node_free(arr->elements[i]);
+            }
+            if (arr->elements) free(arr->elements);
+            if (arr->is_spread) free(arr->is_spread);
+            free(arr);
+            break;
+        }
+        
+        case AST_OBJECT_LITERAL: {
+            ASTObjectLiteral *obj = (ASTObjectLiteral *)node->data;
+            for (size_t i = 0; i < obj->prop_count; i++) {
+                if (obj->properties[i].key) free(obj->properties[i].key);
+                ast_node_free(obj->properties[i].value);
+            }
+            if (obj->properties) free(obj->properties);
+            free(obj);
+            break;
+        }
+        
         default:
             if (node->data) free(node->data);
             break;
@@ -202,6 +224,7 @@ ASTNode *ast_func_decl_create(char *name, char **params, size_t param_count,
     func->param_count = param_count;
     func->return_type = return_type;
     func->body = body;
+    func->uses_self = false;  /* 初始化为 false，后续会通过分析设置 */
     node->data = func;
     
     return node;
@@ -362,6 +385,7 @@ const char *ast_kind_name(ASTNodeKind kind) {
         case AST_TERNARY_EXPR: return "TERNARY_EXPR";
         case AST_CALL_EXPR: return "CALL_EXPR";
         case AST_IDENTIFIER: return "IDENTIFIER";
+        case AST_SELF_EXPR: return "SELF_EXPR";
         case AST_NUM_LITERAL: return "NUM_LITERAL";
         case AST_STRING_LITERAL: return "STRING_LITERAL";
         case AST_RETURN_STMT: return "RETURN_STMT";
@@ -445,6 +469,8 @@ ASTNode *ast_member_expr_create(ASTNode *object, char *property, bool is_compute
     expr->object = object;
     expr->property = property;
     expr->is_computed = is_computed;
+    expr->is_unbound = false;  // 默认为绑定访问
+    expr->is_optional = false; // 默认为非可选访问
     node->data = expr;
     return node;
 }
@@ -455,15 +481,34 @@ ASTNode *ast_index_expr_create(ASTNode *object, ASTNode *index, SourceLocation l
     ASTIndexExpr *expr = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
     expr->object = object;
     expr->index = index;
+    expr->is_unbound = false;  // 默认为普通绑定访问
+    expr->is_optional = false; // 默认为非可选访问
     node->data = expr;
     return node;
 }
 
-// 数组字面量
+// 数组字面量（无展开）
 ASTNode *ast_array_literal_create(ASTNode **elements, size_t count, SourceLocation loc) {
     ASTNode *node = ast_node_create(AST_ARRAY_LITERAL, loc);
     ASTArrayLiteral *arr = (ASTArrayLiteral *)malloc(sizeof(ASTArrayLiteral));
     arr->elements = elements;
+    arr->elem_count = count;
+    // 初始化 is_spread 为全 false
+    if (count > 0) {
+        arr->is_spread = (bool *)calloc(count, sizeof(bool));
+    } else {
+        arr->is_spread = NULL;
+    }
+    node->data = arr;
+    return node;
+}
+
+// 数组字面量（支持展开）
+ASTNode *ast_array_literal_create_with_spread(ASTNode **elements, bool *is_spread, size_t count, SourceLocation loc) {
+    ASTNode *node = ast_node_create(AST_ARRAY_LITERAL, loc);
+    ASTArrayLiteral *arr = (ASTArrayLiteral *)malloc(sizeof(ASTArrayLiteral));
+    arr->elements = elements;
+    arr->is_spread = is_spread;
     arr->elem_count = count;
     node->data = arr;
     return node;

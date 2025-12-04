@@ -51,6 +51,7 @@ typedef enum ASTNodeKind {
     
     /* ===== 其他 ===== */
     AST_IDENTIFIER,      /* 标识符: x, foo, 🐶 */
+    AST_SELF_EXPR,       /* self 关键字表达式 */
     AST_TYPE_ANNOTATION  /* 类型标注: :[num], :(str) */
 } ASTNodeKind;
 
@@ -102,6 +103,7 @@ typedef struct ASTFuncDecl {
     size_t param_count;      /* 参数数量 */
     ASTNode *return_type;    /* 返回类型标注（可为NULL） */
     ASTNode *body;           /* 函数体（AST_BLOCK） */
+    bool uses_self;          /* 是否使用 self 关键字（需要隐式 self 参数） */
 } ASTFuncDecl;
 
 /* 赋值语句: x = 456 */
@@ -211,17 +213,21 @@ typedef struct ASTCallExpr {
     int throw_on_error;      /* ! 后缀：1表示出错抛异常，0表示出错返回带类型的null */
 } ASTCallExpr;
 
-/* 成员访问: obj.prop */
+/* 成员访问: obj.prop 或 obj.@prop (未绑定方法访问) */
 typedef struct ASTMemberExpr {
     ASTNode *object;         /* 对象 */
     char *property;          /* 属性名 */
     bool is_computed;        /* false表示点访问，true表示[]访问 */
+    bool is_unbound;         /* true表示.@访问（未绑定方法），false表示普通.访问 */
+    bool is_optional;        /* true表示?.访问（可选链），属性不存在返回undef */
 } ASTMemberExpr;
 
-/* 索引访问: arr[i] */
+/* 索引访问: arr[i] 或 arr@[i]（解绑） */
 typedef struct ASTIndexExpr {
     ASTNode *object;
     ASTNode *index;
+    bool is_unbound;         /* true表示@[访问（解绑），false表示普通[]访问 */
+    bool is_optional;        /* true表示?[访问（可选链），索引不存在返回undef */
 } ASTIndexExpr;
 
 /* 链式调用元素 */
@@ -259,16 +265,19 @@ typedef struct ASTBoolLiteral {
     bool value;
 } ASTBoolLiteral;
 
-/* 数组字面量: [1, 2, 3] */
+/* 数组字面量: [1, 2, 3] 或 [1, ...arr, 3] */
 typedef struct ASTArrayLiteral {
     ASTNode **elements;
+    bool *is_spread;         /* 每个元素是否是展开: ...arr */
     size_t elem_count;
 } ASTArrayLiteral;
 
 /* 对象属性 */
 typedef struct ASTObjectProperty {
-    char *key;               /* 属性键 */
+    char *key;               /* 属性键（展开时为 NULL）*/
     ASTNode *value;          /* 属性值 */
+    bool is_spread;          /* true 表示这是展开: ...obj */
+    bool is_method;          /* true 表示值是函数（方法），需要隐式self绑定 */
 } ASTObjectProperty;
 
 /* 对象字面量: {a: 1, b: 2} */
@@ -385,6 +394,9 @@ ASTNode *ast_undef_literal_create(SourceLocation loc);
 
 /* 创建数组字面量节点 */
 ASTNode *ast_array_literal_create(ASTNode **elements, size_t count, SourceLocation loc);
+
+/* 创建数组字面量节点（支持展开语法）*/
+ASTNode *ast_array_literal_create_with_spread(ASTNode **elements, bool *is_spread, size_t count, SourceLocation loc);
 
 /* 创建对象字面量节点 */
 ASTNode *ast_object_literal_create(ASTObjectProperty *properties, size_t count,

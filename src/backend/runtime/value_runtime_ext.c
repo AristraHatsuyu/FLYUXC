@@ -144,6 +144,7 @@ typedef struct FunctionObject {
     Value **captured;     /* 捕获的变量数组 */
     int captured_count;   /* 捕获变量数量 */
     int param_count;      /* 函数参数数量 */
+    Value *bound_self;    /* 绑定的 self 对象（方法绑定时使用） */
 } FunctionObject;
 
 /* VALUE_FUNCTION 的类型常量 */
@@ -160,6 +161,7 @@ Value* box_function(void *func_ptr, Value **captured, int captured_count, int pa
     fn->func_ptr = func_ptr;
     fn->param_count = param_count;
     fn->captured_count = captured_count;
+    fn->bound_self = NULL;  /* 初始没有绑定的 self */
     
     /* 复制捕获的变量引用 */
     if (captured_count > 0 && captured) {
@@ -220,6 +222,70 @@ int value_is_function(Value *v) {
     return v && v->type == VALUE_FUNCTION;
 }
 
+/* 获取绑定的 self 对象 */
+Value* get_function_bound_self(Value *v) {
+    if (!v || v->type != VALUE_FUNCTION) return NULL;
+    FunctionObject *fn = (FunctionObject*)v->data.pointer;
+    return fn ? fn->bound_self : NULL;
+}
+
+/* 绑定方法 - 创建一个新的函数值，其中 self 被绑定到指定对象
+ * @param func_val: 原函数值
+ * @param self_obj: 要绑定的 self 对象
+ * @return: 新的绑定方法函数值
+ * 
+ * 重要：如果函数已有 bound_self，不会重新绑定，直接返回原函数。
+ * 这确保了已绑定方法赋值到其他对象时保持原有绑定。
+ */
+Value* bind_method(Value *func_val, Value *self_obj) {
+    if (!func_val || func_val->type != VALUE_FUNCTION || !self_obj) {
+        return func_val;  /* 如果不能绑定，返回原函数 */
+    }
+    
+    FunctionObject *orig_fn = (FunctionObject*)func_val->data.pointer;
+    if (!orig_fn) return func_val;
+    
+    /* 如果已经绑定了 self，不重新绑定，保持原有绑定 */
+    if (orig_fn->bound_self != NULL) {
+        return func_val;
+    }
+    
+    /* 创建新的 FunctionObject，复制原有属性 */
+    FunctionObject *new_fn = (FunctionObject*)malloc(sizeof(FunctionObject));
+    new_fn->func_ptr = orig_fn->func_ptr;
+    new_fn->param_count = orig_fn->param_count;
+    new_fn->captured_count = orig_fn->captured_count;
+    
+    /* 复制捕获的变量 */
+    if (orig_fn->captured_count > 0 && orig_fn->captured) {
+        new_fn->captured = (Value**)malloc(sizeof(Value*) * orig_fn->captured_count);
+        for (int i = 0; i < orig_fn->captured_count; i++) {
+            new_fn->captured[i] = orig_fn->captured[i];
+            if (new_fn->captured[i]) {
+                value_retain(new_fn->captured[i]);
+            }
+        }
+    } else {
+        new_fn->captured = NULL;
+    }
+    
+    /* 绑定 self */
+    new_fn->bound_self = self_obj;
+    value_retain(self_obj);
+    
+    /* 创建新的 Value */
+    Value *v = (Value*)malloc(sizeof(Value));
+    v->type = VALUE_FUNCTION;
+    v->declared_type = VALUE_FUNCTION;
+    v->refcount = 1;
+    v->flags = VALUE_FLAG_NONE;
+    v->ext_type = EXT_TYPE_NONE;
+    v->data.pointer = new_fn;
+    v->array_size = 0;
+    v->string_length = 0;
+    return v;
+}
+
 /* 间接调用函数值
  * @param func_val: 函数值（VALUE_FUNCTION 类型）
  * @param args: 参数数组
@@ -230,6 +296,8 @@ int value_is_function(Value *v) {
  * 由于C语言无法直接进行可变参数的间接函数调用，
  * 我们使用函数指针类型转换来实现。
  * 支持0-10个参数的函数调用。
+ * 
+ * 如果函数有 bound_self，它会作为第一个参数传入。
  */
 Value* call_function_value(Value *func_val, Value **args, int arg_count) {
     if (!func_val || func_val->type != VALUE_FUNCTION) {
@@ -243,20 +311,31 @@ Value* call_function_value(Value *func_val, Value **args, int arg_count) {
         return box_undef();
     }
     
-    // 计算总参数数量 = 传入参数 + 捕获变量
-    int total_args = arg_count + fn->captured_count;
+    // 检查是否有绑定的 self
+    int has_bound_self = (fn->bound_self != NULL) ? 1 : 0;
+    
+    // 计算总参数数量 = bound_self(如果有) + 传入参数 + 捕获变量
+    int total_args = has_bound_self + arg_count + fn->captured_count;
     
     // 构建完整参数数组
     Value **full_args = NULL;
     if (total_args > 0) {
         full_args = (Value**)malloc(sizeof(Value*) * total_args);
-        // 先复制传入参数
-        for (int i = 0; i < arg_count; i++) {
-            full_args[i] = args ? args[i] : NULL;
+        int idx = 0;
+        
+        // 首先添加 bound_self（如果有）
+        if (has_bound_self) {
+            full_args[idx++] = fn->bound_self;
         }
-        // 再复制捕获变量
+        
+        // 再复制传入参数
+        for (int i = 0; i < arg_count; i++) {
+            full_args[idx++] = args ? args[i] : NULL;
+        }
+        
+        // 最后复制捕获变量
         for (int i = 0; i < fn->captured_count; i++) {
-            full_args[arg_count + i] = fn->captured ? fn->captured[i] : NULL;
+            full_args[idx++] = fn->captured ? fn->captured[i] : NULL;
         }
     }
     
@@ -320,6 +399,16 @@ Value* call_function_value(Value *func_val, Value **args, int arg_count) {
     }
     
     return result ? result : box_undef();
+}
+
+/* value_call_function - 供 codegen 使用的间接调用包装
+ * @param func_val: 函数值（VALUE_FUNCTION 类型）
+ * @param args: 参数数组
+ * @param arg_count: 参数数量 (i64)
+ * @return: 函数返回值
+ */
+Value* value_call_function(Value *func_val, Value **args, long arg_count) {
+    return call_function_value(func_val, args, (int)arg_count);
 }
 
 /* Box null with declared type - for typed variables */
@@ -796,6 +885,11 @@ static void print_value_json_depth_safe(Value *v, int depth, PrintVisitedStack *
             if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
             else printf("undef");
             break;
+        case VALUE_FUNCTION:
+            // 打印函数类型
+            if (use_colors) printf("%s[Function]%s", COLOR_GREEN, COLOR_RESET);
+            else printf("Function");
+            break;
         case VALUE_ARRAY: {
             print_array_json_depth_safe(v, depth, stack);
             break;
@@ -1186,7 +1280,7 @@ char* value_typeof(Value *v) {
         case VALUE_NULL: return "null";
         case VALUE_ARRAY: return "obj";  // 数组也是对象类型
         case VALUE_OBJECT: return "obj";
-        case VALUE_FUNCTION: return "fn";  // 函数类型
+        case VALUE_FUNCTION: return "func";  // 函数类型
         default: return "unknown";
     }
 }
@@ -1285,7 +1379,8 @@ Value* value_greater_than(Value *a, Value *b) {
     return box_bool(unbox_number(a) > unbox_number(b));
 }
 
-/* Array/Object index access - runtime version */
+/* Array/Object index access - runtime version
+ * 设置错误状态，由调用方决定是否终止程序 */
 Value* value_index(Value *obj, Value *index) {
     if (!obj) {
         set_runtime_status(FLYUX_TYPE_ERROR, "Attempt to index null value");
@@ -1296,7 +1391,13 @@ Value* value_index(Value *obj, Value *index) {
     if (obj->type == VALUE_ARRAY && obj->data.pointer) {
         int idx = (int)unbox_number(index);
         Value **array = (Value **)obj->data.pointer;
-        // Note: no bounds checking for now
+        size_t arr_size = obj->array_size;
+        
+        // 边界检查
+        if (idx < 0 || (size_t)idx >= arr_size) {
+            set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Array index out of bounds");
+            return box_null();
+        }
         return array[idx];
     }
     
@@ -1326,10 +1427,62 @@ Value* value_index(Value *obj, Value *index) {
                 return entries[i].value;
             }
         }
+        // 键不存在
+        set_runtime_status(FLYUX_TYPE_ERROR, "Object key not found");
+        return box_null();
     }
 
     set_runtime_status(FLYUX_TYPE_ERROR, "Invalid index operation");
     return box_null();
+}
+
+/* Array/Object index access - safe version for optional chaining (?[]) */
+Value* value_index_safe(Value *obj, Value *index) {
+    if (!obj || !index) {
+        return box_undef();
+    }
+    
+    // For arrays with numeric index
+    if (obj->type == VALUE_ARRAY && obj->data.pointer) {
+        int idx = (int)unbox_number(index);
+        Value **array = (Value **)obj->data.pointer;
+        size_t arr_size = obj->array_size;
+        
+        // 边界检查 - 越界返回 undef
+        if (idx < 0 || (size_t)idx >= arr_size) {
+            return box_undef();
+        }
+        return array[idx];
+    }
+    
+    // For Buffer objects with numeric index
+    if (obj->type == VALUE_OBJECT && obj->ext_type == EXT_TYPE_BUFFER && index->type == VALUE_NUMBER) {
+        BufferObject *buf = (BufferObject*)obj->data.pointer;
+        int idx = (int)unbox_number(index);
+        
+        // 边界检查 - 越界返回 undef
+        if (idx < 0 || (size_t)idx >= buf->size) {
+            return box_undef();
+        }
+        
+        return box_number((double)buf->data[idx]);
+    }
+    
+    // For objects with string index
+    if (obj->type == VALUE_OBJECT && index->type == VALUE_STRING) {
+        const char *key = (const char*)index->data.pointer;
+        ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
+        size_t count = obj->array_size;
+        
+        for (size_t i = 0; i < count; i++) {
+            if (strcmp(entries[i].key, key) == 0) {
+                return entries[i].value;
+            }
+        }
+    }
+
+    // 无法访问，返回 undef（不报错）
+    return box_undef();
 }
 
 /* Free a value */
@@ -1624,5 +1777,327 @@ Value* value_array_get(Value *array, Value *index) {
     
     Value **elements = (Value**)array->data.pointer;
     return elements[i];
+}
+
+/* ============================================================================
+ * 对象/数组拷贝函数
+ * ============================================================================ */
+
+/*
+ * value_shallow_clone - 浅拷贝对象或数组
+ * 对于对象：创建新对象，顶层属性复制，嵌套对象仍是引用
+ * 对于数组：创建新数组，元素仍是原引用
+ * 对于基本类型：直接返回（因为基本类型语义上不可变）
+ */
+Value* value_shallow_clone(Value *v) {
+    if (!v) return box_null();
+    
+    switch (v->type) {
+        case VALUE_NUMBER:
+            return box_number(v->data.number);
+            
+        case VALUE_STRING:
+            /* 字符串：复制字符串内容（因为字符串在 FLYUX 中应该是不可变的） */
+            if (v->data.string) {
+                char *new_str = strdup(v->data.string);
+                return box_string_owned(new_str);
+            }
+            return box_string(NULL);
+            
+        case VALUE_BOOL:
+            return box_bool((int)v->data.number);
+            
+        case VALUE_NULL:
+            return box_null();
+            
+        case VALUE_UNDEF:
+            return box_undef();
+            
+        case VALUE_ARRAY: {
+            /* 浅拷贝数组：创建新数组，但元素仍是原引用 */
+            Value **old_elements = (Value**)v->data.pointer;
+            long size = v->array_size;
+            
+            Value **new_elements = NULL;
+            if (size > 0 && old_elements) {
+                new_elements = (Value**)malloc(sizeof(Value*) * size);
+                for (long i = 0; i < size; i++) {
+                    new_elements[i] = old_elements[i];
+                    /* 增加引用计数，因为新数组也持有引用 */
+                    if (new_elements[i]) {
+                        value_retain(new_elements[i]);
+                    }
+                }
+            }
+            
+            Value *result = (Value*)malloc(sizeof(Value));
+            result->type = VALUE_ARRAY;
+            result->declared_type = VALUE_ARRAY;
+            result->refcount = 1;
+            result->flags = VALUE_FLAG_NONE;
+            result->ext_type = EXT_TYPE_NONE;
+            result->data.pointer = new_elements;
+            result->array_size = size;
+            result->string_length = 0;
+            return result;
+        }
+            
+        case VALUE_OBJECT: {
+            /* 浅拷贝对象：创建新对象，但嵌套对象仍是原引用 */
+            typedef struct { char *key; Value *value; } ObjEntry;
+            ObjEntry *old_entries = (ObjEntry*)v->data.pointer;
+            long count = v->array_size;
+            
+            ObjEntry *new_entries = NULL;
+            if (count > 0 && old_entries) {
+                new_entries = (ObjEntry*)malloc(sizeof(ObjEntry) * count);
+                for (long i = 0; i < count; i++) {
+                    /* 复制 key */
+                    new_entries[i].key = old_entries[i].key ? strdup(old_entries[i].key) : NULL;
+                    /* value 仍是引用，增加引用计数 */
+                    new_entries[i].value = old_entries[i].value;
+                    if (new_entries[i].value) {
+                        value_retain(new_entries[i].value);
+                    }
+                }
+            }
+            
+            Value *result = (Value*)malloc(sizeof(Value));
+            result->type = VALUE_OBJECT;
+            result->declared_type = VALUE_OBJECT;
+            result->refcount = 1;
+            result->flags = VALUE_FLAG_NONE;
+            result->ext_type = v->ext_type;  /* 保留扩展类型 */
+            result->data.pointer = new_entries;
+            result->array_size = count;
+            result->string_length = 0;
+            return result;
+        }
+            
+        case VALUE_FUNCTION:
+            /* 函数：增加引用计数并返回同一个函数（函数不可变） */
+            value_retain(v);
+            return v;
+            
+        default:
+            return box_null();
+    }
+}
+
+/*
+ * value_deep_clone - 深拷贝对象或数组
+ * 递归复制所有嵌套对象和数组，创建完全独立的副本
+ */
+Value* value_deep_clone(Value *v) {
+    if (!v) return box_null();
+    
+    switch (v->type) {
+        case VALUE_NUMBER:
+            return box_number(v->data.number);
+            
+        case VALUE_STRING:
+            if (v->data.string) {
+                char *new_str = strdup(v->data.string);
+                return box_string_owned(new_str);
+            }
+            return box_string(NULL);
+            
+        case VALUE_BOOL:
+            return box_bool((int)v->data.number);
+            
+        case VALUE_NULL:
+            return box_null();
+            
+        case VALUE_UNDEF:
+            return box_undef();
+            
+        case VALUE_ARRAY: {
+            /* 深拷贝数组：递归复制每个元素 */
+            Value **old_elements = (Value**)v->data.pointer;
+            long size = v->array_size;
+            
+            Value **new_elements = NULL;
+            if (size > 0 && old_elements) {
+                new_elements = (Value**)malloc(sizeof(Value*) * size);
+                for (long i = 0; i < size; i++) {
+                    /* 递归深拷贝每个元素 */
+                    new_elements[i] = value_deep_clone(old_elements[i]);
+                }
+            }
+            
+            Value *result = (Value*)malloc(sizeof(Value));
+            result->type = VALUE_ARRAY;
+            result->declared_type = VALUE_ARRAY;
+            result->refcount = 1;
+            result->flags = VALUE_FLAG_NONE;
+            result->ext_type = EXT_TYPE_NONE;
+            result->data.pointer = new_elements;
+            result->array_size = size;
+            result->string_length = 0;
+            return result;
+        }
+            
+        case VALUE_OBJECT: {
+            /* 深拷贝对象：递归复制每个属性值 */
+            typedef struct { char *key; Value *value; } ObjEntry;
+            ObjEntry *old_entries = (ObjEntry*)v->data.pointer;
+            long count = v->array_size;
+            
+            ObjEntry *new_entries = NULL;
+            if (count > 0 && old_entries) {
+                new_entries = (ObjEntry*)malloc(sizeof(ObjEntry) * count);
+                for (long i = 0; i < count; i++) {
+                    /* 复制 key */
+                    new_entries[i].key = old_entries[i].key ? strdup(old_entries[i].key) : NULL;
+                    /* 递归深拷贝 value */
+                    new_entries[i].value = value_deep_clone(old_entries[i].value);
+                }
+            }
+            
+            Value *result = (Value*)malloc(sizeof(Value));
+            result->type = VALUE_OBJECT;
+            result->declared_type = VALUE_OBJECT;
+            result->refcount = 1;
+            result->flags = VALUE_FLAG_NONE;
+            result->ext_type = v->ext_type;  /* 保留扩展类型 */
+            result->data.pointer = new_entries;
+            result->array_size = count;
+            result->string_length = 0;
+            return result;
+        }
+            
+        case VALUE_FUNCTION:
+            /* 函数：不深拷贝，增加引用计数并返回（函数是不可变的） */
+            value_retain(v);
+            return v;
+            
+        default:
+            return box_null();
+    }
+}
+
+/* ============================================================================
+ * 展开运算符支持函数
+ * ============================================================================ */
+
+/*
+ * value_spread_into_object - 将一个对象的所有属性展开到目标对象中
+ * 返回包含合并后属性的新对象
+ */
+Value* value_spread_into_object(Value *target, Value *source) {
+    if (!target || target->type != VALUE_OBJECT) {
+        return source ? value_shallow_clone(source) : box_object(NULL, 0);
+    }
+    if (!source || source->type != VALUE_OBJECT) {
+        return value_shallow_clone(target);
+    }
+    
+    typedef struct { char *key; Value *value; } ObjEntry;
+    ObjEntry *target_entries = (ObjEntry*)target->data.pointer;
+    ObjEntry *source_entries = (ObjEntry*)source->data.pointer;
+    long target_count = target->array_size;
+    long source_count = source->array_size;
+    
+    // 分配足够大的数组（最坏情况：所有属性都不重复）
+    long max_count = target_count + source_count;
+    ObjEntry *new_entries = (ObjEntry*)malloc(sizeof(ObjEntry) * max_count);
+    long new_count = 0;
+    
+    // 先复制目标对象的所有属性
+    for (long i = 0; i < target_count; i++) {
+        new_entries[new_count].key = target_entries[i].key ? strdup(target_entries[i].key) : NULL;
+        new_entries[new_count].value = target_entries[i].value;
+        if (new_entries[new_count].value) value_retain(new_entries[new_count].value);
+        new_count++;
+    }
+    
+    // 然后添加/覆盖源对象的属性
+    for (long i = 0; i < source_count; i++) {
+        char *key = source_entries[i].key;
+        Value *val = source_entries[i].value;
+        
+        // 查找是否已存在
+        int found = 0;
+        for (long j = 0; j < new_count; j++) {
+            if (new_entries[j].key && key && strcmp(new_entries[j].key, key) == 0) {
+                // 覆盖现有值
+                if (new_entries[j].value) value_release(new_entries[j].value);
+                new_entries[j].value = val;
+                if (val) value_retain(val);
+                found = 1;
+                break;
+            }
+        }
+        
+        if (!found) {
+            new_entries[new_count].key = key ? strdup(key) : NULL;
+            new_entries[new_count].value = val;
+            if (val) value_retain(val);
+            new_count++;
+        }
+    }
+    
+    // 缩小数组到实际大小
+    if (new_count < max_count) {
+        new_entries = (ObjEntry*)realloc(new_entries, sizeof(ObjEntry) * new_count);
+    }
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_OBJECT;
+    result->declared_type = VALUE_OBJECT;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
+    result->data.pointer = new_entries;
+    result->array_size = new_count;
+    result->string_length = 0;
+    return result;
+}
+
+/*
+ * value_spread_into_array - 将一个数组的所有元素展开到目标数组中
+ * 返回包含所有元素的新数组
+ */
+Value* value_spread_into_array(Value *target, Value *source) {
+    if (!target || target->type != VALUE_ARRAY) {
+        return source && source->type == VALUE_ARRAY ? value_shallow_clone(source) : box_array(NULL, 0);
+    }
+    if (!source || source->type != VALUE_ARRAY) {
+        return value_shallow_clone(target);
+    }
+    
+    Value **target_elems = (Value**)target->data.pointer;
+    Value **source_elems = (Value**)source->data.pointer;
+    long target_count = target->array_size;
+    long source_count = source->array_size;
+    long new_count = target_count + source_count;
+    
+    Value **new_elems = NULL;
+    if (new_count > 0) {
+        new_elems = (Value**)malloc(sizeof(Value*) * new_count);
+        
+        // 复制目标数组元素
+        for (long i = 0; i < target_count; i++) {
+            new_elems[i] = target_elems[i];
+            if (new_elems[i]) value_retain(new_elems[i]);
+        }
+        
+        // 复制源数组元素
+        for (long i = 0; i < source_count; i++) {
+            new_elems[target_count + i] = source_elems[i];
+            if (new_elems[target_count + i]) value_retain(new_elems[target_count + i]);
+        }
+    }
+    
+    Value *result = (Value*)malloc(sizeof(Value));
+    result->type = VALUE_ARRAY;
+    result->declared_type = VALUE_ARRAY;
+    result->refcount = 1;
+    result->flags = VALUE_FLAG_NONE;
+    result->ext_type = EXT_TYPE_NONE;
+    result->data.pointer = new_elems;
+    result->array_size = new_count;
+    result->string_length = 0;
+    return result;
 }
 

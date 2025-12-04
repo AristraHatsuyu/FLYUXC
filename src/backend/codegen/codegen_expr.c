@@ -91,6 +91,17 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             ASTIdentifier *id = (ASTIdentifier *)node->data;
             char *temp = new_temp(gen);
             
+            // 首先检查是否是函数名
+            if (is_function_name(gen, id->name)) {
+                // 这是一个函数引用，创建函数值
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* bitcast (%%struct.Value* (", temp);
+                // 获取函数参数数量以正确生成类型签名
+                // 简单处理：假设所有函数都返回 Value* 并接受 Value* 参数
+                // 这里我们需要知道函数的参数数量，但暂时用可变参数处理
+                fprintf(gen->code_buf, "...)* @%s to i8*), i32 0, %%struct.Value** null)\n", id->name);
+                return temp;
+            }
+            
             // 检查变量是否已定义
             if (!is_symbol_defined(gen, id->name)) {
                 // 未定义的变量 - 报错
@@ -132,6 +143,28 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                         temp, id->name);
             }
             
+            return temp;
+        }
+        
+        case AST_SELF_EXPR: {
+            // self 关键字 - 加载名为 "self" 的局部变量
+            char *temp = new_temp(gen);
+            
+            // 检查 self 变量是否已定义
+            if (!is_symbol_defined(gen, "self")) {
+                // 'self' 只能在对象方法内部使用
+                codegen_set_error_at(gen, node->loc.orig_line, node->loc.orig_column,
+                                     4,  // "self" 的长度
+                                     "self", "'self' can only be used inside object methods");
+                
+                // 返回 undef 以继续生成
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()  ; ERROR: self outside method\n", temp);
+                temp_value_register(gen, temp);
+                return temp;
+            }
+            
+            // 加载 self 变量（总是局部变量）
+            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%self\n", temp);
             return temp;
         }
         
@@ -304,6 +337,44 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     free(as_i32);
                     break;
                 }
+                case TK_NULLISH_COALESCE: {
+                    // ?? : 空值合并 - 如果左边是 null 或 undef，返回右边
+                    char *is_null_val = new_temp(gen);
+                    char *is_undef_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_null(%%struct.Value* %s)\n", 
+                            is_null_val, left);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_undef(%%struct.Value* %s)\n", 
+                            is_undef_val, left);
+                    char *is_null_truthy = new_temp(gen);
+                    char *is_undef_truthy = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                            is_null_truthy, is_null_val);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                            is_undef_truthy, is_undef_val);
+                    // 释放临时布尔值
+                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", is_null_val);
+                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", is_undef_val);
+                    char *is_null_bool = new_temp(gen);
+                    char *is_undef_bool = new_temp(gen);
+                    char *is_nullish = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_null_bool, is_null_truthy);
+                    fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_undef_bool, is_undef_truthy);
+                    fprintf(gen->code_buf, "  %s = or i1 %s, %s\n", is_nullish, is_null_bool, is_undef_bool);
+                    // 使用 select 指令：如果 nullish 则返回 right，否则返回 left
+                    fprintf(gen->code_buf, "  %s = select i1 %s, %%struct.Value* %s, %%struct.Value* %s\n", 
+                            result, is_nullish, right, left);
+                    // 需要 retain 选中的那个值，release 另一个
+                    fprintf(gen->code_buf, "  call void @value_retain(%%struct.Value* %s)\n", result);
+                    temp_value_register(gen, result);
+                    free(is_null_val);
+                    free(is_undef_val);
+                    free(is_null_truthy);
+                    free(is_undef_truthy);
+                    free(is_null_bool);
+                    free(is_undef_bool);
+                    free(is_nullish);
+                    break;
+                }
                 default:
                     break;
             }
@@ -393,10 +464,95 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
         case AST_CALL_EXPR: {
             ASTCallExpr *call = (ASTCallExpr *)node->data;
             
-            // 确保callee是标识符
+            // 如果 callee 不是标识符（如 obj.method, arr[i] 等），需要间接调用
             if (!call->callee || call->callee->kind != AST_IDENTIFIER) {
-                fprintf(stderr, "Error: callee is not an identifier\n");
-                return NULL;
+                // 计算 callee 表达式得到函数值
+                char *func_val = codegen_expr(gen, call->callee);
+                if (!func_val) {
+                    fprintf(stderr, "Error: failed to evaluate callee expression\n");
+                    return NULL;
+                }
+                
+                // 计算参数
+                char **arg_regs = NULL;
+                if (call->arg_count > 0) {
+                    arg_regs = (char **)malloc(call->arg_count * sizeof(char *));
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        arg_regs[i] = codegen_expr(gen, call->args[i]);
+                    }
+                }
+                
+                // 创建参数数组
+                char *args_array = new_temp(gen);
+                char *args_ptr = new_temp(gen);
+                if (call->arg_count > 0) {
+                    fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]\n", args_array, call->arg_count);
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        char *slot = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
+                                slot, call->arg_count, call->arg_count, args_array, i);
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", arg_regs[i], slot);
+                        free(slot);
+                    }
+                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 0\n",
+                            args_ptr, call->arg_count, call->arg_count, args_array);
+                } else {
+                    fprintf(gen->code_buf, "  %s = inttoptr i64 0 to [0 x %%struct.Value*]*\n", args_array);
+                    fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value**\n", args_ptr);
+                }
+                
+                // 检查是否是函数类型
+                char *is_func_check = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_function(%%struct.Value* %s)\n", is_func_check, func_val);
+                
+                // 分支：是函数则调用，否则报错
+                char *call_label = new_label(gen);
+                char *error_label = new_label(gen);
+                char *merge_label = new_label(gen);
+                
+                char *is_func_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_func_bool, is_func_check);
+                fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_func_bool, call_label, error_label);
+                
+                // 函数调用分支
+                fprintf(gen->code_buf, "%s:\n", call_label);
+                char *call_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_call_function(%%struct.Value* %s, %%struct.Value** %s, i64 %zu)\n",
+                        call_result, func_val, args_ptr, call->arg_count);
+                fprintf(gen->code_buf, "  br label %%%s\n", merge_label);
+                
+                // 错误分支
+                fprintf(gen->code_buf, "%s:\n", error_label);
+                fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.not_callable, i64 0, i64 0))\n");
+                char *error_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", error_result);
+                fprintf(gen->code_buf, "  br label %%%s\n", merge_label);
+                
+                // 合并分支
+                fprintf(gen->code_buf, "%s:\n", merge_label);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = phi %%struct.Value* [ %s, %%%s ], [ %s, %%%s ]\n",
+                        result, call_result, call_label, error_result, error_label);
+                
+                // 清理
+                free(func_val);
+                free(args_array);
+                free(args_ptr);
+                free(is_func_check);
+                free(is_func_bool);
+                free(call_label);
+                free(error_label);
+                free(merge_label);
+                free(call_result);
+                free(error_result);
+                if (arg_regs) {
+                    for (size_t i = 0; i < call->arg_count; i++) {
+                        free(arg_regs[i]);
+                    }
+                    free(arg_regs);
+                }
+                
+                return result;
             }
             
             ASTIdentifier *callee = (ASTIdentifier *)call->callee->data;
@@ -1081,6 +1237,24 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *obj = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_keys(%%struct.Value* %s)\n", result, obj);
+                free(obj);
+                return result;
+            }
+            
+            // clone - 浅拷贝
+            if (strcmp(callee->name, "clone") == 0 && call->arg_count == 1) {
+                char *obj = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_shallow_clone(%%struct.Value* %s)\n", result, obj);
+                free(obj);
+                return result;
+            }
+            
+            // deepClone - 深拷贝
+            if (strcmp(callee->name, "deepClone") == 0 && call->arg_count == 1) {
+                char *obj = codegen_expr(gen, call->args[0]);
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_deep_clone(%%struct.Value* %s)\n", result, obj);
                 free(obj);
                 return result;
             }
@@ -3205,6 +3379,46 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return temp;
             }
             
+            // 检查是否有展开元素
+            bool has_spread = false;
+            if (arr_lit->is_spread) {
+                for (size_t i = 0; i < count; i++) {
+                    if (arr_lit->is_spread[i]) {
+                        has_spread = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (has_spread) {
+                // 有展开元素：使用运行时函数动态构建
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_array(i8* null, i64 0)  ; start with empty array\n", result);
+                
+                for (size_t i = 0; i < count; i++) {
+                    char *elem_val = codegen_expr(gen, arr_lit->elements[i]);
+                    if (elem_val) {
+                        char *new_result = new_temp(gen);
+                        if (arr_lit->is_spread[i]) {
+                            // 展开：调用 spread_into_array
+                            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_spread_into_array(%%struct.Value* %s, %%struct.Value* %s)\n",
+                                    new_result, result, elem_val);
+                        } else {
+                            // 普通元素：调用 push
+                            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_push(%%struct.Value* %s, %%struct.Value* %s)\n",
+                                    new_result, result, elem_val);
+                        }
+                        // 释放旧数组
+                        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", result);
+                        free(result);
+                        result = new_result;
+                        free(elem_val);
+                    }
+                }
+                return result;
+            }
+            
+            // 无展开：使用编译时静态分配
             // 分配数组：[count x %struct.Value*]
             char *array_ptr = new_temp(gen);
             fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]  ; mixed-type array with %zu elements\n", 
@@ -3254,6 +3468,60 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return temp;
             }
             
+            // 检查是否有展开属性
+            bool has_spread = false;
+            for (size_t i = 0; i < prop_count; i++) {
+                if (obj_lit->properties[i].is_spread) {
+                    has_spread = true;
+                    break;
+                }
+            }
+            
+            if (has_spread) {
+                // 有展开：使用运行时函数动态构建
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_object(i8* null, i64 0)  ; start with empty object\n", result);
+                
+                for (size_t i = 0; i < prop_count; i++) {
+                    ASTObjectProperty *prop = &obj_lit->properties[i];
+                    
+                    if (prop->is_spread) {
+                        // 展开：调用 spread_into_object，返回新对象
+                        char *spread_val = codegen_expr(gen, prop->value);
+                        char *new_result = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_spread_into_object(%%struct.Value* %s, %%struct.Value* %s)\n",
+                                new_result, result, spread_val);
+                        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", result);
+                        free(result);
+                        result = new_result;
+                        free(spread_val);
+                    } else {
+                        // 普通属性：调用 set_field，原地修改并返回同一对象
+                        char *key_label = new_string_label(gen);
+                        size_t key_len = strlen(prop->key);
+                        fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                                key_label, key_len + 1, prop->key);
+                        
+                        char *key_ptr = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = getelementptr [%zu x i8], [%zu x i8]* %s, i32 0, i32 0\n",
+                                key_ptr, key_len + 1, key_len + 1, key_label);
+                        
+                        char *key_val = new_temp(gen);
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n", key_val, key_ptr);
+                        
+                        char *prop_val = codegen_expr(gen, prop->value);
+                        // value_set_field 原地修改对象并返回同一对象，不需要更新 result
+                        fprintf(gen->code_buf, "  call %%struct.Value* @value_set_field(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
+                                result, key_val, prop_val);
+                        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", key_val);
+                        free(key_val);
+                        free(prop_val);
+                    }
+                }
+                return result;
+            }
+            
+            // 无展开：使用编译时静态分配
             // 分配 ObjectEntry 数组
             char *entries_alloc = new_temp(gen);
             fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.ObjectEntry]  ; allocate object entries\n",
@@ -3493,10 +3761,130 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n",
                     field_name, key_ptr);
             
-            // 调用运行时函数获取字段值
+            // 检查是否是未绑定方法访问 (.@)
+            // 如果是未绑定访问，使用 value_get_field 不进行绑定
+            // 否则使用 value_get_method 自动绑定 self
             char *result = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_field(%%struct.Value* %s, %%struct.Value* %s)  ; .%s\n",
-                    result, obj_value, field_name, member->property);
+            if (member->is_optional) {
+                // 可选链访问: obj?.prop - 如果 obj 为 null/undef 返回 undef，否则获取属性
+                // 首先检查 obj 是否为 null 或 undef
+                char *is_null_val = new_temp(gen);
+                char *is_undef_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_null(%%struct.Value* %s)\n", 
+                        is_null_val, obj_value);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_undef(%%struct.Value* %s)\n", 
+                        is_undef_val, obj_value);
+                char *is_null_truthy = new_temp(gen);
+                char *is_undef_truthy = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                        is_null_truthy, is_null_val);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                        is_undef_truthy, is_undef_val);
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", is_null_val);
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", is_undef_val);
+                char *is_null_bool = new_temp(gen);
+                char *is_undef_bool = new_temp(gen);
+                char *is_nullish = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_null_bool, is_null_truthy);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_undef_bool, is_undef_truthy);
+                fprintf(gen->code_buf, "  %s = or i1 %s, %s\n", is_nullish, is_null_bool, is_undef_bool);
+                
+                // 使用安全的属性访问，不存在返回 undef
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_field_safe(%%struct.Value* %s, %%struct.Value* %s)  ; ?.%s (optional)\n",
+                        result, obj_value, field_name, member->property);
+                
+                // 如果对象本身是 nullish，返回 undef
+                char *undef_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", undef_val);
+                char *final_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = select i1 %s, %%struct.Value* %s, %%struct.Value* %s\n",
+                        final_result, is_nullish, undef_val, result);
+                
+                free(obj_value);
+                free(key_label);
+                free(key_ptr);
+                free(field_name);
+                free(is_null_val);
+                free(is_undef_val);
+                free(is_null_truthy);
+                free(is_undef_truthy);
+                free(is_null_bool);
+                free(is_undef_bool);
+                free(is_nullish);
+                free(undef_val);
+                free(result);
+                return final_result;
+            } else if (member->is_unbound) {
+                // 未绑定方法访问: obj.@method - 不绑定 self
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_field(%%struct.Value* %s, %%struct.Value* %s)  ; .@%s (unbound)\n",
+                        result, obj_value, field_name, member->property);
+                
+                // 非可选链访问需要检查错误（等同于 getField()!）
+                // 在 T> 块中：检查错误并跳转到catch标签
+                // 不在 T> 块中：检查错误并终止程序
+                char *is_ok = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                char *ok_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                char *is_error = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                
+                if (gen->in_try_catch) {
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(continue_label);
+                } else {
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(error_label);
+                    free(continue_label);
+                }
+                
+                free(is_ok);
+                free(ok_bool);
+                free(is_error);
+            } else {
+                // 普通方法访问: obj.method - 自动绑定 self
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_method(%%struct.Value* %s, %%struct.Value* %s)  ; .%s (bound)\n",
+                        result, obj_value, field_name, member->property);
+                
+                // 非可选链访问需要检查错误（等同于 getMethod()!）
+                char *is_ok = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                char *ok_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                char *is_error = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                
+                if (gen->in_try_catch) {
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(continue_label);
+                } else {
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(error_label);
+                    free(continue_label);
+                }
+                
+                free(is_ok);
+                free(ok_bool);
+                free(is_error);
+            }
             
             free(obj_value);
             free(key_label);
@@ -3506,7 +3894,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
         }
         
         case AST_INDEX_EXPR: {
-            // 实现数组索引访问：arr[index]
+            // 实现数组/对象索引访问：arr[index] 或 arr@[index]（解绑）或 arr?[index]（可选链）
             // 注意：不再使用栈数组快速路径优化，因为数组可能被修改
             // (例如 arr[i] = undef 会修改堆上的数组对象，而非栈上的alloca)
             // 所以必须使用 value_index() 运行时函数来保证正确性
@@ -3517,8 +3905,122 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             char *index_val = codegen_expr(gen, idx_expr->index);
             
             char *result = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_index(%%struct.Value* %s, %%struct.Value* %s)\n",
-                    result, obj_val, index_val);
+            
+            if (idx_expr->is_optional) {
+                // 可选链访问：obj?[index] - 如果 obj 为 null/undef 返回 undef
+                char *is_null_val = new_temp(gen);
+                char *is_undef_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_null(%%struct.Value* %s)\n", 
+                        is_null_val, obj_val);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_undef(%%struct.Value* %s)\n", 
+                        is_undef_val, obj_val);
+                char *is_null_truthy = new_temp(gen);
+                char *is_undef_truthy = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                        is_null_truthy, is_null_val);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
+                        is_undef_truthy, is_undef_val);
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", is_null_val);
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", is_undef_val);
+                char *is_null_bool = new_temp(gen);
+                char *is_undef_bool = new_temp(gen);
+                char *is_nullish = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_null_bool, is_null_truthy);
+                fprintf(gen->code_buf, "  %s = icmp ne i32 %s, 0\n", is_undef_bool, is_undef_truthy);
+                fprintf(gen->code_buf, "  %s = or i1 %s, %s\n", is_nullish, is_null_bool, is_undef_bool);
+                
+                // 使用安全的索引访问
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_index_safe(%%struct.Value* %s, %%struct.Value* %s)  ; ?[] (optional)\n",
+                        result, obj_val, index_val);
+                
+                // 如果对象本身是 nullish，返回 undef
+                char *undef_val = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_undef()\n", undef_val);
+                char *final_result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = select i1 %s, %%struct.Value* %s, %%struct.Value* %s\n",
+                        final_result, is_nullish, undef_val, result);
+                
+                free(obj_val);
+                free(index_val);
+                free(is_null_val);
+                free(is_undef_val);
+                free(is_null_truthy);
+                free(is_undef_truthy);
+                free(is_null_bool);
+                free(is_undef_bool);
+                free(is_nullish);
+                free(undef_val);
+                free(result);
+                return final_result;
+            } else if (idx_expr->is_unbound) {
+                // 解绑访问：obj@[index] - 直接获取值，不绑定 self
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_index(%%struct.Value* %s, %%struct.Value* %s)\n",
+                        result, obj_val, index_val);
+                
+                // 非可选链访问需要检查错误（等同于 index()!）
+                char *is_ok = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                char *ok_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                char *is_error = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                
+                if (gen->in_try_catch) {
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(continue_label);
+                } else {
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(error_label);
+                    free(continue_label);
+                }
+                
+                free(is_ok);
+                free(ok_bool);
+                free(is_error);
+            } else {
+                // 普通访问：obj[index] - 如果是方法则绑定 self
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_get_method_by_index(%%struct.Value* %s, %%struct.Value* %s)\n",
+                        result, obj_val, index_val);
+                
+                // 非可选链访问需要检查错误（等同于 index()!）
+                char *is_ok = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                char *ok_bool = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                char *is_error = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                
+                if (gen->in_try_catch) {
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", 
+                            is_error, gen->try_catch_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(continue_label);
+                } else {
+                    char *error_label = new_label(gen);
+                    char *continue_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, continue_label);
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    fprintf(gen->code_buf, "%s:\n", continue_label);
+                    free(error_label);
+                    free(continue_label);
+                }
+                
+                free(is_ok);
+                free(ok_bool);
+                free(is_error);
+            }
             
             free(obj_val);
             free(index_val);
@@ -3534,6 +4036,9 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 分析闭包捕获的变量
             CapturedVars *captured = analyze_captured_vars(gen, func->body, 
                                                            func->params, func->param_count);
+            
+            // 检查函数是否使用了 self 关键字
+            func->uses_self = closure_analysis_uses_self();
             
             // 保存当前状态
             FILE *saved_code_buf = gen->code_buf;
@@ -3570,8 +4075,11 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 创建函数值：包含函数指针和捕获变量
             char *temp = new_temp(gen);
             
-            // 计算参数数量（普通参数 + 捕获变量）
+            // 计算参数数量（隐式 self + 普通参数 + 捕获变量）
             int total_params = (int)func->param_count;
+            if (func->uses_self) {
+                total_params += 1;  // 隐式 self 参数
+            }
             if (captured && captured->count > 0) {
                 total_params += (int)captured->count;
             }
@@ -3611,9 +4119,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
                 fprintf(gen->code_buf, ")* @%s to i8*\n", func->name);
                 
+                // 计算用户可见的参数数量（不包括隐式 self，运行时会自动处理）
+                size_t user_param_count = func->param_count;
+                
                 // 调用 box_function
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu)  ; closure '%s'\n",
-                        temp, func_ptr, captured_ptr, captured->count, func->param_count, func->name);
+                        temp, func_ptr, captured_ptr, captured->count, user_param_count, func->name);
                 
                 free(captured_array);
                 free(captured_ptr);
@@ -3622,17 +4133,21 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 无捕获变量：直接创建函数值
                 char *func_ptr = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = bitcast %%struct.Value* (", func_ptr);
-                for (size_t i = 0; i < func->param_count; i++) {
+                // 函数签名：隐式 self（如果有）+ 普通参数
+                for (int i = 0; i < total_params; i++) {
                     if (i > 0) fprintf(gen->code_buf, ", ");
                     fprintf(gen->code_buf, "%%struct.Value*");
                 }
                 fprintf(gen->code_buf, ")* @%s to i8*\n", func->name);
                 
+                // 计算用户可见的参数数量（不包括隐式 self，运行时会自动处理）
+                size_t user_param_count = func->param_count;
+                
                 // 调用 box_function（captured 为 null）
                 char *null_ptr = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value**\n", null_ptr);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 0, i32 %zu)  ; function '%s'\n",
-                        temp, func_ptr, null_ptr, func->param_count, func->name);
+                        temp, func_ptr, null_ptr, user_param_count, func->name);
                 
                 free(func_ptr);
                 free(null_ptr);

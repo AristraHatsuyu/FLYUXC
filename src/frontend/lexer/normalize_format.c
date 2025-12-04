@@ -96,6 +96,12 @@ static int is_function_param_list(const char* s, int open_pos, int close_pos){
     // 匿名函数作为参数：左侧是 ',' 或 '('
     if (s[prev] == ',' || s[prev] == '(') return 1;
     
+    // 对象字面量中的匿名函数：左侧是 ':'
+    if (s[prev] == ':') return 1;
+    
+    // 数组字面量中的匿名函数：左侧是 '['
+    if (s[prev] == '[') return 1;
+    
     return 0;
 }
 

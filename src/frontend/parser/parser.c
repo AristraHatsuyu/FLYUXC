@@ -260,6 +260,13 @@ static ASTNode *parse_primary(Parser *p) {
         return node;
     }
     
+    // self关键字（对象方法中的隐式参数）
+    if (match(p, TK_SELF)) {
+        Token *t = &p->tokens[p->current - 1];
+        ASTNode *node = ast_node_create(AST_SELF_EXPR, token_to_loc(t));
+        return node;
+    }
+    
     // 标识符或函数调用
     if (match(p, TK_IDENT) || match(p, TK_BUILTIN_FUNC)) {
         Token *t = &p->tokens[p->current - 1];
@@ -375,6 +382,7 @@ static ASTNode *parse_primary(Parser *p) {
             func->param_count = param_count;
             func->return_type = NULL;
             func->body = body;
+            func->uses_self = false;  /* 将在后续分析中设置 */
             func_node->data = func;
             
             return func_node;
@@ -391,6 +399,7 @@ static ASTNode *parse_primary(Parser *p) {
     // 数组字面量
     if (match(p, TK_L_BRACKET)) {
         ASTNode **elements = NULL;
+        bool *is_spread = NULL;
         size_t elem_count = 0;
         size_t elem_capacity = 0;
         
@@ -399,8 +408,18 @@ static ASTNode *parse_primary(Parser *p) {
                 if (elem_count >= elem_capacity) {
                     elem_capacity = elem_capacity == 0 ? 4 : elem_capacity * 2;
                     elements = (ASTNode **)realloc(elements, elem_capacity * sizeof(ASTNode *));
+                    is_spread = (bool *)realloc(is_spread, elem_capacity * sizeof(bool));
                 }
-                elements[elem_count++] = parse_expression(p);
+                
+                // 检查是否是展开语法 ...expr
+                if (match(p, TK_SPREAD)) {
+                    elements[elem_count] = parse_expression(p);
+                    is_spread[elem_count] = true;
+                } else {
+                    elements[elem_count] = parse_expression(p);
+                    is_spread[elem_count] = false;
+                }
+                elem_count++;
             } while (match(p, TK_COMMA) && !check(p, TK_R_BRACKET));
             
             // 检查是否在逗号后直接遇到右括号（尾随逗号）
@@ -413,10 +432,10 @@ static ASTNode *parse_primary(Parser *p) {
             error_at(p, current_token(p), "Expected ']' after array elements");
         }
         
-        return ast_array_literal_create(elements, elem_count, token_to_loc(token));
+        return ast_array_literal_create_with_spread(elements, is_spread, elem_count, token_to_loc(token));
     }
     
-    // 对象字面量: {a: 1, b: 2}
+    // 对象字面量: {a: 1, b: 2} 或 {...obj, a: 1}
     if (match(p, TK_L_BRACE)) {
         ASTObjectProperty *properties = NULL;
         size_t prop_count = 0;
@@ -425,55 +444,88 @@ static ASTNode *parse_primary(Parser *p) {
         
         if (!check(p, TK_R_BRACE)) {
             do {
-                // 解析键（标识符或字符串）
-                Token *key_token = current_token(p);
-                char *key = NULL;
-                if (match(p, TK_IDENT) || match(p, TK_BUILTIN_FUNC)) {
-                    key = strdup(key_token->lexeme);
-                } else if (match(p, TK_STRING)) {
-                    // lexer已经去除引号并处理转义
-                    key = strdup(key_token->lexeme);
+                // 检查是否是展开语法 ...obj
+                if (match(p, TK_SPREAD)) {
+                    ASTNode *spread_expr = parse_expression(p);
+                    if (spread_expr == NULL) {
+                        had_error_in_object = true;
+                        while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                            advance(p);
+                        }
+                        break;
+                    }
+                    
+                    if (prop_count >= prop_capacity) {
+                        prop_capacity = prop_capacity == 0 ? 4 : prop_capacity * 2;
+                        properties = (ASTObjectProperty *)realloc(properties, 
+                                    prop_capacity * sizeof(ASTObjectProperty));
+                    }
+                    properties[prop_count].key = NULL;  // 展开没有 key
+                    properties[prop_count].value = spread_expr;
+                    properties[prop_count].is_spread = true;
+                    properties[prop_count].is_method = false;  // 展开不是方法
+                    prop_count++;
                 } else {
-                    error_at(p, key_token, "Expected property key");
-                    had_error_in_object = true;
-                    // 错误恢复：跳到右花括号结束对象解析
-                    while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
-                        advance(p);
+                    // 解析键（标识符、字符串或保留关键字作为属性名）
+                    // 注意：对象属性名不受关键词约束，任何标识符都可以作为键
+                    Token *key_token = current_token(p);
+                    char *key = NULL;
+                    if (match(p, TK_IDENT) || match(p, TK_BUILTIN_FUNC) ||
+                        match(p, TK_TYPE_NUM) || match(p, TK_TYPE_STR) ||
+                        match(p, TK_TYPE_BL) || match(p, TK_TYPE_OBJ) ||
+                        match(p, TK_TYPE_FUNC) || match(p, TK_TRUE) ||
+                        match(p, TK_FALSE) || match(p, TK_NULL) ||
+                        match(p, TK_UNDEF) || match(p, TK_KW_IF) ||
+                        match(p, TK_SELF)) {
+                        key = strdup(key_token->lexeme);
+                    } else if (match(p, TK_STRING)) {
+                        // lexer已经去除引号并处理转义
+                        key = strdup(key_token->lexeme);
+                    } else {
+                        error_at(p, key_token, "Expected property key or spread operator");
+                        had_error_in_object = true;
+                        // 错误恢复：跳到右花括号结束对象解析
+                        while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                            advance(p);
+                        }
+                        break;
                     }
-                    break;
-                }
-                
-                if (!match(p, TK_COLON)) {
-                    error_at(p, current_token(p), "Expected ':' after property key");
-                    free(key);
-                    had_error_in_object = true;
-                    // 错误恢复：跳到右花括号结束对象解析
-                    while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
-                        advance(p);
+                    
+                    if (!match(p, TK_COLON)) {
+                        error_at(p, current_token(p), "Expected ':' after property key");
+                        free(key);
+                        had_error_in_object = true;
+                        // 错误恢复：跳到右花括号结束对象解析
+                        while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                            advance(p);
+                        }
+                        break;
                     }
-                    break;
-                }
-                
-                ASTNode *value = parse_expression(p);
-                
-                // 如果解析值失败，跳到右花括号结束对象解析
-                if (value == NULL) {
-                    free(key);
-                    had_error_in_object = true;
-                    while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
-                        advance(p);
+                    
+                    ASTNode *value = parse_expression(p);
+                    
+                    // 如果解析值失败，跳到右花括号结束对象解析
+                    if (value == NULL) {
+                        free(key);
+                        had_error_in_object = true;
+                        while (!check(p, TK_R_BRACE) && !check(p, TK_EOF)) {
+                            advance(p);
+                        }
+                        break;
                     }
-                    break;
+                    
+                    if (prop_count >= prop_capacity) {
+                        prop_capacity = prop_capacity == 0 ? 4 : prop_capacity * 2;
+                        properties = (ASTObjectProperty *)realloc(properties, 
+                                    prop_capacity * sizeof(ASTObjectProperty));
+                    }
+                    properties[prop_count].key = key;
+                    properties[prop_count].value = value;
+                    properties[prop_count].is_spread = false;
+                    // 检查值是否是函数（匿名函数或函数引用），标记为方法
+                    properties[prop_count].is_method = (value->kind == AST_FUNC_DECL);
+                    prop_count++;
                 }
-                
-                if (prop_count >= prop_capacity) {
-                    prop_capacity = prop_capacity == 0 ? 4 : prop_capacity * 2;
-                    properties = (ASTObjectProperty *)realloc(properties, 
-                                prop_capacity * sizeof(ASTObjectProperty));
-                }
-                properties[prop_count].key = key;
-                properties[prop_count].value = value;
-                prop_count++;
                 
             } while (match(p, TK_COMMA) && !check(p, TK_R_BRACE));
             
@@ -505,7 +557,7 @@ static ASTNode *parse_primary(Parser *p) {
     return NULL;
 }
 
-// 解析后缀表达式: obj.prop, obj[index], obj.>method()
+// 解析后缀表达式: obj.prop, obj[index], obj.>method(), obj@[index] (解绑)
 static ASTNode *parse_postfix(Parser *p) {
     ASTNode *expr = parse_primary(p);
     
@@ -515,27 +567,130 @@ static ASTNode *parse_postfix(Parser *p) {
     }
     
     while (true) {
-        // 数组索引: arr[index]
-        if (match(p, TK_L_BRACKET)) {
+        // 解绑索引访问: obj@[index] - 不绑定 self
+        if (match(p, TK_AT)) {
+            if (!match(p, TK_L_BRACKET)) {
+                error_at(p, current_token(p), "Expected '[' after '@' for unbound index access");
+                break;
+            }
+            ASTNode *index = parse_expression(p);
+            if (!match(p, TK_R_BRACKET)) {
+                error_at(p, current_token(p), "Expected ']' after index");
+            }
+            // 创建解绑索引表达式
+            ASTNode *node = ast_node_create(AST_INDEX_EXPR, expr->loc);
+            ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
+            idx->object = expr;
+            idx->index = index;
+            idx->is_unbound = true;  // 标记为解绑访问
+            idx->is_optional = false; // 非可选访问
+            node->data = idx;
+            expr = node;
+        }
+        // 数组索引: arr[index]（默认绑定）
+        else if (match(p, TK_L_BRACKET)) {
             ASTNode *index = parse_expression(p);
             if (!match(p, TK_R_BRACKET)) {
                 error_at(p, current_token(p), "Expected ']' after index");
             }
             expr = ast_index_expr_create(expr, index, expr->loc);
         }
-        // 成员访问: obj.prop
+        // 未绑定方法访问: obj.@method
+        else if (match(p, TK_DOT_AT)) {
+            Token *prop_token = current_token(p);
+            // 属性名可以是标识符、内置函数名或保留关键字
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
+                error_at(p, prop_token, "Expected method name after '.@'");
+                break;
+            }
+            // 创建未绑定成员表达式
+            ASTNode *node = ast_node_create(AST_MEMBER_EXPR, expr->loc);
+            ASTMemberExpr *member = (ASTMemberExpr *)malloc(sizeof(ASTMemberExpr));
+            member->object = expr;
+            member->property = strdup(prop_token->lexeme);
+            member->is_computed = false;
+            member->is_unbound = true;  // 标记为未绑定访问
+            member->is_optional = false; // 非可选访问
+            node->data = member;
+            expr = node;
+        }
+        // 成员访问: obj.prop（默认绑定访问）
         else if (match(p, TK_DOT)) {
             Token *prop_token = current_token(p);
-            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC)) {
+            // 属性名可以是标识符、内置函数名或保留关键字
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
                 error_at(p, prop_token, "Expected property name after '.'");
                 break;
             }
             expr = ast_member_expr_create(expr, strdup(prop_token->lexeme), false, expr->loc);
         }
+        // 可选链成员访问: obj?.prop（属性不存在返回undef）
+        else if (match(p, TK_QUESTION_DOT)) {
+            Token *prop_token = current_token(p);
+            // 属性名可以是标识符、内置函数名或保留关键字
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
+                error_at(p, prop_token, "Expected property name after '?.'");
+                break;
+            }
+            // 创建可选链成员表达式
+            ASTNode *node = ast_node_create(AST_MEMBER_EXPR, expr->loc);
+            ASTMemberExpr *member = (ASTMemberExpr *)malloc(sizeof(ASTMemberExpr));
+            member->object = expr;
+            member->property = strdup(prop_token->lexeme);
+            member->is_computed = false;
+            member->is_unbound = false;  // 非解绑访问
+            member->is_optional = true;  // 标记为可选链访问
+            node->data = member;
+            expr = node;
+        }
+        // 可选链索引访问: obj?[index]（索引不存在返回undef）
+        else if (check(p, TK_QUESTION) && p->current + 1 < p->token_count && 
+                 p->tokens[p->current + 1].kind == TK_L_BRACKET) {
+            advance(p); // 消费 ?
+            advance(p); // 消费 [
+            ASTNode *index = parse_expression(p);
+            if (!match(p, TK_R_BRACKET)) {
+                error_at(p, current_token(p), "Expected ']' after index");
+            }
+            // 创建可选链索引表达式
+            ASTNode *node = ast_node_create(AST_INDEX_EXPR, expr->loc);
+            ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
+            idx->object = expr;
+            idx->index = index;
+            idx->is_unbound = false;  // 非解绑访问
+            idx->is_optional = true;  // 标记为可选链访问
+            node->data = idx;
+            expr = node;
+        }
                 // 链式调用: obj.>method(args) 或 obj.>function
         else if (match(p, TK_DOT_CHAIN)) {
             Token *method_token = current_token(p);
-            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC)) {
+            // 方法名可以是标识符、内置函数名或保留关键字
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
                 error_at(p, method_token, "Expected method name after '.>'");
                 break;
             }
@@ -612,6 +767,39 @@ static ASTNode *parse_postfix(Parser *p) {
             unary->is_postfix = true;  // 标记为后缀
             node->data = unary;
             expr = node;
+        }
+        // 函数调用: expr(args) - 支持 obj.method(args), arr[i](args) 等
+        else if (match(p, TK_L_PAREN)) {
+            ASTNode **args = NULL;
+            size_t arg_count = 0;
+            size_t arg_capacity = 0;
+            
+            if (!check(p, TK_R_PAREN)) {
+                do {
+                    if (arg_count >= arg_capacity) {
+                        arg_capacity = arg_capacity == 0 ? 4 : arg_capacity * 2;
+                        args = (ASTNode **)realloc(args, arg_capacity * sizeof(ASTNode *));
+                    }
+                    args[arg_count++] = parse_expression(p);
+                } while (match(p, TK_COMMA) && !check(p, TK_R_PAREN));
+                
+                // 检查是否在逗号后直接遇到右括号（尾随逗号）
+                if (p->current > 0 && p->tokens[p->current - 1].kind == TK_COMMA && check(p, TK_R_PAREN)) {
+                    warning_at(p, previous(p), "Trailing comma in function call");
+                }
+            }
+            
+            if (!match(p, TK_R_PAREN)) {
+                error_at(p, current_token(p), "Expected ')' after arguments");
+            }
+            
+            // 检测 ! 后缀（表示错误时抛出异常）
+            int throw_on_error = 0;
+            if (match(p, TK_BANG)) {
+                throw_on_error = 1;
+            }
+            
+            expr = ast_call_expr_create(expr, args, arg_count, throw_on_error, expr->loc);
         }
         else {
             break;
@@ -764,10 +952,10 @@ static ASTNode *parse_logical_and(Parser *p) {
 static ASTNode *parse_logical_or(Parser *p) {
     ASTNode *left = parse_logical_and(p);
     
-    while (match(p, TK_OR_OR)) {
+    while (match(p, TK_OR_OR) || match(p, TK_NULLISH_COALESCE)) {
         Token *op_token = &p->tokens[p->current - 1];
         ASTNode *right = parse_logical_and(p);
-        left = ast_binary_expr_create(TK_OR_OR, left, right, token_to_loc(op_token));
+        left = ast_binary_expr_create(op_token->kind, left, right, token_to_loc(op_token));
     }
     
     return left;
@@ -1389,6 +1577,7 @@ static ASTNode *parse_var_declaration(Parser *p) {
         func->param_count = param_count;
         func->return_type = NULL; // 暂不处理返回类型
         func->body = body;
+        func->uses_self = false;  /* 将在后续分析中设置 */
         func_node->data = func;
         
         return func_node;
@@ -1460,6 +1649,7 @@ static ASTNode *parse_var_declaration(Parser *p) {
         func->param_count = param_count;
         func->return_type = NULL;
         func->body = body;
+        func->uses_self = false;  /* 将在后续分析中设置 */
         func_node->data = func;
         
         return func_node;
@@ -1586,6 +1776,48 @@ static ASTNode *parse_statement(Parser *p) {
                     cur_tok->lexeme);
             error_at(p, cur_tok, error_msg);
             return NULL;
+        }
+    }
+    
+    // 处理 self 开头的语句 (self.xxx = expr)
+    if (check(p, TK_SELF)) {
+        // 解析 self 及其后缀表达式
+        ASTNode *target = parse_postfix(p);
+        
+        // 检查后面是否跟着 =
+        if (match(p, TK_ASSIGN)) {
+            ASTNode *value = parse_expression(p);
+            return ast_assign_stmt_create(target, value, target->loc);
+        }
+        
+        // 如果不是赋值，则作为表达式语句
+        ASTNode *node = ast_node_create(AST_EXPR_STMT, target->loc);
+        ASTExprStmt *stmt = (ASTExprStmt *)malloc(sizeof(ASTExprStmt));
+        stmt->expr = target;
+        node->data = stmt;
+        return node;
+    }
+    
+    // 检查是否是保留关键字后跟赋值运算符（无效的变量名）
+    // 这处理了 obj = 123 这种情况（obj 是 TK_TYPE_OBJ 而非 TK_IDENT）
+    {
+        Token *reserved_tok = current_token(p);
+        if (reserved_tok->kind == TK_TYPE_NUM || reserved_tok->kind == TK_TYPE_STR ||
+            reserved_tok->kind == TK_TYPE_BL || reserved_tok->kind == TK_TYPE_OBJ ||
+            reserved_tok->kind == TK_TYPE_FUNC || reserved_tok->kind == TK_TRUE ||
+            reserved_tok->kind == TK_FALSE || reserved_tok->kind == TK_NULL ||
+            reserved_tok->kind == TK_UNDEF || reserved_tok->kind == TK_KW_IF) {
+            Token *after_reserved = peek(p, 1);
+            // 检查是否后跟 = 或 :=
+            if (after_reserved && (after_reserved->kind == TK_ASSIGN || after_reserved->kind == TK_DEFINE || 
+                             after_reserved->kind == TK_FUNC_TYPE_START || after_reserved->kind == TK_COLON)) {
+                char error_msg[256];
+                snprintf(error_msg, sizeof(error_msg), 
+                        "Cannot use reserved keyword '%s' as variable name", 
+                        reserved_tok->lexeme);
+                error_at(p, reserved_tok, error_msg);
+                return NULL;
+            }
         }
     }
     

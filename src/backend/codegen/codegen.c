@@ -435,7 +435,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "@str_type = private unnamed_addr constant [5 x i8] c\"type\\00\"\n");
     fprintf(gen->output, "@str_type_error = private unnamed_addr constant [10 x i8] c\"TypeError\\00\"\n");
     fprintf(gen->output, "@str_error = private unnamed_addr constant [6 x i8] c\"Error\\00\"\n");
-    fprintf(gen->output, "@.str.newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n\n");
+    fprintf(gen->output, "@.str.newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n");
+    fprintf(gen->output, "@.str.not_callable = private unnamed_addr constant [30 x i8] c\"Error: value is not callable\\0A\\00\"\n\n");
     
     // 2. Value 结构体定义
     fprintf(gen->output, ";; Mixed-type value system\n");
@@ -465,7 +466,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare i32 @get_function_captured_count(%%struct.Value*)\n");
     fprintf(gen->output, "declare i32 @get_function_param_count(%%struct.Value*)\n");
     fprintf(gen->output, "declare i32 @value_is_function(%%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @call_function_value(%%struct.Value*, %%struct.Value**, i32)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @call_function_value(%%struct.Value*, %%struct.Value**, i32)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_call_function(%%struct.Value*, %%struct.Value**, i64)\n\n");
     
     fprintf(gen->output, ";; Utility functions\n");
     fprintf(gen->output, "declare i32 @value_is_truthy(%%struct.Value*)\n");
@@ -483,6 +485,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_less_than(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_greater_than(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_index(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_index_safe(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare i64 @value_array_length(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_array_get(%%struct.Value*, %%struct.Value*)\n\n");
     
@@ -586,13 +589,28 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, ";; Error object creation and field access\n");
     fprintf(gen->output, "declare %%struct.Value* @create_error_object(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_get_field(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_field_safe(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_method(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_get_method_by_index(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_set_field(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_delete_field(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_has_field(%%struct.Value*, %%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_keys(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_values(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_entries(%%struct.Value*)\n");
-    fprintf(gen->output, "declare %%struct.Value* @value_set_index(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_set_index(%%struct.Value*, %%struct.Value*, %%struct.Value*)\n");
+    
+    // Method binding support
+    fprintf(gen->output, "\n;; Method binding support\n");
+    fprintf(gen->output, "declare %%struct.Value* @bind_method(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @get_function_bound_self(%%struct.Value*)\n");
+    
+    // Object/Array clone functions
+    fprintf(gen->output, "\n;; Object/Array clone functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_shallow_clone(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_deep_clone(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_spread_into_object(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_spread_into_array(%%struct.Value*, %%struct.Value*)\n\n");
     
     // Array extension functions
     fprintf(gen->output, ";; Array extension functions\n");

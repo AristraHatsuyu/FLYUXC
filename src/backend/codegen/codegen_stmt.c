@@ -1018,17 +1018,26 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             // 函数签名 - 使用 Value* 类型
             fprintf(output_target, "\ndefine %%struct.Value* @%s(", func_llvm_name);
             
-            // 先输出普通参数
+            // 如果函数使用了 self，添加隐式 self 参数作为第一个参数
+            int param_idx = 0;
+            if (func->uses_self) {
+                fprintf(output_target, "%%struct.Value* %%param_self");
+                param_idx = 1;
+            }
+            
+            // 输出普通参数
             for (size_t i = 0; i < func->param_count; i++) {
-                if (i > 0) fprintf(output_target, ", ");
+                if (param_idx > 0) fprintf(output_target, ", ");
                 fprintf(output_target, "%%struct.Value* %%param_%s", func->params[i]);
+                param_idx++;
             }
             
             // 然后输出捕获的变量作为额外参数
             if (captured && captured->count > 0) {
                 for (size_t i = 0; i < captured->count; i++) {
-                    if (func->param_count > 0 || i > 0) fprintf(output_target, ", ");
+                    if (param_idx > 0) fprintf(output_target, ", ");
                     fprintf(output_target, "%%struct.Value* %%captured_%s", captured->names[i]);
+                    param_idx++;
                 }
             }
             
@@ -1050,6 +1059,13 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             
             // 注意：不清空符号表！顶层预注册的函数名需要在函数体内可见
             // 函数内的局部变量会覆盖同名的全局符号
+            
+            // 如果使用 self，为 self 创建局部变量
+            if (func->uses_self) {
+                fprintf(output_target, "  %%self = alloca %%struct.Value*\n");
+                fprintf(output_target, "  store %%struct.Value* %%param_self, %%struct.Value** %%self\n");
+                register_symbol(gen, "self");
+            }
             
             // 为参数创建局部变量（注意：必须在清空符号表之后）
             for (size_t i = 0; i < func->param_count; i++) {

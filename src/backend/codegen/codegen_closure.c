@@ -130,7 +130,7 @@ static const char *builtin_funcs[] = {
     "print", "println", "len", "type", "str", "num", "bool",
     "push", "pop", "shift", "unshift", "slice", "concat",
     "indexOf", "lastIndexOf", "includes", "join", "split", "reverse", "sort",
-    "keys", "values", "entries", "has", "delete", "merge",
+    "keys", "values", "entries", "has", "delete", "merge", "clone", "deepClone",
     "map", "filter", "reduce", "forEach", "find", "findIndex", "every", "some",
     "substr", "charAt", "startsWith", "endsWith", "replace", "trim", "upper", "lower",
     "floor", "ceil", "round", "abs", "sqrt", "pow", "random", "min", "max",
@@ -157,6 +157,9 @@ static void collect_vars_in_node(ASTNode *node, CapturedVars *captured,
                                   LocalVarSet *locals, char **params,
                                   size_t param_count, CodeGen *gen);
 
+/* 全局变量：用于跟踪当前分析的函数是否使用了 self */
+static bool current_func_uses_self = false;
+
 /* 递归收集变量引用 */
 static void collect_vars_in_node(ASTNode *node, CapturedVars *captured,
                                   LocalVarSet *locals, char **params,
@@ -164,6 +167,12 @@ static void collect_vars_in_node(ASTNode *node, CapturedVars *captured,
     if (!node) return;
     
     switch (node->kind) {
+        case AST_SELF_EXPR: {
+            /* 检测到使用了 self 关键字 */
+            current_func_uses_self = true;
+            break;
+        }
+        
         case AST_IDENTIFIER: {
             ASTIdentifier *id = (ASTIdentifier *)node->data;
             const char *name = id->name;
@@ -369,6 +378,9 @@ CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body,
     CapturedVars *captured = captured_vars_create();
     LocalVarSet *locals = local_var_set_create();
     
+    /* 重置 self 使用标记 */
+    current_func_uses_self = false;
+    
     // 递归收集变量引用
     collect_vars_in_node(func_body, captured, locals, params, param_count, gen);
     
@@ -376,6 +388,11 @@ CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body,
     local_var_set_free(locals);
     
     return captured;
+}
+
+/* 检查最近分析的函数是否使用了 self */
+bool closure_analysis_uses_self(void) {
+    return current_func_uses_self;
 }
 
 /* 复制捕获变量列表 */

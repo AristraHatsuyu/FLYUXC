@@ -384,16 +384,16 @@ static void serialize_value_to_json_impl(Value* v, char** buffer, size_t* size, 
                 append_char(buffer, size, capacity, '"');
                 switch (v->ext_type) {
                     case EXT_TYPE_BUFFER:
-                        append_string(buffer, size, capacity, "Buffer");
+                        append_string(buffer, size, capacity, "[Buffer]");
                         break;
                     case EXT_TYPE_FILE:
-                        append_string(buffer, size, capacity, "FileHandle");
+                        append_string(buffer, size, capacity, "[FileHandle]");
                         break;
                     case EXT_TYPE_ERROR:
-                        append_string(buffer, size, capacity, "Error");
+                        append_string(buffer, size, capacity, "[Error]");
                         break;
                     default:
-                        append_string(buffer, size, capacity, "ExtendedObject");
+                        append_string(buffer, size, capacity, "[ExtendedObject]");
                         break;
                 }
                 append_char(buffer, size, capacity, '"');
@@ -424,6 +424,10 @@ static void serialize_value_to_json_impl(Value* v, char** buffer, size_t* size, 
             }
             break;
         }
+        case VALUE_FUNCTION:
+            // 函数类型输出为字符串 "[Function]"
+            append_string(buffer, size, capacity, "\"[Function]\"");
+            break;
         default:
             append_string(buffer, size, capacity, "null");
     }

@@ -62,6 +62,16 @@ typedef enum TokenKind {
 
     /* 三元运算符 */
     TK_QUESTION,  /* ? */
+    TK_QUESTION_DOT, /* ?. (可选链访问) */
+    TK_NULLISH_COALESCE, /* ?? (空值合并) */
+    
+    /* 展开运算符 */
+    TK_SPREAD,    /* ... */
+
+    /* self 访问符和解绑运算符 */
+    TK_DOT_AT,    /* .@ (未绑定成员访问) */
+    TK_AT,        /* @ (解绑运算符，用于 xxx@[...]) */
+    TK_SELF,      /* self 关键字 */
 
     /* 关键字 */
     TK_KW_IF,      /* if */
