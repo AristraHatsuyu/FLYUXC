@@ -349,7 +349,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 获取函数参数数量以正确生成类型签名
                 // 简单处理：假设所有函数都返回 Value* 并接受 Value* 参数
                 // 这里我们需要知道函数的参数数量，但暂时用可变参数处理
-                fprintf(gen->code_buf, "...)* @%s to i8*), i32 0, %%struct.Value** null)\n", id->name);
+                fprintf(gen->code_buf, "...)* @%s to i8*), %%struct.Value** null, i32 0, i32 0, i32 0)\n", id->name);  // needs_self=0 for function refs
                 // 注册为中间值
                 temp_value_register(gen, temp);
                 return temp;
@@ -1126,6 +1126,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_str(%%struct.Value* %s)\n", result, arg);
+                temp_value_register(gen, result);  // 注册为中间值
                 free(arg);
                 return result;
             }
@@ -1134,6 +1135,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_bl(%%struct.Value* %s)\n", result, arg);
+                temp_value_register(gen, result);  // 注册为中间值
                 free(arg);
                 return result;
             }
@@ -1142,6 +1144,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_int(%%struct.Value* %s)\n", result, arg);
+                temp_value_register(gen, result);  // 注册为中间值
                 free(arg);
                 
                 // 如果没有 ! 后缀，清除错误状态
@@ -1156,6 +1159,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_to_float(%%struct.Value* %s)\n", result, arg);
+                temp_value_register(gen, result);  // 注册为中间值
                 free(arg);
                 return result;
             }
@@ -1165,6 +1169,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 char *arg = codegen_expr(gen, call->args[0]);
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_len(%%struct.Value* %s)\n", result, arg);
+                temp_value_register(gen, result);  // 注册为中间值
                 free(arg);
                 
                 // 错误处理
@@ -4400,9 +4405,9 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 计算用户可见的参数数量（不包括隐式 self，运行时会自动处理）
                 size_t user_param_count = func->param_count;
                 
-                // 调用 box_function
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu)  ; closure '%s'\n",
-                        temp, func_ptr, captured_ptr, captured->count, user_param_count, func->name);
+                // 调用 box_function，传递 needs_self 标志
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu, i32 %d)  ; closure '%s'\n",
+                        temp, func_ptr, captured_ptr, captured->count, user_param_count, func->uses_self ? 1 : 0, func->name);
                 
                 // 自引用闭包修复：在创建闭包后更新捕获的自引用变量
                 // 例如: f := (n) { f(n-1) }  -- 创建时 f 是 null，需要更新为实际函数
@@ -4429,11 +4434,11 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 计算用户可见的参数数量（不包括隐式 self，运行时会自动处理）
                 size_t user_param_count = func->param_count;
                 
-                // 调用 box_function（captured 为 null）
+                // 调用 box_function（captured 为 null），传递 needs_self 标志
                 char *null_ptr = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = inttoptr i64 0 to %%struct.Value**\n", null_ptr);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 0, i32 %zu)  ; function '%s'\n",
-                        temp, func_ptr, null_ptr, user_param_count, func->name);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 0, i32 %zu, i32 %d)  ; function '%s'\n",
+                        temp, func_ptr, null_ptr, user_param_count, func->uses_self ? 1 : 0, func->name);
                 
                 free(func_ptr);
                 free(null_ptr);

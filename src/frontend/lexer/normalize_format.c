@@ -483,6 +483,10 @@ static char* simplify_parens(const char* expr){
                     protect_for_keyword = 1;
                 }
                 
+                // 检查是否在对象字面量属性值位置（左侧是 ':'）
+                // 如果是，且内部包含二元运算符，则保留括号
+                int in_object_value = (prev_i >= 0 && expr[prev_i] == ':');
+                
                 if (!protect_for_keyword) {
                     // primary 允许彻底去——满足 z:=(((x))) -> z:=x
                     if (is_primary_expr(inner)){
@@ -493,11 +497,16 @@ static char* simplify_parens(const char* expr){
                             // 无二元运算符，强绑定，也可去
                             remove_last_layer = 1;
                         }else{
-                            OpInfo L = read_op_left(expr, prev_i);
-                            OpInfo R = read_op_right(expr, next_i);
-                            int left_ok  = (!L.exists) || (L.prec < Pin);
-                            int right_ok = (!R.exists) || (R.prec < Pin);
-                            if (left_ok && right_ok) remove_last_layer = 1;
+                            // 如果在对象属性值位置，且内部有二元运算符，保留括号
+                            if (in_object_value) {
+                                remove_last_layer = 0;
+                            } else {
+                                OpInfo L = read_op_left(expr, prev_i);
+                                OpInfo R = read_op_right(expr, next_i);
+                                int left_ok  = (!L.exists) || (L.prec < Pin);
+                                int right_ok = (!R.exists) || (R.prec < Pin);
+                                if (left_ok && right_ok) remove_last_layer = 1;
+                            }
                         }
                     }
                 }

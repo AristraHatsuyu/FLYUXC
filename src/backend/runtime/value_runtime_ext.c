@@ -219,12 +219,13 @@ Value* box_undef() {
  * @param captured_count: 捕获变量数量
  * @param param_count: 函数参数数量
  */
-Value* box_function(void *func_ptr, Value **captured, int captured_count, int param_count) {
+Value* box_function(void *func_ptr, Value **captured, int captured_count, int param_count, int needs_self) {
     FunctionObject *fn = (FunctionObject*)malloc(sizeof(FunctionObject));
     fn->func_ptr = func_ptr;
     fn->param_count = param_count;
     fn->captured_count = captured_count;
     fn->bound_self = NULL;  /* 初始没有绑定的 self */
+    fn->needs_self = needs_self;  /* 记录函数是否需要 self */
     
     /* 复制捕获的变量引用 */
     if (captured_count > 0 && captured) {
@@ -347,6 +348,7 @@ Value* bind_method(Value *func_val, Value *self_obj) {
     new_fn->func_ptr = orig_fn->func_ptr;
     new_fn->param_count = orig_fn->param_count;
     new_fn->captured_count = orig_fn->captured_count;
+    new_fn->needs_self = orig_fn->needs_self;  /* 复制 needs_self 标志 */
     
     /* 复制捕获的变量 */
     if (orig_fn->captured_count > 0 && orig_fn->captured) {
@@ -394,8 +396,8 @@ Value* bind_method(Value *func_val, Value *self_obj) {
 Value* call_function_value(Value *func_val, Value **args, int arg_count) {
     FunctionObject *fn = (FunctionObject*)func_val->data.pointer;
     
-    // 快速路径：无 bound_self 的常见情况
-    if (!fn->bound_self) {
+    // 快速路径：无 bound_self 或不需要 self 的常见情况
+    if (!fn->bound_self || !fn->needs_self) {
         int total = arg_count + fn->captured_count;
         
         // 快速路径：1 参数 + 2 捕获 = 3 参数（fib 常见情况）
@@ -421,10 +423,17 @@ Value* call_function_value(Value *func_val, Value **args, int arg_count) {
             typedef Value* (*Func0)(void);
             return ((Func0)fn->func_ptr)();
         }
+        
+        // 快速路径：0 参数 + 1 捕获 = 1 参数（闭包常见情况）
+        if (total == 1 && arg_count == 0 && fn->captured_count == 1) {
+            typedef Value* (*Func1)(Value*);
+            return ((Func1)fn->func_ptr)(fn->captured[0]);
+        }
     }
     
     // 慢速路径：通用情况
-    int has_bound_self = (fn->bound_self != NULL) ? 1 : 0;
+    // 只有当函数需要 self 且有 bound_self 时才传入 self
+    int has_bound_self = (fn->bound_self != NULL && fn->needs_self) ? 1 : 0;
     int total_args = has_bound_self + arg_count + fn->captured_count;
     
     // 使用栈上数组避免 malloc（最多支持 16 个参数）
@@ -436,7 +445,7 @@ Value* call_function_value(Value *func_val, Value **args, int arg_count) {
     
     int idx = 0;
     
-    // 首先添加 bound_self（如果有）
+    // 首先添加 bound_self（如果有且需要）
     if (has_bound_self) {
         full_args[idx++] = fn->bound_self;
     }
@@ -1534,17 +1543,47 @@ Value* value_index(Value *obj, Value *index) {
     if (obj->type == VALUE_OBJECT && index && index->type == VALUE_STRING) {
         const char *key = (const char*)index->data.pointer;
         ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
-        size_t count = obj->array_size;
         
-        for (size_t i = 0; i < count; i++) {
-            if (strcmp(entries[i].key, key) == 0) {
-                // 增加引用计数，调用方负责释放
-                return value_retain(entries[i].value);
+        // 检查是否是哈希模式（string_length > 0 表示哈希容量）
+        if (obj->string_length > 0) {
+            // 哈希模式：使用哈希查找
+            size_t capacity = obj->string_length;
+            unsigned long hash = 14695981039346656037UL;  // FNV offset basis
+            const char *s = key;
+            while (*s) {
+                hash ^= (unsigned char)*s++;
+                hash *= 1099511628211UL;  // FNV prime
             }
+            
+            size_t idx = hash % capacity;
+            size_t start = idx;
+            
+            do {
+                if (entries[idx].key == NULL) {
+                    // 空槽，键不存在
+                    break;
+                }
+                if (entries[idx].key != (char*)(intptr_t)-1 && strcmp(entries[idx].key, key) == 0) {
+                    return value_retain(entries[idx].value);
+                }
+                idx = (idx + 1) % capacity;
+            } while (idx != start);
+            
+            // 键不存在
+            set_runtime_status(FLYUX_TYPE_ERROR, "Object key not found");
+            return box_null();
+        } else {
+            // 线性模式
+            size_t count = obj->array_size;
+            for (size_t i = 0; i < count; i++) {
+                if (strcmp(entries[i].key, key) == 0) {
+                    return value_retain(entries[i].value);
+                }
+            }
+            // 键不存在
+            set_runtime_status(FLYUX_TYPE_ERROR, "Object key not found");
+            return box_null();
         }
-        // 键不存在
-        set_runtime_status(FLYUX_TYPE_ERROR, "Object key not found");
-        return box_null();
     }
 
     set_runtime_status(FLYUX_TYPE_ERROR, "Invalid index operation");
@@ -1589,12 +1628,38 @@ Value* value_index_safe(Value *obj, Value *index) {
     if (obj->type == VALUE_OBJECT && index->type == VALUE_STRING) {
         const char *key = (const char*)index->data.pointer;
         ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
-        size_t count = obj->array_size;
         
-        for (size_t i = 0; i < count; i++) {
-            if (strcmp(entries[i].key, key) == 0) {
-                // 增加引用计数，调用方负责释放
-                return value_retain(entries[i].value);
+        // 检查是否是哈希模式（string_length > 0 表示哈希容量）
+        if (obj->string_length > 0) {
+            // 哈希模式：使用哈希查找
+            size_t capacity = obj->string_length;
+            unsigned long hash = 14695981039346656037UL;  // FNV offset basis
+            const char *s = key;
+            while (*s) {
+                hash ^= (unsigned char)*s++;
+                hash *= 1099511628211UL;  // FNV prime
+            }
+            
+            size_t idx = hash % capacity;
+            size_t start = idx;
+            
+            do {
+                if (entries[idx].key == NULL) {
+                    // 空槽，键不存在
+                    break;
+                }
+                if (entries[idx].key != (char*)(intptr_t)-1 && strcmp(entries[idx].key, key) == 0) {
+                    return value_retain(entries[idx].value);
+                }
+                idx = (idx + 1) % capacity;
+            } while (idx != start);
+        } else {
+            // 线性模式
+            size_t count = obj->array_size;
+            for (size_t i = 0; i < count; i++) {
+                if (strcmp(entries[i].key, key) == 0) {
+                    return value_retain(entries[i].value);
+                }
             }
         }
     }

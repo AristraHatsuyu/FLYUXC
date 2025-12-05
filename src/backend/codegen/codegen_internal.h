@@ -159,6 +159,9 @@ void temp_value_register(CodeGen *gen, const char *temp_name);
 /* 生成中间值清理代码，释放除最终结果外的所有中间值 */
 void temp_value_release_except(CodeGen *gen, const char *keep_name);
 
+/* 生成中间值清理代码，释放所有中间值（用于 break/continue/return 跳转前） */
+void temp_value_release_all(CodeGen *gen);
+
 /* 清空中间值栈（不生成清理代码） */
 void temp_value_clear(CodeGen *gen);
 

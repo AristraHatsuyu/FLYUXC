@@ -99,8 +99,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             loop_scope_add_var(gen, ir_name);
             
             // 分配栈空间（使用IR名称）- 但只在未分配过时才分配
-            int already_allocated = is_ir_name_allocated(gen, ir_name);
-            if (!already_allocated) {
+            if (!is_ir_name_allocated(gen, ir_name)) {
                 FILE *alloca_target = gen->entry_alloca_buf ? gen->entry_alloca_buf : gen->code_buf;
                 fprintf(alloca_target, "  %%%s = alloca %%struct.Value*\n", ir_name);
                 // 初始化为 null，防止 release 时读到垃圾值
@@ -127,8 +126,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         }
                     }
                     
-                    // 如果变量已分配过（循环中重新声明），需要先释放旧值（如果非null）
-                    if (already_allocated) {
+                    // 总是先释放旧值（循环中变量可能被多次赋值）
+                    {
                         char *old_val = new_temp(gen);
                         char *check_label = new_label(gen);
                         char *release_label = new_label(gen);
@@ -166,8 +165,10 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         // 释放中间值，但保留要赋给变量的值
                         temp_value_release_except(gen, init_val);
                         
-                        // 如果变量已分配过（循环中重新声明），需要先释放旧值（如果非null）
-                        if (already_allocated) {
+                        // 总是先释放旧值（如果非null）
+                        // 这对于循环中的变量声明很重要，因为变量可能在前一次迭代被赋值
+                        // 对于第一次赋值，变量是null，release(null)是空操作
+                        {
                             char *old_val = new_temp(gen);
                             char *check_label = new_label(gen);
                             char *release_label = new_label(gen);
@@ -330,6 +331,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_index(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
                         result, obj_val, index_val, value);
                 
+                // 注册 result 到临时值以便被清理
+                temp_value_register(gen, result);
+                
                 // 释放中间值（result 是 set_index 返回的，需要释放；value 被存入数组/对象，保留）
                 temp_value_release_except(gen, value);
                 
@@ -369,11 +373,13 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 char *key_value = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_string(i8* %s)\n",
                         key_value, key_ptr);
+                temp_value_register(gen, key_value);  // 注册 key_value
                 
                 // 调用 value_set_field
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_set_field(%%struct.Value* %s, %%struct.Value* %s, %%struct.Value* %s)\n",
                         result, obj_var, key_value, value);
+                temp_value_register(gen, result);  // 注册 result
                 
                 // 释放中间值（key_value 和 result 是临时创建的，需要释放）
                 temp_value_release_except(gen, value);
@@ -415,7 +421,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     gen->block_terminated = 1;  // 标记基本块已终止
                     free(ret_val);
                 } else {
-                    temp_value_clear(gen);
+                    // 没有返回值表达式结果，释放所有临时值
+                    temp_value_release_all(gen);
                     char *null_ret = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_ret);
                     
@@ -429,7 +436,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     free(null_ret);
                 }
             } else {
-                temp_value_clear(gen);
+                // 无返回值的 return，释放所有临时值
+                temp_value_release_all(gen);
                 char *null_ret = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null()\n", null_ret);
                 
@@ -453,6 +461,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 多级 break: B> label
                 const char *break_label = loop_scope_find_break_label(gen, target_label);
                 if (break_label) {
+                    // 先清理当前积累的临时值（防止跳转后泄漏）
+                    temp_value_release_all(gen);
                     // 清理从当前到目标循环的所有作用域
                     loop_scope_generate_multilevel_break_cleanup(gen, target_label);
                     // 跳转到目标循环的结束标签
@@ -463,6 +473,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 }
             } else if (gen->loop_end_label) {
                 // 普通 break: B>（跳出当前循环）
+                // 先清理当前积累的临时值（防止跳转后泄漏）
+                temp_value_release_all(gen);
                 loop_scope_generate_break_cleanup(gen);
                 fprintf(gen->code_buf, "  br label %%%s\n", gen->loop_end_label);
                 gen->block_terminated = 1;
@@ -480,6 +492,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 多级 next: N> label
                 const char *continue_label = loop_scope_find_continue_label(gen, target_label);
                 if (continue_label) {
+                    // 先清理当前积累的临时值（防止跳转后泄漏）
+                    temp_value_release_all(gen);
                     // 清理从当前到目标循环的作用域（不包括目标循环本身）
                     loop_scope_generate_multilevel_next_cleanup(gen, target_label);
                     // 跳转到目标循环的继续标签
@@ -490,6 +504,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 }
             } else if (gen->loop_continue_label) {
                 // 普通 next: N>（继续当前循环）
+                // 先清理当前积累的临时值（防止跳转后泄漏）
+                temp_value_release_all(gen);
                 loop_scope_generate_next_cleanup(gen);
                 fprintf(gen->code_buf, "  br label %%%s\n", gen->loop_continue_label);
                 gen->block_terminated = 1;
@@ -1122,7 +1138,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             
             // 注意：函数名已在 codegen_generate 中预注册（用于支持前向引用）
             // 对于嵌套函数，需要在这里注册
-            if (!is_symbol_defined(gen, func->name)) {
+            // 但是：匿名函数（_anon_*）不应注册到符号表，因为它们是全局函数，
+            // 没有对应的 alloca，会导致 scope_generate_exit_cleanup 生成无效代码
+            if (!is_symbol_defined(gen, func->name) && strncmp(func->name, "_anon_", 6) != 0) {
                 register_symbol(gen, func->name);
             }
             
@@ -1206,7 +1224,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             int saved_block_terminated = gen->block_terminated;
             SymbolEntry *saved_symbols = gen->symbols;  // 保存符号表
             AllocatedIRName *saved_allocated_ir_names = gen->allocated_ir_names;  // 保存已分配名称
+            TempValueStack *saved_temp_values = gen->temp_values;  // 保存临时值栈
             gen->allocated_ir_names = NULL;  // 新函数开始，清空已分配名称
+            gen->temp_values = NULL;  // 新函数使用新的临时值栈
             
             // 注意：不清空符号表！顶层预注册的函数名需要在函数体内可见
             // 函数内的局部变量会覆盖同名的全局符号
@@ -1291,6 +1311,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             gen->entry_alloca_buf = saved_entry_alloca;
             gen->scope = saved_scope;
             gen->block_terminated = saved_block_terminated;
+            gen->temp_values = saved_temp_values;  // 恢复临时值栈
             
             // 清理并恢复已分配名称集合
             clear_allocated_ir_names(gen);
@@ -1398,8 +1419,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         need_comma = 1;
                     }
                     
-                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** %%t%d, i32 %zu, i32 %zu)\n",
-                            func_llvm_name, ptr_temp, captured->count, func->param_count);
+                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** %%t%d, i32 %zu, i32 %zu, i32 %d)\n",
+                            func_llvm_name, ptr_temp, captured->count, func->param_count, func->uses_self ? 1 : 0);
                     
                     // 存储到局部变量
                     fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %%t%d)\n",
@@ -1429,8 +1450,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         fprintf(gen->code_buf, "%%struct.Value*");
                     }
                     
-                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** null, i32 0, i32 %zu)\n",
-                            func_llvm_name, func->param_count);
+                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** null, i32 0, i32 %zu, i32 %d)\n",
+                            func_llvm_name, func->param_count, func->uses_self ? 1 : 0);
                     
                     // 存储到局部变量
                     fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %%t%d)\n",

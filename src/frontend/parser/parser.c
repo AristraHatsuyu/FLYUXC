@@ -974,87 +974,232 @@ static ASTNode *parse_optional_chain_index(Parser *p, ASTNode *object) {
 static ASTNode *parse_ternary(Parser *p) {
     ASTNode *left = parse_logical_or(p);
     
-    // 处理 ?[ 歧义：检查是三元运算符还是可选链索引
+    // 处理 ?[ 歧义以及后续的可选链操作
     // 当遇到 TK_QUESTION_BRACKET 时，需要通过查看 ] 后面是否是 : 来判断
-    while (check(p, TK_QUESTION_BRACKET)) {
-        Token *qb_token = &p->tokens[p->current];
-        advance(p);  // 消费 ?[
+    // 处理完 ?[ 后，还需要继续处理可能的 ?. 和其他后缀操作
+    while (check(p, TK_QUESTION_BRACKET) || check(p, TK_QUESTION_DOT) || 
+           check(p, TK_DOT) || check(p, TK_L_BRACKET) || check(p, TK_DOT_CHAIN) ||
+           check(p, TK_DOT_AT) || check(p, TK_AT)) {
         
-        // 保存位置以便可能的回溯
-        size_t saved_pos = p->current;
-        
-        // 尝试解析 [ 后面的内容直到 ]
-        ASTNode **elements = NULL;
-        bool *is_spread = NULL;
-        size_t elem_count = 0;
-        size_t elem_capacity = 0;
-        
-        if (!check(p, TK_R_BRACKET)) {
-            do {
-                if (elem_count >= elem_capacity) {
-                    elem_capacity = elem_capacity == 0 ? 4 : elem_capacity * 2;
-                    elements = (ASTNode **)realloc(elements, elem_capacity * sizeof(ASTNode *));
-                    is_spread = (bool *)realloc(is_spread, elem_capacity * sizeof(bool));
+        if (check(p, TK_QUESTION_BRACKET)) {
+            Token *qb_token = &p->tokens[p->current];
+            advance(p);  // 消费 ?[
+            
+            // 尝试解析 [ 后面的内容直到 ]
+            ASTNode **elements = NULL;
+            bool *is_spread = NULL;
+            size_t elem_count = 0;
+            size_t elem_capacity = 0;
+            
+            if (!check(p, TK_R_BRACKET)) {
+                do {
+                    if (elem_count >= elem_capacity) {
+                        elem_capacity = elem_capacity == 0 ? 4 : elem_capacity * 2;
+                        elements = (ASTNode **)realloc(elements, elem_capacity * sizeof(ASTNode *));
+                        is_spread = (bool *)realloc(is_spread, elem_capacity * sizeof(bool));
+                    }
+                    
+                    if (match(p, TK_SPREAD)) {
+                        elements[elem_count] = parse_expression(p);
+                        is_spread[elem_count] = true;
+                    } else {
+                        elements[elem_count] = parse_expression(p);
+                        is_spread[elem_count] = false;
+                    }
+                    elem_count++;
+                } while (match(p, TK_COMMA) && !check(p, TK_R_BRACKET));
+            }
+            
+            if (!match(p, TK_R_BRACKET)) {
+                error_at(p, current_token(p), "Expected ']'");
+                if (elements) free(elements);
+                if (is_spread) free(is_spread);
+                return left;
+            }
+            
+            // 现在检查 ] 后面是什么
+            if (check(p, TK_COLON)) {
+                // 这是三元运算符：cond ? [arr_elements] : false_expr
+                ASTNode *arr = ast_array_literal_create_with_spread(elements, is_spread, elem_count, token_to_loc(qb_token));
+                
+                match(p, TK_COLON);  // 消费 :
+                ASTNode *false_value = parse_ternary(p);  // 右结合
+                return ast_ternary_expr_create(left, arr, false_value, token_to_loc(qb_token));
+            } else {
+                // 这是可选链索引访问：obj?[index]
+                if (elem_count != 1) {
+                    error_at(p, qb_token, "Optional chain index must be a single expression, not array elements");
+                    if (elements) free(elements);
+                    if (is_spread) free(is_spread);
+                    return left;
+                }
+                if (is_spread && is_spread[0]) {
+                    error_at(p, qb_token, "Spread operator not allowed in optional chain index");
+                    if (elements) free(elements);
+                    if (is_spread) free(is_spread);
+                    return left;
                 }
                 
-                if (match(p, TK_SPREAD)) {
-                    elements[elem_count] = parse_expression(p);
-                    is_spread[elem_count] = true;
-                } else {
-                    elements[elem_count] = parse_expression(p);
-                    is_spread[elem_count] = false;
+                ASTNode *index = elements[0];
+                if (elements) free(elements);
+                if (is_spread) free(is_spread);
+                
+                // 创建可选链索引表达式
+                ASTNode *node = ast_node_create(AST_INDEX_EXPR, left->loc);
+                ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
+                idx->object = left;
+                idx->index = index;
+                idx->is_unbound = false;
+                idx->is_optional = true;
+                node->data = idx;
+                left = node;
+                // 继续循环处理后续操作
+            }
+        }
+        // 可选链成员访问: obj?.prop
+        else if (match(p, TK_QUESTION_DOT)) {
+            Token *prop_token = current_token(p);
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
+                error_at(p, prop_token, "Expected property name after '?.'");
+                break;
+            }
+            ASTNode *node = ast_node_create(AST_MEMBER_EXPR, left->loc);
+            ASTMemberExpr *member = (ASTMemberExpr *)malloc(sizeof(ASTMemberExpr));
+            member->object = left;
+            member->property = strdup(prop_token->lexeme);
+            member->is_computed = false;
+            member->is_unbound = false;
+            member->is_optional = true;
+            node->data = member;
+            left = node;
+        }
+        // 普通成员访问: obj.prop
+        else if (match(p, TK_DOT)) {
+            Token *prop_token = current_token(p);
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
+                error_at(p, prop_token, "Expected property name after '.'");
+                break;
+            }
+            left = ast_member_expr_create(left, strdup(prop_token->lexeme), false, left->loc);
+        }
+        // 普通索引访问: obj[index]
+        else if (match(p, TK_L_BRACKET)) {
+            ASTNode *index = parse_expression(p);
+            if (!match(p, TK_R_BRACKET)) {
+                error_at(p, current_token(p), "Expected ']' after index");
+            }
+            left = ast_index_expr_create(left, index, left->loc);
+        }
+        // 链式调用: obj.>method(args)
+        else if (match(p, TK_DOT_CHAIN)) {
+            Token *method_token = current_token(p);
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
+                error_at(p, method_token, "Expected method name after '.>'");
+                break;
+            }
+            char *method_name = strdup(method_token->lexeme);
+            
+            if (match(p, TK_L_PAREN)) {
+                ASTNode **args = NULL;
+                size_t arg_count = 0;
+                size_t arg_capacity = 0;
+                
+                if (!check(p, TK_R_PAREN)) {
+                    do {
+                        if (arg_count >= arg_capacity) {
+                            arg_capacity = arg_capacity == 0 ? 4 : arg_capacity * 2;
+                            args = (ASTNode **)realloc(args, arg_capacity * sizeof(ASTNode *));
+                        }
+                        args[arg_count++] = parse_expression(p);
+                    } while (match(p, TK_COMMA) && !check(p, TK_R_PAREN));
                 }
-                elem_count++;
-            } while (match(p, TK_COMMA) && !check(p, TK_R_BRACKET));
-        }
-        
-        if (!match(p, TK_R_BRACKET)) {
-            error_at(p, current_token(p), "Expected ']'");
-            // 清理
-            if (elements) free(elements);
-            if (is_spread) free(is_spread);
-            return left;
-        }
-        
-        // 现在检查 ] 后面是什么
-        if (check(p, TK_COLON)) {
-            // 这是三元运算符：cond ? [arr_elements] : false_expr
-            // 构建数组字面量作为 true_value
-            ASTNode *arr = ast_array_literal_create_with_spread(elements, is_spread, elem_count, token_to_loc(qb_token));
-            
-            match(p, TK_COLON);  // 消费 :
-            ASTNode *false_value = parse_ternary(p);  // 右结合
-            return ast_ternary_expr_create(left, arr, false_value, token_to_loc(qb_token));
-        } else {
-            // 这是可选链索引访问：obj?[index]
-            // 只允许单个索引表达式
-            if (elem_count != 1) {
-                error_at(p, qb_token, "Optional chain index must be a single expression, not array elements");
-                if (elements) free(elements);
-                if (is_spread) free(is_spread);
-                return left;
+                
+                if (!match(p, TK_R_PAREN)) {
+                    error_at(p, current_token(p), "Expected ')' after arguments");
+                }
+                
+                int throw_on_error = match(p, TK_BANG) ? 1 : 0;
+                
+                size_t total_args = arg_count + 1;
+                ASTNode **all_args = (ASTNode **)malloc(total_args * sizeof(ASTNode *));
+                all_args[0] = left;
+                for (size_t i = 0; i < arg_count; i++) {
+                    all_args[i + 1] = args[i];
+                }
+                if (args) free(args);
+                
+                ASTNode *callee = ast_identifier_create(method_name, left->loc);
+                left = ast_call_expr_create(callee, all_args, total_args, throw_on_error, left->loc);
+            } else {
+                int throw_on_error = match(p, TK_BANG) ? 1 : 0;
+                ASTNode **all_args = (ASTNode **)malloc(1 * sizeof(ASTNode *));
+                all_args[0] = left;
+                ASTNode *callee = ast_identifier_create(method_name, left->loc);
+                left = ast_call_expr_create(callee, all_args, 1, throw_on_error, left->loc);
             }
-            if (is_spread && is_spread[0]) {
-                error_at(p, qb_token, "Spread operator not allowed in optional chain index");
-                if (elements) free(elements);
-                if (is_spread) free(is_spread);
-                return left;
+        }
+        // 未绑定成员访问: obj.@prop
+        else if (match(p, TK_DOT_AT)) {
+            Token *prop_token = current_token(p);
+            if (!match(p, TK_IDENT) && !match(p, TK_BUILTIN_FUNC) &&
+                !match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) &&
+                !match(p, TK_TYPE_BL) && !match(p, TK_TYPE_OBJ) &&
+                !match(p, TK_TYPE_FUNC) && !match(p, TK_TRUE) &&
+                !match(p, TK_FALSE) && !match(p, TK_NULL) &&
+                !match(p, TK_UNDEF) && !match(p, TK_KW_IF) &&
+                !match(p, TK_SELF)) {
+                error_at(p, prop_token, "Expected property name after '.@'");
+                break;
             }
-            
-            ASTNode *index = elements[0];
-            if (elements) free(elements);
-            if (is_spread) free(is_spread);
-            
-            // 创建可选链索引表达式
+            ASTNode *node = ast_node_create(AST_MEMBER_EXPR, left->loc);
+            ASTMemberExpr *member = (ASTMemberExpr *)malloc(sizeof(ASTMemberExpr));
+            member->object = left;
+            member->property = strdup(prop_token->lexeme);
+            member->is_computed = false;
+            member->is_unbound = true;
+            member->is_optional = false;
+            node->data = member;
+            left = node;
+        }
+        // 解绑索引访问: obj@[index]
+        else if (match(p, TK_AT)) {
+            if (!match(p, TK_L_BRACKET)) {
+                error_at(p, current_token(p), "Expected '[' after '@' for unbound index access");
+                break;
+            }
+            ASTNode *index = parse_expression(p);
+            if (!match(p, TK_R_BRACKET)) {
+                error_at(p, current_token(p), "Expected ']' after index");
+            }
             ASTNode *node = ast_node_create(AST_INDEX_EXPR, left->loc);
             ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
             idx->object = left;
             idx->index = index;
-            idx->is_unbound = false;
-            idx->is_optional = true;
+            idx->is_unbound = true;
+            idx->is_optional = false;
             node->data = idx;
             left = node;
-            // 继续检查是否有更多 ?[
+        }
+        else {
+            break;
         }
     }
     

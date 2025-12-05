@@ -682,6 +682,41 @@ void temp_value_release_except(CodeGen *gen, const char *keep_name) {
     stack->count = 0;
 }
 
+/* 生成中间值清理代码，释放所有中间值（用于 break/continue/return 跳转前） */
+void temp_value_release_all(CodeGen *gen) {
+    if (!gen || !gen->temp_values) return;
+    
+    TempValueStack *stack = gen->temp_values;
+    if (stack->count == 0) return;
+    
+    // 生成清理代码
+    fprintf(gen->code_buf, "  ; --- Jump temp values cleanup start ---\n");
+    
+    TempValueEntry *entry = stack->entries;
+    
+    while (entry) {
+        TempValueEntry *next = entry->next;
+        
+        // 释放所有临时值
+        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", 
+                entry->temp_name);
+        
+        // 释放 C 字符串和条目
+        if (entry->temp_name) {
+            free(entry->temp_name);
+        }
+        free(entry);
+        
+        entry = next;
+    }
+    
+    fprintf(gen->code_buf, "  ; --- Jump temp values cleanup end ---\n");
+    
+    // 清空栈
+    stack->entries = NULL;
+    stack->count = 0;
+}
+
 /* 清空中间值栈（不生成清理代码） */
 void temp_value_clear(CodeGen *gen) {
     if (!gen || !gen->temp_values) return;

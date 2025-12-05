@@ -424,15 +424,41 @@ static int looks_like_typed_definition(const char* src, size_t len, size_t ident
     if (src[ident_end_index] != ':') return 0;
 
     size_t p = ident_end_index + 1;
+    int paren_depth = 0;
+    int bracket_depth = 0;
+    int brace_depth = 0;
+    
     /* 简单向前扫描，直到遇到 '=', ',', ';', '}', ')' 或字符串结束 */
+    /* 注意：需要跳过括号内的内容，因为括号内可能有 == 运算符 */
     while (p < len) {
         char c = src[p];
-        if (c == '=') {
-            /* 在遇到终止符之前看到了 '='，像是 x:(type)=... 之类的定义 */
-            return 1;
+        
+        /* 追踪括号深度 */
+        if (c == '(') paren_depth++;
+        else if (c == ')') {
+            if (paren_depth > 0) paren_depth--;
+            else if (paren_depth == 0) break;  /* 到达外层括号结束 */
         }
-        if (c == ',' || c == ';' || c == '}' || c == ')') {
-            break;  /* 没有遇到 '='，更像是对象 key: value */
+        else if (c == '[') bracket_depth++;
+        else if (c == ']') {
+            if (bracket_depth > 0) bracket_depth--;
+            else if (bracket_depth == 0) break;
+        }
+        else if (c == '{') brace_depth++;
+        else if (c == '}') {
+            if (brace_depth > 0) brace_depth--;
+            else if (brace_depth == 0) break;  /* 到达对象字面量结束 */
+        }
+        
+        /* 只在括号外检查 */
+        if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+            if (c == '=') {
+                /* 在遇到终止符之前看到了 '='，像是 x:(type)=... 之类的定义 */
+                return 1;
+            }
+            if (c == ',' || c == ';') {
+                break;  /* 没有遇到 '='，更像是对象 key: value */
+            }
         }
         p++;
     }

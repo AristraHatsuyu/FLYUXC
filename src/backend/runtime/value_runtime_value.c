@@ -54,6 +54,7 @@ typedef struct FunctionObject {
     int captured_count;       /* 捕获变量数量 */
     int param_count;          /* 函数参数数量 */
     struct Value *bound_self; /* 绑定的 self 对象（用于方法调用）*/
+    int needs_self;           /* 函数是否需要 self 作为第一个参数 */
 } FunctionObject;
 
 /* ============================================================================
@@ -148,9 +149,22 @@ static void value_free_internal(Value *v) {
             /* 递归释放对象属性 */
             ObjectEntry *entries = (ObjectEntry*)v->data.pointer;
             if (entries) {
-                for (long i = 0; i < v->array_size; i++) {
-                    if (entries[i].key) free(entries[i].key);
-                    value_release(entries[i].value);
+                /* 检查是否是哈希模式（string_length > 0 表示哈希容量）*/
+                if (v->string_length > 0) {
+                    /* 哈希模式：遍历整个表，跳过空槽和墓碑 */
+                    size_t capacity = v->string_length;
+                    for (size_t i = 0; i < capacity; i++) {
+                        if (entries[i].key && entries[i].key != (char*)(intptr_t)-1) {
+                            free(entries[i].key);
+                            value_release(entries[i].value);
+                        }
+                    }
+                } else {
+                    /* 线性模式 */
+                    for (long i = 0; i < v->array_size; i++) {
+                        if (entries[i].key) free(entries[i].key);
+                        value_release(entries[i].value);
+                    }
                 }
                 free(entries);
             }

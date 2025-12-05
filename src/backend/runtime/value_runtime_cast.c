@@ -8,6 +8,130 @@ Value* value_delete_field(Value *obj, Value *field_name);
 void value_fatal_error(void);    // 致命错误处理（终止程序）
 
 /* ============================================================================
+ * 哈希表支持 - 用于对象字段的快速查找
+ * 使用线性探测开放寻址法
+ * ============================================================================
+ */
+
+/* FNV-1a 哈希函数 - 简单高效 */
+static inline unsigned long hash_string(const char *str) {
+    unsigned long hash = 14695981039346656037UL;  // FNV offset basis
+    while (*str) {
+        hash ^= (unsigned char)*str++;
+        hash *= 1099511628211UL;  // FNV prime
+    }
+    return hash;
+}
+
+/* 
+ * 对象哈希表结构：
+ * - data.pointer 指向 ObjectEntry 数组
+ * - array_size 存储实际字段数量
+ * - string_length 存储哈希表容量（如果为0表示线性模式）
+ * 
+ * 当 string_length > 0 时，使用开放寻址哈希表：
+ * - entries[i].key == NULL 表示空槽
+ * - entries[i].key == (char*)-1 表示已删除的槽（墓碑）
+ */
+#define OBJECT_HASH_THRESHOLD 8
+#define OBJECT_INITIAL_HASH_CAPACITY 32
+#define OBJECT_TOMBSTONE ((char*)(intptr_t)-1)
+
+/* 检查对象是否使用哈希模式 */
+static inline int object_is_hash_mode(Value *obj) {
+    return obj->string_length > 0;
+}
+
+/* 在哈希表中查找键，返回槽索引（找到或空槽），-1表示表满 */
+static inline long object_hash_find_slot(ObjectEntry *entries, size_t capacity, const char *key, unsigned long hash) {
+    size_t idx = hash % capacity;
+    size_t start = idx;
+    long first_tombstone = -1;
+    
+    do {
+        if (entries[idx].key == NULL) {
+            // 空槽：如果有墓碑返回墓碑位置，否则返回当前位置
+            return first_tombstone >= 0 ? first_tombstone : (long)idx;
+        }
+        if (entries[idx].key == OBJECT_TOMBSTONE) {
+            // 记录第一个墓碑位置
+            if (first_tombstone < 0) first_tombstone = (long)idx;
+        } else if (strcmp(entries[idx].key, key) == 0) {
+            // 找到匹配的键
+            return (long)idx;
+        }
+        idx = (idx + 1) % capacity;
+    } while (idx != start);
+    
+    // 表满，返回墓碑位置或-1
+    return first_tombstone;
+}
+
+/* 将对象从线性模式转换为哈希模式 */
+static void object_convert_to_hash(Value *obj) {
+    ObjectEntry *old_entries = (ObjectEntry*)obj->data.pointer;
+    size_t old_count = obj->array_size;
+    
+    // 计算新容量（至少是当前数量的2倍）
+    size_t new_capacity = OBJECT_INITIAL_HASH_CAPACITY;
+    while (new_capacity < old_count * 2) {
+        new_capacity *= 2;
+    }
+    
+    // 分配新的哈希表
+    ObjectEntry *new_entries = (ObjectEntry*)calloc(new_capacity, sizeof(ObjectEntry));
+    if (!new_entries) return;  // 内存分配失败，保持线性模式
+    
+    // 重新插入所有条目
+    for (size_t i = 0; i < old_count; i++) {
+        if (old_entries[i].key && old_entries[i].key != OBJECT_TOMBSTONE) {
+            unsigned long hash = hash_string(old_entries[i].key);
+            long slot = object_hash_find_slot(new_entries, new_capacity, old_entries[i].key, hash);
+            if (slot >= 0) {
+                new_entries[slot].key = old_entries[i].key;
+                new_entries[slot].value = old_entries[i].value;
+            }
+        }
+    }
+    
+    // 释放旧数组
+    if (old_entries) free(old_entries);
+    
+    // 更新对象
+    obj->data.pointer = new_entries;
+    obj->string_length = new_capacity;  // 标记为哈希模式并存储容量
+}
+
+/* 哈希表扩容 */
+static void object_hash_resize(Value *obj, size_t new_capacity) {
+    ObjectEntry *old_entries = (ObjectEntry*)obj->data.pointer;
+    size_t old_capacity = obj->string_length;
+    
+    // 分配新的哈希表
+    ObjectEntry *new_entries = (ObjectEntry*)calloc(new_capacity, sizeof(ObjectEntry));
+    if (!new_entries) return;  // 内存分配失败
+    
+    // 重新插入所有条目
+    for (size_t i = 0; i < old_capacity; i++) {
+        if (old_entries[i].key && old_entries[i].key != OBJECT_TOMBSTONE) {
+            unsigned long hash = hash_string(old_entries[i].key);
+            long slot = object_hash_find_slot(new_entries, new_capacity, old_entries[i].key, hash);
+            if (slot >= 0) {
+                new_entries[slot].key = old_entries[i].key;
+                new_entries[slot].value = old_entries[i].value;
+            }
+        }
+    }
+    
+    // 释放旧数组
+    free(old_entries);
+    
+    // 更新对象
+    obj->data.pointer = new_entries;
+    obj->string_length = new_capacity;
+}
+
+/* ============================================================================
  * 类型转换函数
  * ============================================================================
  */
@@ -309,9 +433,31 @@ Value* value_get_field(Value *obj, Value *field_name) {
     
     // 遍历对象的所有字段（普通对象或扩展类型未匹配虚拟属性）
     ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
-    for (size_t i = 0; i < obj->array_size; i++) {
-        if (strcmp(entries[i].key, key) == 0) {
-            return entries[i].value;
+    
+    // 检查是否是哈希模式
+    if (object_is_hash_mode(obj)) {
+        // 哈希模式：使用哈希查找
+        unsigned long hash = hash_string(key);
+        size_t capacity = obj->string_length;
+        size_t idx = hash % capacity;
+        size_t start = idx;
+        
+        do {
+            if (entries[idx].key == NULL) {
+                // 空槽，键不存在
+                break;
+            }
+            if (entries[idx].key != OBJECT_TOMBSTONE && strcmp(entries[idx].key, key) == 0) {
+                return entries[idx].value;
+            }
+            idx = (idx + 1) % capacity;
+        } while (idx != start);
+    } else {
+        // 线性模式：遍历所有字段
+        for (size_t i = 0; i < obj->array_size; i++) {
+            if (strcmp(entries[i].key, key) == 0) {
+                return entries[i].value;
+            }
         }
     }
     
@@ -413,9 +559,31 @@ Value* value_get_field_safe(Value *obj, Value *field_name) {
     
     // 遍历对象的所有字段
     ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
-    for (size_t i = 0; i < obj->array_size; i++) {
-        if (strcmp(entries[i].key, key) == 0) {
-            return entries[i].value;
+    
+    // 检查是否是哈希模式
+    if (object_is_hash_mode(obj)) {
+        // 哈希模式：使用哈希查找
+        unsigned long hash = hash_string(key);
+        size_t capacity = obj->string_length;
+        size_t idx = hash % capacity;
+        size_t start = idx;
+        
+        do {
+            if (entries[idx].key == NULL) {
+                // 空槽，键不存在
+                break;
+            }
+            if (entries[idx].key != OBJECT_TOMBSTONE && strcmp(entries[idx].key, key) == 0) {
+                return entries[idx].value;
+            }
+            idx = (idx + 1) % capacity;
+        } while (idx != start);
+    } else {
+        // 线性模式：遍历所有字段
+        for (size_t i = 0; i < obj->array_size; i++) {
+            if (strcmp(entries[i].key, key) == 0) {
+                return entries[i].value;
+            }
         }
     }
     
@@ -437,75 +605,127 @@ Value* value_get_field_safe(Value *obj, Value *field_name) {
  * 行为：
  *   - 如果字段已存在，更新其值
  *   - 如果字段不存在，动态添加新字段
- * 
- * 注意：
- *   使用malloc分配新数组而不是realloc，因为原数组可能在栈上
+ *   - 当字段数超过阈值时，自动转换为哈希模式
  * 
  * 示例：
  *   value_set_field(obj, box_string("name"), box_string("Alice"))
  */
 Value* value_set_field(Value *obj, Value *field_name, Value *value) {
     if (!obj || !field_name) {
-        return obj ? obj : box_bool(0);
+        // 返回value而不是obj，避免与obj指针冲突导致双重释放
+        return value ? value_retain(value) : box_undef();
     }
     
     // 检查obj是否为对象类型
     if (obj->type != VALUE_OBJECT) {
-        return obj;
+        return value ? value_retain(value) : box_undef();
     }
     
     // 检查field_name是否为字符串
     if (field_name->type != VALUE_STRING) {
-        return obj;
+        return value ? value_retain(value) : box_undef();
     }
     
     // 特殊处理：如果 value 是 undef，则删除该键（类似 JS 的 delete）
     if (!value || value->type == VALUE_UNDEF) {
         value_delete_field(obj, field_name);
-        return obj;
+        return box_undef();
     }
     
     const char *key = (const char*)field_name->data.pointer;
     ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
     size_t count = obj->array_size;
     
+    // 检查是否是哈希模式
+    if (object_is_hash_mode(obj)) {
+        // === 哈希模式 ===
+        size_t capacity = obj->string_length;
+        unsigned long hash = hash_string(key);
+        
+        // 查找槽位
+        long slot = object_hash_find_slot(entries, capacity, key, hash);
+        if (slot < 0) {
+            // 表满，需要扩容
+            object_hash_resize(obj, capacity * 2);
+            entries = (ObjectEntry*)obj->data.pointer;
+            capacity = obj->string_length;
+            slot = object_hash_find_slot(entries, capacity, key, hash);
+        }
+        
+        if (entries[slot].key && entries[slot].key != OBJECT_TOMBSTONE) {
+            // 键已存在，更新值
+            if (entries[slot].value) value_release(entries[slot].value);
+            entries[slot].value = value;
+            if (value) value_retain(value);
+            return value_retain(value);
+        }
+        
+        // 新键，检查是否需要扩容（负载因子 > 75%）
+        if ((count + 1) * 4 > capacity * 3) {
+            object_hash_resize(obj, capacity * 2);
+            entries = (ObjectEntry*)obj->data.pointer;
+            capacity = obj->string_length;
+            slot = object_hash_find_slot(entries, capacity, key, hash);
+        }
+        
+        // 插入新键值对
+        entries[slot].key = strdup(key);
+        entries[slot].value = value;
+        if (value) value_retain(value);
+        obj->array_size = count + 1;
+        
+        return value_retain(value);
+    }
+    
+    // === 线性模式 ===
+    
     // 查找是否已存在该字段
     for (size_t i = 0; i < count; i++) {
         if (strcmp(entries[i].key, key) == 0) {
             // 字段已存在，更新值
-            // 释放旧值，retain 新值
             if (entries[i].value) value_release(entries[i].value);
             entries[i].value = value;
             if (value) value_retain(value);
-            return obj;  // 返回对象本身，支持链式调用
+            return value_retain(value);
         }
     }
     
     // 字段不存在，需要添加新字段
-    // 分配新数组（不能用realloc，因为原数组可能在栈上）
+    // 检查是否应该转换为哈希模式
+    if (count >= OBJECT_HASH_THRESHOLD) {
+        // 转换为哈希模式
+        object_convert_to_hash(obj);
+        // 递归调用以使用哈希模式插入
+        return value_set_field(obj, field_name, value);
+    }
+    
+    // 仍然使用线性模式，分配新数组
     ObjectEntry *new_entries = (ObjectEntry*)malloc(sizeof(ObjectEntry) * (count + 1));
     if (!new_entries) {
-        return obj;  // 内存分配失败，返回原对象
+        return value ? value_retain(value) : box_undef();
     }
     
     // 复制旧entries
     for (size_t i = 0; i < count; i++) {
-        new_entries[i].key = entries[i].key;      // 保持原key指针
-        new_entries[i].value = entries[i].value;  // 保持原value指针
+        new_entries[i].key = entries[i].key;
+        new_entries[i].value = entries[i].value;
     }
     
     // 添加新字段
-    new_entries[count].key = strdup(key);  // 复制字段名
+    new_entries[count].key = strdup(key);
     new_entries[count].value = value;
-    if (value) value_retain(value);  // retain 新值
+    if (value) value_retain(value);
+    
+    // 释放旧entries数组
+    if (entries) {
+        free(entries);
+    }
     
     // 更新对象指针和大小
     obj->data.pointer = new_entries;
     obj->array_size = count + 1;
     
-    // 注意：不释放旧entries，因为可能在栈上
-    
-    return obj;  // 返回对象本身，支持链式调用
+    return value_retain(value);
 }
 
 /*
@@ -517,9 +737,6 @@ Value* value_set_field(Value *obj, Value *field_name, Value *value) {
  * 
  * 返回：
  *   删除成功返回true，字段不存在或失败返回false
- * 
- * 注意：
- *   使用malloc分配新数组，不释放旧数组（可能在栈上）
  * 
  * 示例：
  *   value_delete_field(obj, box_string("name"))
@@ -543,6 +760,36 @@ Value* value_delete_field(Value *obj, Value *field_name) {
     ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
     size_t count = obj->array_size;
     
+    // 检查是否是哈希模式
+    if (object_is_hash_mode(obj)) {
+        // === 哈希模式：使用墓碑标记删除 ===
+        size_t capacity = obj->string_length;
+        unsigned long hash = hash_string(key);
+        size_t idx = hash % capacity;
+        size_t start = idx;
+        
+        do {
+            if (entries[idx].key == NULL) {
+                // 空槽，键不存在
+                return box_bool(0);
+            }
+            if (entries[idx].key != OBJECT_TOMBSTONE && strcmp(entries[idx].key, key) == 0) {
+                // 找到键，删除
+                free(entries[idx].key);
+                if (entries[idx].value) value_release(entries[idx].value);
+                entries[idx].key = OBJECT_TOMBSTONE;
+                entries[idx].value = NULL;
+                obj->array_size = count - 1;
+                return box_bool(1);
+            }
+            idx = (idx + 1) % capacity;
+        } while (idx != start);
+        
+        return box_bool(0);
+    }
+    
+    // === 线性模式 ===
+    
     // 查找要删除的字段
     int found_index = -1;
     for (size_t i = 0; i < count; i++) {
@@ -559,13 +806,16 @@ Value* value_delete_field(Value *obj, Value *field_name) {
     
     // 如果删除后为空对象
     if (count == 1) {
+        // 释放旧数组和被删除字段的key
+        if (entries[0].key) free(entries[0].key);
+        if (entries[0].value) value_release(entries[0].value);
+        free(entries);
         obj->data.pointer = NULL;
         obj->array_size = 0;
-        // 注意：不释放entries[0].key，可能是字面量
         return box_bool(1);
     }
     
-    // 分配新数组（不用realloc，因为可能在栈上）
+    // 分配新数组
     ObjectEntry *new_entries = (ObjectEntry*)malloc(sizeof(ObjectEntry) * (count - 1));
     if (!new_entries) {
         return box_bool(0);
@@ -579,8 +829,14 @@ Value* value_delete_field(Value *obj, Value *field_name) {
             new_entries[new_idx].value = entries[i].value;
             new_idx++;
         }
-        // 注意：不释放 entries[found_index].key，可能是字面量
     }
+    
+    // 释放被删除字段的key和value
+    if (entries[found_index].key) free(entries[found_index].key);
+    if (entries[found_index].value) value_release(entries[found_index].value);
+    
+    // 释放旧数组
+    free(entries);
     
     // 更新对象
     obj->data.pointer = new_entries;
@@ -611,6 +867,27 @@ Value* value_has_field(Value *obj, Value *field_name) {
     const char *key = (const char*)field_name->data.pointer;
     ObjectEntry *entries = (ObjectEntry*)obj->data.pointer;
     
+    // 检查是否是哈希模式
+    if (object_is_hash_mode(obj)) {
+        size_t capacity = obj->string_length;
+        unsigned long hash = hash_string(key);
+        size_t idx = hash % capacity;
+        size_t start = idx;
+        
+        do {
+            if (entries[idx].key == NULL) {
+                return box_bool(0);
+            }
+            if (entries[idx].key != OBJECT_TOMBSTONE && strcmp(entries[idx].key, key) == 0) {
+                return box_bool(1);
+            }
+            idx = (idx + 1) % capacity;
+        } while (idx != start);
+        
+        return box_bool(0);
+    }
+    
+    // 线性模式
     for (size_t i = 0; i < obj->array_size; i++) {
         if (strcmp(entries[i].key, key) == 0) {
             return box_bool(1);
@@ -639,8 +916,21 @@ Value* value_keys(Value *obj) {
     
     // 创建字符串数组
     Value **keys = (Value**)malloc(sizeof(Value*) * count);
-    for (size_t i = 0; i < count; i++) {
-        keys[i] = box_string(entries[i].key);
+    size_t key_idx = 0;
+    
+    if (object_is_hash_mode(obj)) {
+        // 哈希模式：遍历整个表，跳过空槽和墓碑
+        size_t capacity = obj->string_length;
+        for (size_t i = 0; i < capacity && key_idx < count; i++) {
+            if (entries[i].key && entries[i].key != OBJECT_TOMBSTONE) {
+                keys[key_idx++] = box_string(entries[i].key);
+            }
+        }
+    } else {
+        // 线性模式
+        for (size_t i = 0; i < count; i++) {
+            keys[key_idx++] = box_string(entries[i].key);
+        }
     }
     
     return box_array(keys, count);
@@ -668,8 +958,21 @@ Value* value_values(Value *obj) {
     
     // 创建值数组
     Value **values = (Value**)malloc(sizeof(Value*) * count);
-    for (size_t i = 0; i < count; i++) {
-        values[i] = entries[i].value;
+    size_t val_idx = 0;
+    
+    if (object_is_hash_mode(obj)) {
+        // 哈希模式：遍历整个表，跳过空槽和墓碑
+        size_t capacity = obj->string_length;
+        for (size_t i = 0; i < capacity && val_idx < count; i++) {
+            if (entries[i].key && entries[i].key != OBJECT_TOMBSTONE) {
+                values[val_idx++] = entries[i].value;
+            }
+        }
+    } else {
+        // 线性模式
+        for (size_t i = 0; i < count; i++) {
+            values[val_idx++] = entries[i].value;
+        }
     }
     
     return box_array(values, count);
@@ -697,12 +1000,27 @@ Value* value_entries(Value *obj) {
     
     // 创建二维数组
     Value **entries_arr = (Value**)malloc(sizeof(Value*) * count);
-    for (size_t i = 0; i < count; i++) {
-        // 每个元素是 [key, value] 数组
-        Value **pair = (Value**)malloc(sizeof(Value*) * 2);
-        pair[0] = box_string(obj_entries[i].key);
-        pair[1] = obj_entries[i].value;
-        entries_arr[i] = box_array(pair, 2);
+    size_t entry_idx = 0;
+    
+    if (object_is_hash_mode(obj)) {
+        // 哈希模式：遍历整个表，跳过空槽和墓碑
+        size_t capacity = obj->string_length;
+        for (size_t i = 0; i < capacity && entry_idx < count; i++) {
+            if (obj_entries[i].key && obj_entries[i].key != OBJECT_TOMBSTONE) {
+                Value **pair = (Value**)malloc(sizeof(Value*) * 2);
+                pair[0] = box_string(obj_entries[i].key);
+                pair[1] = obj_entries[i].value;
+                entries_arr[entry_idx++] = box_array(pair, 2);
+            }
+        }
+    } else {
+        // 线性模式
+        for (size_t i = 0; i < count; i++) {
+            Value **pair = (Value**)malloc(sizeof(Value*) * 2);
+            pair[0] = box_string(obj_entries[i].key);
+            pair[1] = obj_entries[i].value;
+            entries_arr[entry_idx++] = box_array(pair, 2);
+        }
     }
     
     return box_array(entries_arr, count);
@@ -726,14 +1044,14 @@ Value* value_entries(Value *obj) {
  */
 Value* value_set_index(Value *obj, Value *index, Value *value) {
     if (!obj || !index) {
-        return box_bool(0);
+        return value ? value_retain(value) : box_undef();
     }
     
     // 如果是数组
     if (obj->type == VALUE_ARRAY && index->type == VALUE_NUMBER) {
         double idx_double = index->data.number;
         if (idx_double < 0) {
-            return box_bool(0);  // 负索引不允许
+            return value ? value_retain(value) : box_undef();  // 负索引不允许
         }
         
         size_t idx = (size_t)idx_double;
@@ -745,7 +1063,7 @@ Value* value_set_index(Value *obj, Value *index, Value *value) {
             size_t new_size = idx + 1;
             Value **new_elements = (Value**)malloc(sizeof(Value*) * new_size);
             if (!new_elements) {
-                return box_bool(0);  // 内存分配失败
+                return value ? value_retain(value) : box_undef();  // 内存分配失败
             }
             
             // 复制旧元素
@@ -768,9 +1086,18 @@ Value* value_set_index(Value *obj, Value *index, Value *value) {
             count = new_size;
         }
         
-        // 数组元素赋值 undef 就是设置为 undef（不删除元素，保持数组长度）
-        elements[idx] = value ? value : box_undef();
-        return box_bool(1);
+        // 数组元素赋值：释放旧值，retain新值
+        if (elements[idx]) {
+            value_release(elements[idx]);
+        }
+        if (value) {
+            value_retain(value);
+            elements[idx] = value;
+        } else {
+            elements[idx] = box_undef();
+        }
+        // 返回value的引用（与value_set_field保持一致）
+        return value ? value_retain(value) : box_undef();
     }
     
     // 如果是对象且索引是字符串
@@ -779,7 +1106,8 @@ Value* value_set_index(Value *obj, Value *index, Value *value) {
         return value_set_field(obj, index, value);
     }
     
-    return box_bool(0);
+    // 类型不匹配，返回value（保持一致的返回语义）
+    return value ? value_retain(value) : box_undef();
 }
 
 /* ============================================================================
