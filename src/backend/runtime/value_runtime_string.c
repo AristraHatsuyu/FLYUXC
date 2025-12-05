@@ -172,8 +172,45 @@ Value* value_char_at(Value *str, Value *index) {
 }
 
 /*
+ * 快速检查字符串是否可能为纯 ASCII
+ * 通过采样检查来避免 O(n) 扫描
+ * 检查首、中、尾部和一些采样点
+ */
+static int is_likely_pure_ascii(const char *s, size_t byte_len) {
+    if (byte_len == 0) return 1;
+    
+    // 检查关键位置
+    if ((unsigned char)s[0] > 127) return 0;
+    if ((unsigned char)s[byte_len - 1] > 127) return 0;
+    
+    // 对于短字符串，完整检查
+    if (byte_len <= 256) {
+        for (size_t i = 0; i < byte_len; i++) {
+            if ((unsigned char)s[i] > 127) return 0;
+        }
+        return 1;
+    }
+    
+    // 对于长字符串，采样检查
+    // 检查首尾各 64 字节
+    for (size_t i = 0; i < 64; i++) {
+        if ((unsigned char)s[i] > 127) return 0;
+        if ((unsigned char)s[byte_len - 1 - i] > 127) return 0;
+    }
+    
+    // 检查中间和一些采样点
+    size_t step = byte_len / 32;
+    for (size_t i = 64; i < byte_len - 64; i += step) {
+        if ((unsigned char)s[i] > 127) return 0;
+    }
+    
+    return 1;
+}
+
+/*
  * substr(str, start, length) - 获取子字符串
  * start 和 length 都是 UTF-8 字符索引，不是字节索引
+ * 优化：对于纯 ASCII 字符串使用 O(1) 快速路径
  */
 Value* value_substr(Value *str, Value *start, Value *length) {
     set_runtime_status(FLYUX_OK, NULL);
@@ -189,8 +226,34 @@ Value* value_substr(Value *str, Value *start, Value *length) {
     }
     
     const char *s = (const char*)str->data.pointer;
-    size_t char_count = utf8_strlen(s);
+    size_t byte_length = str->string_length;
     int start_idx = (int)start->data.number;
+    
+    // 快速路径：纯 ASCII 字符串，字符数 = 字节数
+    if (is_likely_pure_ascii(s, byte_length)) {
+        size_t char_count = byte_length;
+        int len = (length && length->type == VALUE_NUMBER) 
+                  ? (int)length->data.number 
+                  : (int)char_count - start_idx;
+        
+        if (start_idx < 0 || start_idx >= (int)char_count) {
+            return box_string("");
+        }
+        
+        if (len < 0) len = 0;
+        if (start_idx + len > (int)char_count) {
+            len = (int)char_count - start_idx;
+        }
+        
+        char *result = (char*)malloc(len + 1);
+        memcpy(result, s + start_idx, len);
+        result[len] = '\0';
+        
+        return box_string_owned(result);
+    }
+    
+    // 慢速路径：UTF-8 字符串
+    size_t char_count = utf8_strlen(s);
     int len = (length && length->type == VALUE_NUMBER) 
               ? (int)length->data.number 
               : (int)char_count - start_idx;

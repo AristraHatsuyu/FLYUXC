@@ -225,7 +225,7 @@
   - **高阶函数 (8)**：map, filter, reduce, sort, find, findIndex, every, some
   - **文件 (15)**：readFile, writeFile, appendFile, readBytes, writeBytes, fileExists, deleteFile, getFileSize, readLines, renameFile, copyFile, createDir, removeDir, listDir, dirExists
   - **JSON (2)**：parseJSON, toJSON
-  - **时间 (3)**：time, sleep, date
+  - **时间 (3)**：now, time, sleep, date
   - **系统 (3)**：exit, getEnv, setEnv
   - **工具 (6)**：range, assert, lastStatus, lastError, clearError, isOk
 

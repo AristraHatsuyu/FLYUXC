@@ -114,29 +114,75 @@ ObjectField *find_field(ObjectMetadata *obj_meta, const char *field_name) {
     return NULL;
 }
 
-/* 注册变量到符号表 */
+/* 注册变量到符号表（使用当前作用域层级） */
 void register_symbol(CodeGen *gen, const char *var_name) {
     SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
     entry->name = strdup(var_name);
+    entry->scope_level = gen->scope_level;
+    entry->ir_name = strdup(var_name);  // 默认IR名称与变量名相同
     entry->next = gen->symbols;
     gen->symbols = entry;
+}
+
+/* 注册变量并返回IR名称（支持遮蔽时生成唯一名称） */
+const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name) {
+    SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+    entry->name = strdup(var_name);
+    entry->scope_level = gen->scope_level;
+    
+    // 检查是否已存在同名变量（任何层级）
+    // 如果存在，必须生成唯一的 IR 名称避免 LLVM 重复定义错误
+    int needs_shadow = 0;
+    for (SymbolEntry *e = gen->symbols; e != NULL; e = e->next) {
+        if (strcmp(e->name, var_name) == 0) {
+            needs_shadow = 1;
+            if (getenv("DEBUG_CODEGEN")) {
+                fprintf(stderr, "[DEBUG register_symbol_with_shadow] %s: found existing at scope %d, needs_shadow=1\n", 
+                        var_name, e->scope_level);
+            }
+            break;
+        }
+    }
+    
+    if (needs_shadow) {
+        // 生成唯一的IR名称
+        char *ir_name = (char *)malloc(strlen(var_name) + 16);
+        sprintf(ir_name, "%s_shadow%d", var_name, gen->shadow_count++);
+        entry->ir_name = ir_name;
+        if (getenv("DEBUG_CODEGEN")) {
+            fprintf(stderr, "[DEBUG register_symbol_with_shadow] %s -> %s (shadowed)\n", var_name, ir_name);
+        }
+    } else {
+        entry->ir_name = strdup(var_name);
+        if (getenv("DEBUG_CODEGEN")) {
+            fprintf(stderr, "[DEBUG register_symbol_with_shadow] %s -> %s (new)\n", var_name, entry->ir_name);
+        }
+    }
+    
+    entry->next = gen->symbols;
+    gen->symbols = entry;
+    
+    return entry->ir_name;
 }
 
 /* 注册全局变量到全局符号表 */
 void register_global(CodeGen *gen, const char *var_name) {
     SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
     entry->name = strdup(var_name);
+    entry->scope_level = 0;
+    entry->ir_name = strdup(var_name);
     entry->next = gen->globals;
     gen->globals = entry;
 }
 
-/* 检查变量是否已定义 */
+/* 检查变量是否已定义（在任意层级） */
 int is_symbol_defined(CodeGen *gen, const char *var_name) {
     if (getenv("DEBUG_CODEGEN")) {
-        fprintf(stderr, "[DEBUG is_symbol_defined] Looking for: %s\n", var_name);
+        fprintf(stderr, "[DEBUG is_symbol_defined] Looking for: %s (current scope=%d)\n", 
+                var_name, gen->scope_level);
         fprintf(stderr, "[DEBUG is_symbol_defined] Symbols list:\n");
         for (SymbolEntry *e = gen->symbols; e != NULL; e = e->next) {
-            fprintf(stderr, "  - %s\n", e->name);
+            fprintf(stderr, "  - %s (scope=%d, ir=%s)\n", e->name, e->scope_level, e->ir_name);
         }
     }
     for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
@@ -153,6 +199,33 @@ int is_symbol_defined(CodeGen *gen, const char *var_name) {
     return 0;
 }
 
+/* 检查变量是否在当前作用域层级已定义（用于检测重复声明） */
+int is_symbol_defined_in_current_scope(CodeGen *gen, const char *var_name) {
+    for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0 && entry->scope_level == gen->scope_level) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 获取变量的IR名称（考虑遮蔽，返回最内层作用域的名称） */
+const char *get_symbol_ir_name(CodeGen *gen, const char *var_name) {
+    // 符号表是后进先出，所以第一个匹配的就是最内层
+    for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return entry->ir_name;
+        }
+    }
+    // 检查全局变量
+    for (SymbolEntry *entry = gen->globals; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return entry->ir_name;
+        }
+    }
+    return var_name;  // 回退到原始名称
+}
+
 /* 检查变量是否是全局变量 */
 int is_global_var(CodeGen *gen, const char *var_name) {
     for (SymbolEntry *entry = gen->globals; entry != NULL; entry = entry->next) {
@@ -161,6 +234,87 @@ int is_global_var(CodeGen *gen, const char *var_name) {
         }
     }
     return 0;
+}
+
+/* 进入新的作用域 */
+void scope_enter(CodeGen *gen) {
+    gen->scope_level++;
+    if (getenv("DEBUG_CODEGEN")) {
+        fprintf(stderr, "[DEBUG scope_enter] Entering scope level %d\n", gen->scope_level);
+    }
+}
+
+/* 退出当前作用域（移除该层级的符号） */
+void scope_exit(CodeGen *gen) {
+    if (getenv("DEBUG_CODEGEN")) {
+        fprintf(stderr, "[DEBUG scope_exit] Exiting scope level %d\n", gen->scope_level);
+    }
+    
+    // 从符号表中移除当前作用域层级的所有符号
+    SymbolEntry **ptr = &gen->symbols;
+    while (*ptr != NULL) {
+        SymbolEntry *entry = *ptr;
+        if (entry->scope_level == gen->scope_level) {
+            *ptr = entry->next;
+            if (getenv("DEBUG_CODEGEN")) {
+                fprintf(stderr, "[DEBUG scope_exit] Removing symbol: %s (ir=%s)\n", 
+                        entry->name, entry->ir_name);
+            }
+            free(entry->name);
+            free(entry->ir_name);
+            free(entry);
+        } else {
+            ptr = &entry->next;
+        }
+    }
+    
+    gen->scope_level--;
+}
+
+/* 生成作用域退出时的变量清理代码 */
+void scope_generate_exit_cleanup(CodeGen *gen) {
+    // 释放当前作用域层级的所有变量
+    for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (entry->scope_level == gen->scope_level) {
+            char *temp = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
+                    temp, entry->ir_name);
+            fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", temp);
+            // 释放后设置为 null，避免悬空指针被再次释放
+            fprintf(gen->code_buf, "  store %%struct.Value* null, %%struct.Value** %%%s\n", entry->ir_name);
+            free(temp);
+        }
+    }
+}
+
+/* 检查 IR 名称是否已被分配（用于避免重复 alloca） */
+int is_ir_name_allocated(CodeGen *gen, const char *ir_name) {
+    for (AllocatedIRName *entry = gen->allocated_ir_names; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->ir_name, ir_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 标记 IR 名称已被分配 */
+void mark_ir_name_allocated(CodeGen *gen, const char *ir_name) {
+    AllocatedIRName *entry = (AllocatedIRName *)malloc(sizeof(AllocatedIRName));
+    entry->ir_name = strdup(ir_name);
+    entry->next = gen->allocated_ir_names;
+    gen->allocated_ir_names = entry;
+}
+
+/* 清除已分配 IR 名称集合（在函数退出时调用） */
+void clear_allocated_ir_names(CodeGen *gen) {
+    AllocatedIRName *entry = gen->allocated_ir_names;
+    while (entry) {
+        AllocatedIRName *next = entry->next;
+        free(entry->ir_name);
+        free(entry);
+        entry = next;
+    }
+    gen->allocated_ir_names = NULL;
 }
 
 /* 注册函数名到函数表 */
@@ -228,6 +382,16 @@ void scope_generate_cleanup(CodeGen *gen, ScopeTracker *scope) {
     scope_generate_cleanup_except(gen, scope, NULL);
 }
 
+/* 检查 IR 名称是否仍在 symbols 列表中（用于避免双重释放） */
+static int is_ir_name_in_symbols(CodeGen *gen, const char *ir_name) {
+    for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->ir_name, ir_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* 生成作用域退出清理代码，但排除指定变量（用于返回值保护） */
 void scope_generate_cleanup_except(CodeGen *gen, ScopeTracker *scope, const char *except_var) {
     if (!gen || !scope) return;
@@ -238,6 +402,13 @@ void scope_generate_cleanup_except(CodeGen *gen, ScopeTracker *scope, const char
         // 如果这个变量是排除变量，跳过
         if (except_var && strcmp(entry->name, except_var) == 0) {
             fprintf(gen->code_buf, "  ; skip release for return value: %s\n", entry->name);
+            continue;
+        }
+        
+        // 如果变量已经从 symbols 列表中移除（已被内层作用域清理），跳过
+        // 这避免了循环变量被双重释放的问题
+        if (!is_ir_name_in_symbols(gen, entry->name)) {
+            fprintf(gen->code_buf, "  ; skip release (already freed by inner scope): %s\n", entry->name);
             continue;
         }
         

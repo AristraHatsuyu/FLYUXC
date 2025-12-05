@@ -29,6 +29,8 @@ typedef struct ObjectMetadata {
 /* 符号表条目 - 记录已定义的变量 */
 typedef struct SymbolEntry {
     char *name;             /* 变量名 */
+    int scope_level;        /* 作用域层级（0=全局/函数顶层，递增表示嵌套） */
+    char *ir_name;          /* LLVM IR 中的变量名（用于遮蔽时生成唯一名称） */
     struct SymbolEntry *next;
 } SymbolEntry;
 
@@ -67,10 +69,17 @@ typedef struct TempValueStack {
 /* 前向声明 */
 typedef struct CapturedVars CapturedVars;
 
+/* 已分配 IR 名称集合（用于避免重复 alloca） */
+typedef struct AllocatedIRName {
+    char *ir_name;
+    struct AllocatedIRName *next;
+} AllocatedIRName;
+
 /* 代码生成器结构 */
 typedef struct CodeGen {
     FILE *output;           /* 最终输出文件 */
     FILE *globals_buf;      /* 全局声明缓冲区 */
+    FILE *strings_buf;      /* 字符串常量缓冲区 */
     FILE *code_buf;         /* 代码缓冲区 */
     FILE *entry_alloca_buf; /* 函数入口alloca缓冲区 */
     int temp_count;         /* 临时变量计数器 */
@@ -80,6 +89,8 @@ typedef struct CodeGen {
     ObjectMetadata *objects; /* 对象元数据链表 */
     SymbolEntry *symbols;   /* 符号表 - 已定义的变量 */
     SymbolEntry *globals;   /* 全局变量表 - has_main时使用LLVM全局变量 */
+    int scope_level;        /* 当前作用域层级 */
+    int shadow_count;       /* 遮蔽变量计数器（用于生成唯一IR名称） */
     const char *current_var_name;  /* 当前正在赋值的变量名（用于数组/对象跟踪） */
     int in_try_catch;       /* 是否在 Try-Catch 块中 */
     char *try_catch_label;  /* 当前 Try-Catch 的 catch 标签 */
@@ -100,6 +111,7 @@ typedef struct CodeGen {
     CapturedVars *current_captured;  /* 当前正在生成的闭包的捕获变量 */
     SymbolEntry *functions;  /* 函数名表 - 顶层定义的函数 */
     struct ClosureMapping *closure_mappings;  /* 变量到闭包函数的映射 */
+    AllocatedIRName *allocated_ir_names;  /* 当前函数中已分配的 IR 名称 */
 } CodeGen;
 
 /* 闭包映射 - 追踪哪些变量存储了闭包函数 */

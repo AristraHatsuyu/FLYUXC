@@ -249,8 +249,8 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     "toNum", "toStr", "toBl", "toInt", "toFloat", "typeOf",
     "isNum", "isStr", "isBl", "isArr", "isObj", "isNull", "isUndef",
     
-    /* 时间函数 (6) */
-    "now", "sleep", "dateStr", "time", "date",
+    /* 时间函数 (4) */
+    "now", "sleep", "time", "date",
     
     /* 系统操作 (4) */
     "exit", "getEnv", "setEnv",

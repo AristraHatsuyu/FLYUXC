@@ -4,6 +4,257 @@
 #include <stdio.h>
 
 /* ============================================================================
+ * 内联数字运算辅助函数
+ * 生成直接的 LLVM 指令而不是调用运行时函数
+ * ============================================================================ */
+
+/* 生成内联的数字减法: unbox -> fsub -> box */
+static char* gen_inline_num_subtract(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *sub_result = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    // unbox 两个操作数
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    // 直接用 LLVM fsub 指令
+    fprintf(gen->code_buf, "  %s = fsub double %s, %s\n", sub_result, left_num, right_num);
+    // box 结果
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %s)\n", result, sub_result);
+    
+    free(left_num);
+    free(right_num);
+    free(sub_result);
+    
+    return result;
+}
+
+/* 生成内联的数字加法: unbox -> fadd -> box */
+static char* gen_inline_num_add(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *add_result = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fadd double %s, %s\n", add_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %s)\n", result, add_result);
+    
+    free(left_num);
+    free(right_num);
+    free(add_result);
+    
+    return result;
+}
+
+/* 生成内联的数字乘法: unbox -> fmul -> box */
+static char* gen_inline_num_multiply(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *mul_result = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fmul double %s, %s\n", mul_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %s)\n", result, mul_result);
+    
+    free(left_num);
+    free(right_num);
+    free(mul_result);
+    
+    return result;
+}
+
+/* 生成内联的数字除法: unbox -> fdiv -> box */
+static char* gen_inline_num_divide(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *div_result = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fdiv double %s, %s\n", div_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %s)\n", result, div_result);
+    
+    free(left_num);
+    free(right_num);
+    free(div_result);
+    
+    return result;
+}
+
+/* 生成内联的数字比较 (小于): unbox -> fcmp olt -> box_bool */
+static char* gen_inline_num_less_than(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *cmp_result = new_temp(gen);
+    char *cmp_i32 = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fcmp olt double %s, %s\n", cmp_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", cmp_i32, cmp_result);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, cmp_i32);
+    
+    free(left_num);
+    free(right_num);
+    free(cmp_result);
+    free(cmp_i32);
+    
+    return result;
+}
+
+/* 生成内联的数字比较 (大于): unbox -> fcmp ogt -> box_bool */
+static char* gen_inline_num_greater_than(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *cmp_result = new_temp(gen);
+    char *cmp_i32 = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fcmp ogt double %s, %s\n", cmp_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", cmp_i32, cmp_result);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, cmp_i32);
+    
+    free(left_num);
+    free(right_num);
+    free(cmp_result);
+    free(cmp_i32);
+    
+    return result;
+}
+
+/* 生成内联的数字比较 (小于等于): unbox -> fcmp ole -> box_bool */
+static char* gen_inline_num_less_equal(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *cmp_result = new_temp(gen);
+    char *cmp_i32 = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fcmp ole double %s, %s\n", cmp_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", cmp_i32, cmp_result);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, cmp_i32);
+    
+    free(left_num);
+    free(right_num);
+    free(cmp_result);
+    free(cmp_i32);
+    
+    return result;
+}
+
+/* 生成内联的数字比较 (大于等于): unbox -> fcmp oge -> box_bool */
+static char* gen_inline_num_greater_equal(CodeGen *gen, const char *left, const char *right) {
+    char *left_num = new_temp(gen);
+    char *right_num = new_temp(gen);
+    char *cmp_result = new_temp(gen);
+    char *cmp_i32 = new_temp(gen);
+    char *result = new_temp(gen);
+    
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", right_num, right);
+    fprintf(gen->code_buf, "  %s = fcmp oge double %s, %s\n", cmp_result, left_num, right_num);
+    fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", cmp_i32, cmp_result);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, cmp_i32);
+    
+    free(left_num);
+    free(right_num);
+    free(cmp_result);
+    free(cmp_i32);
+    
+    return result;
+}
+
+/* 生成带类型检查快速路径的加法
+ * 如果两个操作数都是数字 (type == 1)，则使用 LLVM fadd
+ * 否则回退到 value_add 支持字符串拼接
+ */
+static char* gen_inline_add_with_type_check(CodeGen *gen, const char *left, const char *right) {
+    // 检查左操作数类型
+    char *left_type = new_temp(gen);
+    char *right_type = new_temp(gen);
+    char *is_left_num = new_temp(gen);
+    char *is_right_num = new_temp(gen);
+    char *both_num = new_temp(gen);
+    
+    // 读取类型字段 (Value 结构体第一个字段是 type，i32)
+    fprintf(gen->code_buf, "  %s = getelementptr inbounds %%struct.Value, %%struct.Value* %s, i32 0, i32 0\n", left_type, left);
+    char *left_type_val = new_temp(gen);
+    fprintf(gen->code_buf, "  %s = load i32, i32* %s\n", left_type_val, left_type);
+    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_left_num, left_type_val);  // VALUE_NUMBER = 0
+    
+    fprintf(gen->code_buf, "  %s = getelementptr inbounds %%struct.Value, %%struct.Value* %s, i32 0, i32 0\n", right_type, right);
+    char *right_type_val = new_temp(gen);
+    fprintf(gen->code_buf, "  %s = load i32, i32* %s\n", right_type_val, right_type);
+    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_right_num, right_type_val);  // VALUE_NUMBER = 0
+    
+    fprintf(gen->code_buf, "  %s = and i1 %s, %s\n", both_num, is_left_num, is_right_num);
+    
+    // 创建分支
+    char *fast_label = new_label(gen);
+    char *slow_label = new_label(gen);
+    char *merge_label = new_label(gen);
+    
+    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", both_num, fast_label, slow_label);
+    
+    // 快速路径：两个都是数字
+    fprintf(gen->code_buf, "%s:\n", fast_label);
+    char *fast_left_num = new_temp(gen);
+    char *fast_right_num = new_temp(gen);
+    char *fast_add = new_temp(gen);
+    char *fast_result = new_temp(gen);
+    
+    // 直接从 data.number 读取（第5个字段，偏移 = 4*i32 = 16 bytes，但我们用 unbox_number 更安全）
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", fast_left_num, left);
+    fprintf(gen->code_buf, "  %s = call double @unbox_number(%%struct.Value* %s)\n", fast_right_num, right);
+    fprintf(gen->code_buf, "  %s = fadd double %s, %s\n", fast_add, fast_left_num, fast_right_num);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double %s)\n", fast_result, fast_add);
+    fprintf(gen->code_buf, "  br label %%%s\n", merge_label);
+    
+    // 慢速路径：调用 value_add
+    fprintf(gen->code_buf, "%s:\n", slow_label);
+    char *slow_result = new_temp(gen);
+    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n",
+            slow_result, left, right);
+    fprintf(gen->code_buf, "  br label %%%s\n", merge_label);
+    
+    // 合并
+    fprintf(gen->code_buf, "%s:\n", merge_label);
+    char *result = new_temp(gen);
+    fprintf(gen->code_buf, "  %s = phi %%struct.Value* [ %s, %%%s ], [ %s, %%%s ]\n",
+            result, fast_result, fast_label, slow_result, slow_label);
+    
+    // 清理
+    free(left_type);
+    free(right_type);
+    free(left_type_val);
+    free(right_type_val);
+    free(is_left_num);
+    free(is_right_num);
+    free(both_num);
+    free(fast_label);
+    free(slow_label);
+    free(merge_label);
+    free(fast_left_num);
+    free(fast_right_num);
+    free(fast_add);
+    free(fast_result);
+    free(slow_result);
+    
+    return result;
+}
+
+/* ============================================================================
  * 表达式代码生成
  * ============================================================================ */
 
@@ -49,7 +300,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             
             // 声明全局字符串常量
             // IR中\0A等转义符会被解析为单字节，所以数组大小应该是原始长度+1
-            fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+            fprintf(gen->strings_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
                     str_label, len + 1, escaped);
             
             // 获取指针
@@ -99,6 +350,8 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 简单处理：假设所有函数都返回 Value* 并接受 Value* 参数
                 // 这里我们需要知道函数的参数数量，但暂时用可变参数处理
                 fprintf(gen->code_buf, "...)* @%s to i8*), i32 0, %%struct.Value** null)\n", id->name);
+                // 注册为中间值
+                temp_value_register(gen, temp);
                 return temp;
             }
             
@@ -133,15 +386,25 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 use_global = 0;
             }
             
+            // 获取变量的 IR 名称（考虑遮蔽）
+            const char *ir_name = get_symbol_ir_name(gen, id->name);
+            
             if (use_global) {
                 // 全局变量访问 - 使用 @var_name
                 fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** @%s\n", 
-                        temp, id->name);
+                        temp, ir_name);
             } else {
                 // 局部变量访问 - 使用 %var_name
                 fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", 
-                        temp, id->name);
+                        temp, ir_name);
             }
+            
+            // P2 Fix: 对于从变量加载的值，需要 retain，使调用者拥有一个引用
+            // 这样表达式结果遵循统一的"调用者拥有"规则
+            fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %s)\n", temp);
+            
+            // 注册为中间值，确保在表达式结束后被释放
+            temp_value_register(gen, temp);
             
             return temp;
         }
@@ -172,100 +435,70 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             ASTBinaryExpr *expr = (ASTBinaryExpr *)node->data;
             char *left = codegen_expr(gen, expr->left);
             char *right = codegen_expr(gen, expr->right);
-            char *result = new_temp(gen);
+            char *result = NULL;
             
             switch (expr->op) {
                 case TK_PLUS:
-                    // 使用 value_add 支持数字和字符串拼接
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            result, left, right);
+                    // 带类型检查的快速路径：数字直接用 fadd，字符串回退到 value_add
+                    result = gen_inline_add_with_type_check(gen, left, right);
                     temp_value_register(gen, result);  // 注册结果为中间值
                     break;
                 case TK_MINUS:
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_subtract(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            result, left, right);
+                    // 内联数字减法
+                    result = gen_inline_num_subtract(gen, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_STAR:
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_multiply(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            result, left, right);
+                    // 内联数字乘法
+                    result = gen_inline_num_multiply(gen, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_SLASH:
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_divide(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            result, left, right);
+                    // 内联数字除法
+                    result = gen_inline_num_divide(gen, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_POWER:
+                    result = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_power(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_PERCENT:
+                    result = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_modulo(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_LT:
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_less_than(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            result, left, right);
+                    // 内联小于比较
+                    result = gen_inline_num_less_than(gen, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_GT:
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_greater_than(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            result, left, right);
+                    // 内联大于比较
+                    result = gen_inline_num_greater_than(gen, left, right);
                     temp_value_register(gen, result);
                     break;
-                case TK_LE: {
-                    // <= 使用 !(a > b)
-                    char *gt = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_greater_than(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            gt, left, right);
-                    // 对结果取反（使用 value_is_truthy 和 box_bool）
-                    char *truthy = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, gt);
-                    // 释放中间 Value* gt
-                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", gt);
-                    char *inverted = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", inverted, truthy);
-                    char *as_i32 = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, inverted);
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                case TK_LE:
+                    // 内联小于等于比较
+                    result = gen_inline_num_less_equal(gen, left, right);
                     temp_value_register(gen, result);
-                    free(gt);
-                    free(truthy);
-                    free(inverted);
-                    free(as_i32);
                     break;
-                }
-                case TK_GE: {
-                    // >= 使用 !(a < b)
-                    char *lt = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_less_than(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            lt, left, right);
-                    char *truthy = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", truthy, lt);
-                    // 释放中间 Value* lt
-                    fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", lt);
-                    char *inverted = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", inverted, truthy);
-                    char *as_i32 = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = zext i1 %s to i32\n", as_i32, inverted);
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_bool(i32 %s)\n", result, as_i32);
+                case TK_GE:
+                    // 内联大于等于比较
+                    result = gen_inline_num_greater_equal(gen, left, right);
                     temp_value_register(gen, result);
-                    free(lt);
-                    free(truthy);
-                    free(inverted);
-                    free(as_i32);
                     break;
-                }
                 case TK_EQ_EQ:
+                    result = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_equals(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             result, left, right);
                     temp_value_register(gen, result);
                     break;
                 case TK_BANG_EQ: {
                     // != 使用 !value_equals
+                    result = new_temp(gen);
                     char *eq = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_equals(%%struct.Value* %s, %%struct.Value* %s)\n", 
                             eq, left, right);
@@ -287,6 +520,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
                 case TK_AND_AND: {
                     // && : 逻辑与
+                    result = new_temp(gen);  // 分配结果变量
                     char *left_truthy = new_temp(gen);
                     char *right_truthy = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
@@ -313,6 +547,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
                 case TK_OR_OR: {
                     // || : 逻辑或
+                    result = new_temp(gen);  // 分配结果变量
                     char *left_truthy = new_temp(gen);
                     char *right_truthy = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", 
@@ -577,7 +812,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     // println() 无参数时只输出换行
                     // 创建换行字符串常量
                     char *newline_label = new_string_label(gen);
-                    fprintf(gen->globals_buf, "%s = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n", newline_label);
+                    fprintf(gen->strings_buf, "%s = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n", newline_label);
                     fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* %s, i32 0, i32 0))\n", newline_label);
                     free(newline_label);
                 } else {
@@ -589,7 +824,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     }
                     // 最后输出一个换行
                     char *newline_label = new_string_label(gen);
-                    fprintf(gen->globals_buf, "%s = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n", newline_label);
+                    fprintf(gen->strings_buf, "%s = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n", newline_label);
                     fprintf(gen->code_buf, "  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* %s, i32 0, i32 0))\n", newline_label);
                     free(newline_label);
                 }
@@ -2224,7 +2459,14 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 时间函数 (Time Functions)
             // ========================================
             
-            // time() - 获取Unix时间戳
+            // now() - 获取毫秒级时间戳
+            if (strcmp(callee->name, "now") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_now()\n", result);
+                return result;
+            }
+            
+            // time() - 获取Unix时间戳(秒)
             if (strcmp(callee->name, "time") == 0 && call->arg_count == 0) {
                 char *result = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_time()\n", result);
@@ -2792,14 +3034,13 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", should_push, loop_push, loop_next);
                 
                 fprintf(gen->code_buf, "%s:\n", loop_push);
-                // 加载当前结果数组，push 后更新
+                // 加载当前结果数组，原地 push（push 已改为原地修改语义）
                 char *cur_result = new_temp(gen);
-                char *new_result = new_temp(gen);
+                char *push_ret = new_temp(gen);
                 fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s\n", cur_result, result_arr_ptr);
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_push(%%struct.Value* %s, %%struct.Value* %s)\n", new_result, cur_result, elem);
-                // Release old array after push (value_push creates a new array)
-                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", cur_result);
-                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", new_result, result_arr_ptr);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_push(%%struct.Value* %s, %%struct.Value* %s)\n", push_ret, cur_result, elem);
+                // push 返回新长度，release 返回值
+                fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", push_ret);
                 fprintf(gen->code_buf, "  br label %%%s\n", loop_next);
                 
                 fprintf(gen->code_buf, "%s:\n", loop_next);
@@ -3499,7 +3740,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                         // 普通属性：调用 set_field，原地修改并返回同一对象
                         char *key_label = new_string_label(gen);
                         size_t key_len = strlen(prop->key);
-                        fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                        fprintf(gen->strings_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
                                 key_label, key_len + 1, prop->key);
                         
                         char *key_ptr = new_temp(gen);
@@ -3521,11 +3762,24 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
-            // 无展开：使用编译时静态分配
-            // 分配 ObjectEntry 数组
+            // 无展开：使用堆分配（避免循环中 alloca 导致栈溢出）
+            // 声明 malloc 和 free（如果还没声明）
+            // 注意：LLVM 模块级别已有 malloc/free 声明
+            
+            // 计算 ObjectEntry 数组大小
+            // ObjectEntry 结构: { i8* key, Value* value } = 16 bytes on 64-bit
             char *entries_alloc = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.ObjectEntry]  ; allocate object entries\n",
-                    entries_alloc, prop_count);
+            char *entries_size = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = mul i64 %zu, 16  ; sizeof(ObjectEntry) * count\n",
+                    entries_size, prop_count);
+            fprintf(gen->code_buf, "  %s = call i8* @malloc(i64 %s)\n",
+                    entries_alloc, entries_size);
+            
+            // 转换为 ObjectEntry* 类型
+            char *entries_typed = new_temp(gen);
+            fprintf(gen->code_buf, "  %s = bitcast i8* %s to %%struct.ObjectEntry*\n",
+                    entries_typed, entries_alloc);
+            free(entries_size);
             
             // 用于注册对象元数据的字段列表
             ObjectField *field_head = NULL;
@@ -3538,7 +3792,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 生成键字符串
                 char *key_label = new_string_label(gen);
                 size_t key_len = strlen(prop->key);
-                fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+                fprintf(gen->strings_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
                         key_label, key_len + 1, prop->key);
                 
                 char *key_ptr = new_temp(gen);
@@ -3548,10 +3802,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 计算属性值
                 char *value = codegen_expr(gen, prop->value);
                 
-                // 获取 entry[i] 的指针
+                // 获取 entry[i] 的指针 (使用 entries_typed 而不是 entries_alloc)
                 char *entry_ptr = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = getelementptr [%zu x %%struct.ObjectEntry], [%zu x %%struct.ObjectEntry]* %s, i32 0, i32 %zu\n",
-                        entry_ptr, prop_count, prop_count, entries_alloc, i);
+                fprintf(gen->code_buf, "  %s = getelementptr %%struct.ObjectEntry, %%struct.ObjectEntry* %s, i64 %zu\n",
+                        entry_ptr, entries_typed, i);
                 
                 // 设置 entry.key
                 char *key_field = new_temp(gen);
@@ -3581,20 +3835,17 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 free(value);
             }
             
-            // 获取数组首地址
-            char *entries_ptr = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = getelementptr [%zu x %%struct.ObjectEntry], [%zu x %%struct.ObjectEntry]* %s, i32 0, i32 0\n",
-                    entries_ptr, prop_count, prop_count, entries_alloc);
-            
-            // 转换为 i8*
-            char *entries_i8 = new_temp(gen);
-            fprintf(gen->code_buf, "  %s = bitcast %%struct.ObjectEntry* %s to i8*\n",
-                    entries_i8, entries_ptr);
-            
-            // 调用 box_object
+            // 调用 box_object（直接使用 entries_alloc，它已经是 i8*）
             char *result = new_temp(gen);
             fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_object(i8* %s, i64 %zu)\n",
-                    result, entries_i8, prop_count);
+                    result, entries_alloc, prop_count);
+            
+            // 释放临时分配的内存（box_object 会复制数据）
+            fprintf(gen->code_buf, "  call void @free(i8* %s)\n", entries_alloc);
+            
+            // 清理临时变量
+            free(entries_alloc);
+            free(entries_typed);
             
             // 如果当前正在变量赋值中，注册对象元数据
             if (gen->current_var_name && field_head) {
@@ -3750,7 +4001,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 创建字段名字符串
             char *key_label = new_string_label(gen);
             size_t key_len = strlen(member->property);
-            fprintf(gen->globals_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
+            fprintf(gen->strings_buf, "%s = private unnamed_addr constant [%zu x i8] c\"%s\\00\"\n",
                     key_label, key_len + 1, member->property);
             
             char *key_ptr = new_temp(gen);
@@ -4033,6 +4284,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 将函数体写入全局区，返回函数值（包含函数指针和捕获变量）
             ASTFuncDecl *func = (ASTFuncDecl *)node->data;
             
+            if (getenv("DEBUG_CLOSURE")) {
+                fprintf(stderr, "[DEBUG CLOSURE] codegen_expr AST_FUNC_DECL: %s\n", func->name);
+            }
+            
             // 分析闭包捕获的变量
             CapturedVars *captured = analyze_captured_vars(gen, func->body, 
                                                            func->params, func->param_count);
@@ -4053,7 +4308,8 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             // 创建临时缓冲区用于生成函数代码
             FILE *func_buf = tmpfile();
             gen->code_buf = func_buf;
-            gen->entry_alloca_buf = NULL;  // 函数内的 alloca 应该写在函数内
+            // 注意：保持 entry_alloca_buf 不变，这样 codegen_stmt 能正确检测嵌套
+            // 如果 entry_alloca_buf 非 NULL，表示我们在函数内部定义闭包
             
             // 生成函数定义
             codegen_stmt(gen, node);
@@ -4090,6 +4346,28 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]  ; captured vars array\n",
                         captured_array, captured->count);
                 
+                // 检测自引用闭包：捕获变量中是否包含当前正在赋值的变量名
+                int self_ref_index = -1;
+                if (gen->current_var_name) {
+                    if (getenv("DEBUG_CLOSURE")) {
+                        fprintf(stderr, "[DEBUG CLOSURE] current_var_name=%s, checking captured vars:\n", gen->current_var_name);
+                    }
+                    for (size_t i = 0; i < captured->count; i++) {
+                        if (getenv("DEBUG_CLOSURE")) {
+                            fprintf(stderr, "[DEBUG CLOSURE]   captured[%zu]=%s, match=%d\n", 
+                                    i, captured->names[i], 
+                                    strcmp(captured->names[i], gen->current_var_name) == 0);
+                        }
+                        if (strcmp(captured->names[i], gen->current_var_name) == 0) {
+                            self_ref_index = (int)i;
+                            break;
+                        }
+                    }
+                    if (getenv("DEBUG_CLOSURE")) {
+                        fprintf(stderr, "[DEBUG CLOSURE] self_ref_index=%d\n", self_ref_index);
+                    }
+                }
+                
                 // 填充捕获变量
                 for (size_t i = 0; i < captured->count; i++) {
                     char *captured_val = new_temp(gen);
@@ -4125,6 +4403,14 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 调用 box_function
                 fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu)  ; closure '%s'\n",
                         temp, func_ptr, captured_ptr, captured->count, user_param_count, func->name);
+                
+                // 自引用闭包修复：在创建闭包后更新捕获的自引用变量
+                // 例如: f := (n) { f(n-1) }  -- 创建时 f 是 null，需要更新为实际函数
+                if (self_ref_index >= 0) {
+                    fprintf(gen->code_buf, "  ; Self-referencing closure fix: update captured[%d] to point to the closure itself\n", self_ref_index);
+                    fprintf(gen->code_buf, "  call void @update_closure_captured(%%struct.Value* %s, i32 %d, %%struct.Value* %s)\n",
+                            temp, self_ref_index, temp);
+                }
                 
                 free(captured_array);
                 free(captured_ptr);

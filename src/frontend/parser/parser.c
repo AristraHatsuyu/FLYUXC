@@ -662,23 +662,12 @@ static ASTNode *parse_postfix(Parser *p) {
             expr = node;
         }
         // 可选链索引访问: obj?[index]（索引不存在返回undef）
-        else if (check(p, TK_QUESTION) && p->current + 1 < p->token_count && 
-                 p->tokens[p->current + 1].kind == TK_L_BRACKET) {
-            advance(p); // 消费 ?
-            advance(p); // 消费 [
-            ASTNode *index = parse_expression(p);
-            if (!match(p, TK_R_BRACKET)) {
-                error_at(p, current_token(p), "Expected ']' after index");
-            }
-            // 创建可选链索引表达式
-            ASTNode *node = ast_node_create(AST_INDEX_EXPR, expr->loc);
-            ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
-            idx->object = expr;
-            idx->index = index;
-            idx->is_unbound = false;  // 非解绑访问
-            idx->is_optional = true;  // 标记为可选链访问
-            node->data = idx;
-            expr = node;
+        // 注意：TK_QUESTION_BRACKET 是 lexer 合并的 ?[ token
+        // 但我们不在这里处理它，因为它可能是三元运算符 + 数组字面量
+        // 让 parse_ternary 来决定是三元运算符还是可选链
+        else if (check(p, TK_QUESTION_BRACKET)) {
+            // 不处理，退出循环让上层决定
+            break;
         }
                 // 链式调用: obj.>method(args) 或 obj.>function
         else if (match(p, TK_DOT_CHAIN)) {
@@ -961,25 +950,129 @@ static ASTNode *parse_logical_or(Parser *p) {
     return left;
 }
 
+// 辅助函数：解析可选链索引访问
+static ASTNode *parse_optional_chain_index(Parser *p, ASTNode *object) {
+    // 已经消费了 TK_QUESTION_BRACKET（?[），现在解析索引
+    ASTNode *index = parse_expression(p);
+    if (!match(p, TK_R_BRACKET)) {
+        error_at(p, current_token(p), "Expected ']' after index");
+    }
+    // 创建可选链索引表达式
+    ASTNode *node = ast_node_create(AST_INDEX_EXPR, object->loc);
+    ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
+    idx->object = object;
+    idx->index = index;
+    idx->is_unbound = false;
+    idx->is_optional = true;  // 可选链
+    node->data = idx;
+    return node;
+}
+
 // 三元运算符: condition ? true_expr : false_expr
+// 也处理 ?[ 歧义：可能是可选链索引或三元运算符+数组字面量
 // 优先级低于逻辑或，右结合
 static ASTNode *parse_ternary(Parser *p) {
-    ASTNode *condition = parse_logical_or(p);
+    ASTNode *left = parse_logical_or(p);
     
+    // 处理 ?[ 歧义：检查是三元运算符还是可选链索引
+    // 当遇到 TK_QUESTION_BRACKET 时，需要通过查看 ] 后面是否是 : 来判断
+    while (check(p, TK_QUESTION_BRACKET)) {
+        Token *qb_token = &p->tokens[p->current];
+        advance(p);  // 消费 ?[
+        
+        // 保存位置以便可能的回溯
+        size_t saved_pos = p->current;
+        
+        // 尝试解析 [ 后面的内容直到 ]
+        ASTNode **elements = NULL;
+        bool *is_spread = NULL;
+        size_t elem_count = 0;
+        size_t elem_capacity = 0;
+        
+        if (!check(p, TK_R_BRACKET)) {
+            do {
+                if (elem_count >= elem_capacity) {
+                    elem_capacity = elem_capacity == 0 ? 4 : elem_capacity * 2;
+                    elements = (ASTNode **)realloc(elements, elem_capacity * sizeof(ASTNode *));
+                    is_spread = (bool *)realloc(is_spread, elem_capacity * sizeof(bool));
+                }
+                
+                if (match(p, TK_SPREAD)) {
+                    elements[elem_count] = parse_expression(p);
+                    is_spread[elem_count] = true;
+                } else {
+                    elements[elem_count] = parse_expression(p);
+                    is_spread[elem_count] = false;
+                }
+                elem_count++;
+            } while (match(p, TK_COMMA) && !check(p, TK_R_BRACKET));
+        }
+        
+        if (!match(p, TK_R_BRACKET)) {
+            error_at(p, current_token(p), "Expected ']'");
+            // 清理
+            if (elements) free(elements);
+            if (is_spread) free(is_spread);
+            return left;
+        }
+        
+        // 现在检查 ] 后面是什么
+        if (check(p, TK_COLON)) {
+            // 这是三元运算符：cond ? [arr_elements] : false_expr
+            // 构建数组字面量作为 true_value
+            ASTNode *arr = ast_array_literal_create_with_spread(elements, is_spread, elem_count, token_to_loc(qb_token));
+            
+            match(p, TK_COLON);  // 消费 :
+            ASTNode *false_value = parse_ternary(p);  // 右结合
+            return ast_ternary_expr_create(left, arr, false_value, token_to_loc(qb_token));
+        } else {
+            // 这是可选链索引访问：obj?[index]
+            // 只允许单个索引表达式
+            if (elem_count != 1) {
+                error_at(p, qb_token, "Optional chain index must be a single expression, not array elements");
+                if (elements) free(elements);
+                if (is_spread) free(is_spread);
+                return left;
+            }
+            if (is_spread && is_spread[0]) {
+                error_at(p, qb_token, "Spread operator not allowed in optional chain index");
+                if (elements) free(elements);
+                if (is_spread) free(is_spread);
+                return left;
+            }
+            
+            ASTNode *index = elements[0];
+            if (elements) free(elements);
+            if (is_spread) free(is_spread);
+            
+            // 创建可选链索引表达式
+            ASTNode *node = ast_node_create(AST_INDEX_EXPR, left->loc);
+            ASTIndexExpr *idx = (ASTIndexExpr *)malloc(sizeof(ASTIndexExpr));
+            idx->object = left;
+            idx->index = index;
+            idx->is_unbound = false;
+            idx->is_optional = true;
+            node->data = idx;
+            left = node;
+            // 继续检查是否有更多 ?[
+        }
+    }
+    
+    // 处理普通三元运算符
     if (match(p, TK_QUESTION)) {
         Token *op_token = &p->tokens[p->current - 1];
         ASTNode *true_value = parse_expression(p);  // 允许嵌套三元
         
         if (!match(p, TK_COLON)) {
             error_at(p, current_token(p), "Expected ':' in ternary expression");
-            return condition;
+            return left;
         }
         
         ASTNode *false_value = parse_ternary(p);  // 右结合
-        return ast_ternary_expr_create(condition, true_value, false_value, token_to_loc(op_token));
+        return ast_ternary_expr_create(left, true_value, false_value, token_to_loc(op_token));
     }
     
-    return condition;
+    return left;
 }
 
 static ASTNode *parse_expression(Parser *p) {

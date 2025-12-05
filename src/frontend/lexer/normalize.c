@@ -778,11 +778,12 @@ static char* normalize_internal_newlines(const char* stmt) {
             if (last >= 0) {
                 char prev = result[last];
                 // 经验规则：出现在 ) / } / ] 之后的 { 是代码块
-                // 出现在 = / := / , / : / [ / ( 之后的 { 是对象字面量
+                // 出现在 = / := / , / : / [ / ( / ? 之后的 { 是对象字面量
                 // 特殊处理：R> 后面的 { 是对象字面量（返回值）
+                // 注意：? 是三元运算符，? { ... } 是对象字面量
                 if (prev == ')' || prev == '}' || prev == ']') {
                     is_block = 1;
-                } else if (prev == '=' || prev == ',' || prev == ':' || prev == '[' || prev == '(') {
+                } else if (prev == '=' || prev == ',' || prev == ':' || prev == '[' || prev == '(' || prev == '?') {
                     is_block = 0;
                 } else if (prev == '>') {
                     // 检查是否是 R> 或 .>

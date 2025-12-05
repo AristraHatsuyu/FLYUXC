@@ -35,8 +35,45 @@ typedef struct {
  * 所有 box 函数创建的 Value 初始 refcount = 1
  * ============================================================================ */
 
-/* Box a number into a Value */
+/* 小整数缓存: [-128, 256] 共 385 个预分配的不可变 Value */
+#define SMALL_INT_MIN -128
+#define SMALL_INT_MAX 256
+#define SMALL_INT_CACHE_SIZE (SMALL_INT_MAX - SMALL_INT_MIN + 1)
+static Value *small_int_cache[SMALL_INT_CACHE_SIZE] = {0};
+static int small_int_cache_initialized = 0;
+
+/* 初始化小整数缓存 */
+static void init_small_int_cache(void) {
+    if (small_int_cache_initialized) return;
+    for (int i = 0; i < SMALL_INT_CACHE_SIZE; i++) {
+        Value *v = (Value*)malloc(sizeof(Value));
+        v->type = VALUE_NUMBER;
+        v->declared_type = VALUE_NUMBER;
+        v->refcount = 1;
+        v->flags = VALUE_FLAG_IMMORTAL;  // 永不释放
+        v->ext_type = EXT_TYPE_NONE;
+        v->data.number = (double)(i + SMALL_INT_MIN);
+        v->array_size = 0;
+        v->string_length = 0;
+        small_int_cache[i] = v;
+    }
+    small_int_cache_initialized = 1;
+}
+
+/* Box a number into a Value - 使用小整数缓存优化 */
 Value* box_number(double num) {
+    // 检查是否是小整数
+    if (num == (int)num) {
+        int inum = (int)num;
+        if (inum >= SMALL_INT_MIN && inum <= SMALL_INT_MAX) {
+            if (!small_int_cache_initialized) {
+                init_small_int_cache();
+            }
+            return small_int_cache[inum - SMALL_INT_MIN];
+        }
+    }
+    
+    // 非小整数，分配新的 Value
     Value *v = (Value*)malloc(sizeof(Value));
     v->type = VALUE_NUMBER;
     v->declared_type = VALUE_NUMBER;
@@ -91,46 +128,81 @@ Value* box_string_with_length(char *str, size_t len) {
     return v;
 }
 
-/* Box a boolean into a Value */
+/* 布尔值缓存: true 和 false */
+static Value *cached_true = NULL;
+static Value *cached_false = NULL;
+
+/* Box a boolean into a Value - 使用缓存 */
 Value* box_bool(int b) {
-    Value *v = (Value*)malloc(sizeof(Value));
-    v->type = VALUE_BOOL;
-    v->declared_type = VALUE_BOOL;
-    v->refcount = 1;
-    v->flags = VALUE_FLAG_NONE;
-    v->ext_type = EXT_TYPE_NONE;
-    v->data.number = b ? 1.0 : 0.0;
-    v->array_size = 0;
-    v->string_length = 0;
-    return v;
+    if (b) {
+        if (!cached_true) {
+            Value *v = (Value*)malloc(sizeof(Value));
+            v->type = VALUE_BOOL;
+            v->declared_type = VALUE_BOOL;
+            v->refcount = 1;
+            v->flags = VALUE_FLAG_IMMORTAL;  // 永不释放
+            v->ext_type = EXT_TYPE_NONE;
+            v->data.number = 1.0;
+            v->array_size = 0;
+            v->string_length = 0;
+            cached_true = v;
+        }
+        return cached_true;
+    } else {
+        if (!cached_false) {
+            Value *v = (Value*)malloc(sizeof(Value));
+            v->type = VALUE_BOOL;
+            v->declared_type = VALUE_BOOL;
+            v->refcount = 1;
+            v->flags = VALUE_FLAG_IMMORTAL;  // 永不释放
+            v->ext_type = EXT_TYPE_NONE;
+            v->data.number = 0.0;
+            v->array_size = 0;
+            v->string_length = 0;
+            cached_false = v;
+        }
+        return cached_false;
+    }
 }
 
-/* Box null */
+/* null 缓存 */
+static Value *cached_null = NULL;
+
+/* Box null - 使用缓存 */
 Value* box_null() {
-    Value *v = (Value*)malloc(sizeof(Value));
-    v->type = VALUE_NULL;
-    v->declared_type = VALUE_NULL;
-    v->refcount = 1;
-    v->flags = VALUE_FLAG_NONE;
-    v->ext_type = EXT_TYPE_NONE;
-    v->data.pointer = NULL;
-    v->array_size = 0;
-    v->string_length = 0;
-    return v;
+    if (!cached_null) {
+        Value *v = (Value*)malloc(sizeof(Value));
+        v->type = VALUE_NULL;
+        v->declared_type = VALUE_NULL;
+        v->refcount = 1;
+        v->flags = VALUE_FLAG_IMMORTAL;  // 永不释放
+        v->ext_type = EXT_TYPE_NONE;
+        v->data.pointer = NULL;
+        v->array_size = 0;
+        v->string_length = 0;
+        cached_null = v;
+    }
+    return cached_null;
 }
 
-/* Box undef - for undefined variables */
+/* undef 缓存 */
+static Value *cached_undef = NULL;
+
+/* Box undef - for undefined variables - 使用缓存 */
 Value* box_undef() {
-    Value *v = (Value*)malloc(sizeof(Value));
-    v->type = VALUE_UNDEF;
-    v->declared_type = VALUE_UNDEF;
-    v->refcount = 1;
-    v->flags = VALUE_FLAG_NONE;
-    v->ext_type = EXT_TYPE_NONE;
-    v->data.pointer = NULL;
-    v->array_size = 0;
-    v->string_length = 0;
-    return v;
+    if (!cached_undef) {
+        Value *v = (Value*)malloc(sizeof(Value));
+        v->type = VALUE_UNDEF;
+        v->declared_type = VALUE_UNDEF;
+        v->refcount = 1;
+        v->flags = VALUE_FLAG_IMMORTAL;  // 永不释放
+        v->ext_type = EXT_TYPE_NONE;
+        v->data.pointer = NULL;
+        v->array_size = 0;
+        v->string_length = 0;
+        cached_undef = v;
+    }
+    return cached_undef;
 }
 
 /* ============================================================================
@@ -138,17 +210,8 @@ Value* box_undef() {
  * 用于闭包和高阶函数：存储函数指针 + 捕获的变量
  * ============================================================================ */
 
-/* FunctionObject 结构体 */
-typedef struct FunctionObject {
-    void *func_ptr;       /* 函数指针 */
-    Value **captured;     /* 捕获的变量数组 */
-    int captured_count;   /* 捕获变量数量 */
-    int param_count;      /* 函数参数数量 */
-    Value *bound_self;    /* 绑定的 self 对象（方法绑定时使用） */
-} FunctionObject;
-
-/* VALUE_FUNCTION 的类型常量 */
-#define VALUE_FUNCTION 7
+/* FunctionObject 结构体已在 value_runtime_value.c 中定义 */
+/* VALUE_FUNCTION 的类型常量已在 value_runtime_value.c 中定义 */
 
 /* Box function - 创建一个函数值
  * @param func_ptr: 函数指针
@@ -201,6 +264,35 @@ Value** get_function_captured(Value *v) {
     if (!v || v->type != VALUE_FUNCTION) return NULL;
     FunctionObject *fn = (FunctionObject*)v->data.pointer;
     return fn ? fn->captured : NULL;
+}
+
+/*
+ * 更新闘包中某个捕获变量的值（用于自引用闭包）
+ * 用于处理自引用闭包：f := (n) { f(n-1) }
+ * 在创建闭包时 f 还是 null，创建后需要更新捕获的 f 为实际函数值
+ * 
+ * 重要：这里使用弱引用（不增加引用计数）来避免循环引用！
+ * 闭包捕获自身会形成：闭包 -> 捕获数组 -> 闭包 的循环
+ * 如果用强引用，闭包永远无法被释放
+ * 
+ * @param closure: 闭包函数值
+ * @param index: 要更新的捕获变量索引
+ * @param new_value: 新值（自引用时就是 closure 本身）
+ */
+void update_closure_captured(Value *closure, int index, Value *new_value) {
+    if (!closure || closure->type != VALUE_FUNCTION) return;
+    FunctionObject *fn = (FunctionObject*)closure->data.pointer;
+    if (!fn || !fn->captured || index < 0 || index >= fn->captured_count) return;
+    
+    /* 释放旧值的引用（通常是 null） */
+    if (fn->captured[index]) {
+        value_release(fn->captured[index]);
+    }
+    
+    /* 设置新值 - 使用弱引用（不增加引用计数）避免循环引用 */
+    /* 因为 new_value 就是 closure 本身，如果 retain 会形成循环 */
+    fn->captured[index] = new_value;
+    /* 不调用 value_retain - 这是故意的弱引用 */
 }
 
 /* 获取捕获变量数量 */
@@ -300,43 +392,63 @@ Value* bind_method(Value *func_val, Value *self_obj) {
  * 如果函数有 bound_self，它会作为第一个参数传入。
  */
 Value* call_function_value(Value *func_val, Value **args, int arg_count) {
-    if (!func_val || func_val->type != VALUE_FUNCTION) {
-        fprintf(stderr, "Error: call_function_value called with non-function value\n");
-        return box_undef();
-    }
-    
     FunctionObject *fn = (FunctionObject*)func_val->data.pointer;
-    if (!fn || !fn->func_ptr) {
-        fprintf(stderr, "Error: call_function_value called with null function pointer\n");
-        return box_undef();
+    
+    // 快速路径：无 bound_self 的常见情况
+    if (!fn->bound_self) {
+        int total = arg_count + fn->captured_count;
+        
+        // 快速路径：1 参数 + 2 捕获 = 3 参数（fib 常见情况）
+        if (total == 3 && arg_count == 1 && fn->captured_count == 2) {
+            typedef Value* (*Func3)(Value*, Value*, Value*);
+            return ((Func3)fn->func_ptr)(args[0], fn->captured[0], fn->captured[1]);
+        }
+        
+        // 快速路径：1 参数 + 1 捕获 = 2 参数
+        if (total == 2 && arg_count == 1 && fn->captured_count == 1) {
+            typedef Value* (*Func2)(Value*, Value*);
+            return ((Func2)fn->func_ptr)(args[0], fn->captured[0]);
+        }
+        
+        // 快速路径：1 参数 + 0 捕获 = 1 参数
+        if (total == 1 && arg_count == 1 && fn->captured_count == 0) {
+            typedef Value* (*Func1)(Value*);
+            return ((Func1)fn->func_ptr)(args[0]);
+        }
+        
+        // 快速路径：0 参数 + 0 捕获 = 0 参数
+        if (total == 0) {
+            typedef Value* (*Func0)(void);
+            return ((Func0)fn->func_ptr)();
+        }
     }
     
-    // 检查是否有绑定的 self
+    // 慢速路径：通用情况
     int has_bound_self = (fn->bound_self != NULL) ? 1 : 0;
-    
-    // 计算总参数数量 = bound_self(如果有) + 传入参数 + 捕获变量
     int total_args = has_bound_self + arg_count + fn->captured_count;
     
-    // 构建完整参数数组
-    Value **full_args = NULL;
-    if (total_args > 0) {
-        full_args = (Value**)malloc(sizeof(Value*) * total_args);
-        int idx = 0;
-        
-        // 首先添加 bound_self（如果有）
-        if (has_bound_self) {
-            full_args[idx++] = fn->bound_self;
-        }
-        
-        // 再复制传入参数
-        for (int i = 0; i < arg_count; i++) {
-            full_args[idx++] = args ? args[i] : NULL;
-        }
-        
-        // 最后复制捕获变量
-        for (int i = 0; i < fn->captured_count; i++) {
-            full_args[idx++] = fn->captured ? fn->captured[i] : NULL;
-        }
+    // 使用栈上数组避免 malloc（最多支持 16 个参数）
+    Value *full_args[16];
+    if (total_args > 16) {
+        fprintf(stderr, "Error: call_function_value does not support more than 16 arguments\n");
+        return box_undef();
+    }
+    
+    int idx = 0;
+    
+    // 首先添加 bound_self（如果有）
+    if (has_bound_self) {
+        full_args[idx++] = fn->bound_self;
+    }
+    
+    // 再复制传入参数
+    for (int i = 0; i < arg_count; i++) {
+        full_args[idx++] = args ? args[i] : NULL;
+    }
+    
+    // 最后复制捕获变量
+    for (int i = 0; i < fn->captured_count; i++) {
+        full_args[idx++] = fn->captured ? fn->captured[i] : NULL;
     }
     
     // 根据参数数量调用函数
@@ -394,9 +506,7 @@ Value* call_function_value(Value *func_val, Value **args, int arg_count) {
             break;
     }
     
-    if (full_args) {
-        free(full_args);
-    }
+    // 栈上数组不需要 free
     
     return result ? result : box_undef();
 }
@@ -1295,7 +1405,8 @@ Value* value_add(Value *a, Value *b) {
         char *result = (char*)malloc(len);
         strcpy(result, sa);
         strcat(result, sb);
-        return box_string(result);
+        // 使用 box_string_owned 因为 result 是动态分配的
+        return box_string_owned(result);
     }
     
     // Numeric addition
@@ -1380,7 +1491,9 @@ Value* value_greater_than(Value *a, Value *b) {
 }
 
 /* Array/Object index access - runtime version
- * 设置错误状态，由调用方决定是否终止程序 */
+ * 设置错误状态，由调用方决定是否终止程序
+ * 
+ * 注意：返回的值会增加引用计数，调用方负责在使用后调用 value_release */
 Value* value_index(Value *obj, Value *index) {
     if (!obj) {
         set_runtime_status(FLYUX_TYPE_ERROR, "Attempt to index null value");
@@ -1398,7 +1511,8 @@ Value* value_index(Value *obj, Value *index) {
             set_runtime_status(FLYUX_OUT_OF_BOUNDS, "Array index out of bounds");
             return box_null();
         }
-        return array[idx];
+        // 增加引用计数，调用方负责释放
+        return value_retain(array[idx]);
     }
     
     // For Buffer objects with numeric index
@@ -1412,7 +1526,7 @@ Value* value_index(Value *obj, Value *index) {
             return box_null();
         }
         
-        // 返回字节值（0-255）
+        // 返回字节值（0-255）- 新创建的值，无需额外 retain
         return box_number((double)buf->data[idx]);
     }
     
@@ -1424,7 +1538,8 @@ Value* value_index(Value *obj, Value *index) {
         
         for (size_t i = 0; i < count; i++) {
             if (strcmp(entries[i].key, key) == 0) {
-                return entries[i].value;
+                // 增加引用计数，调用方负责释放
+                return value_retain(entries[i].value);
             }
         }
         // 键不存在
@@ -1436,7 +1551,8 @@ Value* value_index(Value *obj, Value *index) {
     return box_null();
 }
 
-/* Array/Object index access - safe version for optional chaining (?[]) */
+/* Array/Object index access - safe version for optional chaining (?[])
+ * 注意：返回的值会增加引用计数，调用方负责在使用后调用 value_release */
 Value* value_index_safe(Value *obj, Value *index) {
     if (!obj || !index) {
         return box_undef();
@@ -1452,7 +1568,8 @@ Value* value_index_safe(Value *obj, Value *index) {
         if (idx < 0 || (size_t)idx >= arr_size) {
             return box_undef();
         }
-        return array[idx];
+        // 增加引用计数，调用方负责释放
+        return value_retain(array[idx]);
     }
     
     // For Buffer objects with numeric index
@@ -1476,7 +1593,8 @@ Value* value_index_safe(Value *obj, Value *index) {
         
         for (size_t i = 0; i < count; i++) {
             if (strcmp(entries[i].key, key) == 0) {
-                return entries[i].value;
+                // 增加引用计数，调用方负责释放
+                return value_retain(entries[i].value);
             }
         }
     }

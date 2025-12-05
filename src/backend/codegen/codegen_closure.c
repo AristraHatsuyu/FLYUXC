@@ -135,11 +135,14 @@ static const char *builtin_funcs[] = {
     "substr", "charAt", "startsWith", "endsWith", "replace", "trim", "upper", "lower",
     "floor", "ceil", "round", "abs", "sqrt", "pow", "random", "min", "max",
     "range", "fill", "flat", "unique",
-    "time", "sleep", "date",
+    "now", "time", "sleep", "date",
     "match", "test", "matchAll",
     "input", "readFile", "writeFile", "appendFile", "exists", "mkdir",
     "isArray", "isObject", "isString", "isNumber", "isBool", "isNull", "isError",
+    "isNum", "isStr", "isBl", "isArr", "isObj", "isUndef", "isFunc",
+    "toNum", "toStr", "toBl", "toInt", "toFloat",
     "error", "throw",
+    "typeof", "assert", "printf",
     NULL
 };
 
@@ -181,14 +184,17 @@ static void collect_vars_in_node(ASTNode *node, CapturedVars *captured,
             // 1. 是函数参数
             // 2. 是函数体内定义的局部变量
             // 3. 是内置函数
-            // 4. 父作用域中未定义的变量（可能是函数名）
-            // 5. 是顶层定义的函数名（不需要捕获，直接调用）
+            // 4. 是顶层定义的函数名（不需要捕获，直接调用）
+            // 
+            // 注意：不再检查 is_symbol_defined，因为在嵌套函数分析时，
+            // 外层函数的局部变量可能还没有注册到符号表。
+            // 所有其他标识符都假定需要从外部捕获。
+            // 如果变量实际不存在，会在代码生成阶段报"未定义变量"错误。
             
             if (!is_param(name, params, param_count) &&
                 !local_var_set_contains(locals, name) &&
                 !is_builtin(name) &&
-                !is_function_name(gen, name) &&
-                is_symbol_defined(gen, name)) {
+                !is_function_name(gen, name)) {
                 // 这是一个来自父作用域的变量，需要捕获
                 captured_vars_add(captured, name);
             }
@@ -329,10 +335,35 @@ static void collect_vars_in_node(ASTNode *node, CapturedVars *captured,
         }
         
         case AST_FUNC_DECL: {
-            // 嵌套函数定义：函数名是新的局部变量，不处理函数体
-            // （嵌套函数会在自己的闭包分析中处理）
+            // 嵌套函数定义：函数名是新的局部变量
             ASTFuncDecl *func = (ASTFuncDecl *)node->data;
             local_var_set_add(locals, func->name);
+            
+            // 重要：必须递归分析嵌套函数的函数体！
+            // 如果嵌套函数内部引用了外层作用域的变量，当前函数也需要捕获这些变量。
+            // 例如：
+            //   outer := (a) {
+            //       inner := (b) {
+            //           R> (c) { R> a + b + c }  // 匿名函数捕获 a, b
+            //       }
+            //       R> inner
+            //   }
+            // 这里 inner 必须捕获 a，即使 inner 自己没有直接使用 a，
+            // 因为 inner 内部的匿名函数需要 a，而匿名函数只能从 inner 的作用域获取。
+            //
+            // 创建临时的 locals 集合，包含嵌套函数的参数作为局部变量
+            LocalVarSet *nested_locals = local_var_set_create();
+            // 复制当前已知的局部变量
+            for (size_t i = 0; i < locals->count; i++) {
+                local_var_set_add(nested_locals, locals->names[i]);
+            }
+            // 添加嵌套函数的参数作为局部变量
+            for (size_t i = 0; i < func->param_count; i++) {
+                local_var_set_add(nested_locals, func->params[i]);
+            }
+            // 递归分析嵌套函数体，捕获的变量会添加到当前函数的 captured 列表
+            collect_vars_in_node(func->body, captured, nested_locals, params, param_count, gen);
+            local_var_set_free(nested_locals);
             break;
         }
         
@@ -383,6 +414,14 @@ CapturedVars *analyze_captured_vars(CodeGen *gen, ASTNode *func_body,
     
     // 递归收集变量引用
     collect_vars_in_node(func_body, captured, locals, params, param_count, gen);
+    
+    // 调试输出
+    if (getenv("DEBUG_CLOSURE")) {
+        fprintf(stderr, "[DEBUG CLOSURE] analyze_captured_vars: found %zu captured vars\n", captured->count);
+        for (size_t i = 0; i < captured->count; i++) {
+            fprintf(stderr, "[DEBUG CLOSURE]   - %s\n", captured->names[i]);
+        }
+    }
     
     // 清理
     local_var_set_free(locals);

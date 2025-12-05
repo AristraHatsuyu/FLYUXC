@@ -731,15 +731,43 @@ Value* value_set_index(Value *obj, Value *index, Value *value) {
     
     // 如果是数组
     if (obj->type == VALUE_ARRAY && index->type == VALUE_NUMBER) {
-        Value **elements = (Value**)obj->data.pointer;
-        size_t count = obj->array_size;
-        
         double idx_double = index->data.number;
-        if (idx_double < 0 || idx_double >= (double)count) {
-            return box_bool(0);  // 索引越界
+        if (idx_double < 0) {
+            return box_bool(0);  // 负索引不允许
         }
         
         size_t idx = (size_t)idx_double;
+        size_t count = obj->array_size;
+        Value **elements = (Value**)obj->data.pointer;
+        
+        // 如果索引超出当前数组大小，需要扩展数组
+        if (idx >= count) {
+            size_t new_size = idx + 1;
+            Value **new_elements = (Value**)malloc(sizeof(Value*) * new_size);
+            if (!new_elements) {
+                return box_bool(0);  // 内存分配失败
+            }
+            
+            // 复制旧元素
+            if (elements) {
+                for (size_t i = 0; i < count; i++) {
+                    new_elements[i] = elements[i];
+                }
+                free(elements);
+            }
+            
+            // 新位置填充 undef
+            for (size_t i = count; i < new_size; i++) {
+                new_elements[i] = box_undef();
+            }
+            
+            // 更新数组
+            obj->data.pointer = new_elements;
+            obj->array_size = new_size;
+            elements = new_elements;
+            count = new_size;
+        }
+        
         // 数组元素赋值 undef 就是设置为 undef（不删除元素，保持数组长度）
         elements[idx] = value ? value : box_undef();
         return box_bool(1);

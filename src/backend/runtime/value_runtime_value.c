@@ -44,6 +44,18 @@ typedef struct ObjectEntry {
     Value *value;
 } ObjectEntry;
 
+/* VALUE_FUNCTION type constant */
+#define VALUE_FUNCTION 7
+
+/* Function object structure for closures */
+typedef struct FunctionObject {
+    void *func_ptr;           /* 函数指针 */
+    struct Value **captured;  /* 捕获的变量数组 */
+    int captured_count;       /* 捕获变量数量 */
+    int param_count;          /* 函数参数数量 */
+    struct Value *bound_self; /* 绑定的 self 对象（用于方法调用）*/
+} FunctionObject;
+
 /* ============================================================================
  * 引用计数内存管理
  * ============================================================================ */
@@ -141,6 +153,30 @@ static void value_free_internal(Value *v) {
                     value_release(entries[i].value);
                 }
                 free(entries);
+            }
+            break;
+        }
+        
+        case VALUE_FUNCTION: {
+            /* 释放函数对象 */
+            FunctionObject *fn = (FunctionObject*)v->data.pointer;
+            if (fn) {
+                /* 释放捕获的变量（注意：自引用是弱引用，不能重复释放） */
+                if (fn->captured && fn->captured_count > 0) {
+                    for (int i = 0; i < fn->captured_count; i++) {
+                        /* 检查是否是自引用（弱引用）：captured[i] == v */
+                        if (fn->captured[i] && fn->captured[i] != v) {
+                            value_release(fn->captured[i]);
+                        }
+                        /* 自引用不释放，避免循环释放 */
+                    }
+                    free(fn->captured);
+                }
+                /* 释放绑定的 self（如果有） */
+                if (fn->bound_self) {
+                    value_release(fn->bound_self);
+                }
+                free(fn);
             }
             break;
         }

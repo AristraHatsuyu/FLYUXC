@@ -9,175 +9,168 @@
  */
 
 /*
- * push(array, value) - 在数组末尾添加元素
- * 返回新数组，不修改原数组
+ * push(array, value) - 在数组末尾添加元素（原地修改）
+ * 直接修改原数组，返回数组新长度
+ * 语义与 JavaScript Array.push() 一致
  */
 Value* value_push(Value *arr, Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(push) requires array");
-        return box_null_typed(VALUE_ARRAY);
+        return box_number(0);
     }
     
     size_t old_size = arr->array_size;
     size_t new_size = old_size + 1;
     Value **old_elements = (Value**)arr->data.pointer;
     
-    // 创建新数组（不能用 realloc，因为原数组可能不是 malloc 分配的）
-    Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
+    // 使用 realloc 扩展数组
+    Value **new_elements = (Value**)realloc(old_elements, new_size * sizeof(Value*));
     if (!new_elements) {
         set_runtime_status(FLYUX_ERROR, "(push) memory allocation failed");
-        return box_null_typed(VALUE_ARRAY);
+        return box_number(old_size);
     }
     
-    // 复制旧元素（需要 retain，因为新数组也持有引用）
-    for (size_t i = 0; i < old_size; i++) {
-        new_elements[i] = old_elements[i];
-        if (new_elements[i]) {
-            value_retain(new_elements[i]);
-        }
-    }
-    
-    // 添加新元素（也需要 retain）
+    // 添加新元素（需要 retain）
     new_elements[old_size] = val;
     if (val) {
         value_retain(val);
     }
     
-    // 创建新的 Value 对象
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->ext_type = EXT_TYPE_NONE;
-    result->refcount = 1;
-    result->flags = VALUE_FLAG_NONE;
-    result->data.pointer = new_elements;
-    result->array_size = new_size;
+    // 更新数组
+    arr->data.pointer = new_elements;
+    arr->array_size = new_size;
     
-    return result;
+    // 返回新长度
+    return box_number((double)new_size);
 }
 
 /*
- * pop(array) - 移除并返回数组最后一个元素
- * 返回新数组（不包含最后一个元素）
+ * pop(array) - 移除并返回数组最后一个元素（原地修改）
+ * 直接修改原数组，返回被移除的元素
+ * 语义与 JavaScript Array.pop() 一致
  */
 Value* value_pop(Value *arr) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(pop) requires array");
-        return box_null_typed(VALUE_OBJECT);
+        return box_null();
     }
     
     if (arr->array_size == 0) {
         set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(pop) cannot pop from empty array");
-        return box_null_typed(VALUE_OBJECT);
+        return box_null();
     }
     
-    Value **old_elements = (Value**)arr->data.pointer;
+    Value **elements = (Value**)arr->data.pointer;
     size_t new_size = arr->array_size - 1;
     
-    // 创建新数组，不包含最后一个元素
-    Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
-    for (size_t i = 0; i < new_size; i++) {
-        new_elements[i] = old_elements[i];
-        if (new_elements[i]) {
-            value_retain(new_elements[i]);
+    // 获取最后一个元素（不 retain，因为我们要从数组中移除它）
+    Value *removed = elements[new_size];
+    
+    // 缩小数组（realloc 可以缩小）
+    if (new_size > 0) {
+        Value **new_elements = (Value**)realloc(elements, new_size * sizeof(Value*));
+        if (new_elements) {
+            arr->data.pointer = new_elements;
         }
+        // 如果 realloc 失败，保持原指针，只更新 size
+    } else {
+        // 数组变空了
+        free(elements);
+        arr->data.pointer = NULL;
     }
+    arr->array_size = new_size;
     
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->refcount = 1;
-    result->flags = VALUE_FLAG_NONE;
-    result->ext_type = EXT_TYPE_NONE;
-    result->data.pointer = new_elements;
-    result->array_size = new_size;
-    
-    return result;
+    // 返回被移除的元素（它已经从数组中移除，调用者现在拥有它）
+    return removed ? removed : box_null();
 }
 
 /*
- * shift(array) - 移除并返回数组第一个元素
- * 返回新数组（不包含第一个元素）
+ * shift(array) - 移除并返回数组第一个元素（原地修改）
+ * 直接修改原数组，返回被移除的元素
+ * 语义与 JavaScript Array.shift() 一致
  */
 Value* value_shift(Value *arr) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(shift) requires array");
-        return box_null_typed(VALUE_OBJECT);
+        return box_null();
     }
     
     if (arr->array_size == 0) {
         set_runtime_status(FLYUX_OUT_OF_BOUNDS, "(shift) cannot shift from empty array");
-        return box_null_typed(VALUE_OBJECT);
+        return box_null();
     }
     
-    Value **old_elements = (Value**)arr->data.pointer;
+    Value **elements = (Value**)arr->data.pointer;
     size_t new_size = arr->array_size - 1;
     
-    // 创建新数组，不包含第一个元素
-    Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
-    for (size_t i = 0; i < new_size; i++) {
-        new_elements[i] = old_elements[i + 1];
-        if (new_elements[i]) {
-            value_retain(new_elements[i]);
+    // 获取第一个元素（不 retain，因为我们要从数组中移除它）
+    Value *removed = elements[0];
+    
+    // 将后面的元素向前移动
+    if (new_size > 0) {
+        memmove(elements, elements + 1, new_size * sizeof(Value*));
+        // 缩小数组
+        Value **new_elements = (Value**)realloc(elements, new_size * sizeof(Value*));
+        if (new_elements) {
+            arr->data.pointer = new_elements;
         }
+        // 如果 realloc 失败，保持原指针，只更新 size
+    } else {
+        // 数组变空了
+        free(elements);
+        arr->data.pointer = NULL;
     }
+    arr->array_size = new_size;
     
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->refcount = 1;
-    result->flags = VALUE_FLAG_NONE;
-    result->ext_type = EXT_TYPE_NONE;
-    result->data.pointer = new_elements;
-    result->array_size = new_size;
-    
-    return result;
+    // 返回被移除的元素（它已经从数组中移除，调用者现在拥有它）
+    return removed ? removed : box_null();
 }
 
 /*
- * unshift(array, value) - 在数组开头添加元素
- * 注意：创建新数组
+ * unshift(array, value) - 在数组开头添加元素（原地修改）
+ * 直接修改原数组，返回数组新长度
+ * 语义与 JavaScript Array.unshift() 一致
  */
 Value* value_unshift(Value *arr, Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
     
     if (!arr || arr->type != VALUE_ARRAY) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(unshift) requires array");
-        return box_null_typed(VALUE_OBJECT);
+        return box_number(0);
     }
     
-    size_t new_size = arr->array_size + 1;
-    Value **new_elements = (Value**)malloc(new_size * sizeof(Value*));
+    size_t old_size = arr->array_size;
+    size_t new_size = old_size + 1;
+    Value **old_elements = (Value**)arr->data.pointer;
+    
+    // 使用 realloc 扩展数组
+    Value **new_elements = (Value**)realloc(old_elements, new_size * sizeof(Value*));
+    if (!new_elements) {
+        set_runtime_status(FLYUX_ERROR, "(unshift) memory allocation failed");
+        return box_number(old_size);
+    }
+    
+    // 将所有元素向后移动一位
+    memmove(new_elements + 1, new_elements, old_size * sizeof(Value*));
+    
+    // 在开头插入新元素
     new_elements[0] = val;
     if (val) {
         value_retain(val);
     }
     
-    Value **old_elements = (Value**)arr->data.pointer;
-    for (size_t i = 0; i < arr->array_size; i++) {
-        new_elements[i+1] = old_elements[i];
-        if (new_elements[i+1]) {
-            value_retain(new_elements[i+1]);
-        }
-    }
+    // 更新数组
+    arr->data.pointer = new_elements;
+    arr->array_size = new_size;
     
-    // 创建新数组
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->refcount = 1;
-    result->flags = VALUE_FLAG_NONE;
-    result->ext_type = EXT_TYPE_NONE;
-    result->data.pointer = new_elements;
-    result->array_size = new_size;
-    
-    return result;
+    // 返回新长度
+    return box_number((double)new_size);
 }
 
 /*
@@ -274,8 +267,10 @@ Value* value_concat(Value *arr1, Value *arr2) {
 }
 
 /*
- * reverse(array|string) - 反转数组或字符串
- * 返回新数组/字符串，不修改原值
+ * reverse(array|string) - 反转数组或字符串（数组原地修改）
+ * 数组：直接修改原数组，返回数组本身
+ * 字符串：返回新字符串（字符串是不可变的）
+ * 语义与 JavaScript Array.reverse() 一致
  */
 Value* value_reverse(Value *val) {
     set_runtime_status(FLYUX_OK, NULL);
@@ -285,7 +280,7 @@ Value* value_reverse(Value *val) {
         return box_null();
     }
     
-    // 处理字符串反转
+    // 处理字符串反转（字符串是不可变的，必须返回新字符串）
     if (val->type == VALUE_STRING) {
         const char *str = (const char*)val->data.pointer;
         if (!str) {
@@ -303,31 +298,31 @@ Value* value_reverse(Value *val) {
         return box_string_owned(reversed);
     }
     
-    // 处理数组反转
+    // 处理数组反转（原地修改）
     if (val->type != VALUE_ARRAY) {
         set_runtime_status(FLYUX_TYPE_ERROR, "(reverse) requires array or string");
         return box_null_typed(VALUE_ARRAY);
     }
     
     size_t size = val->array_size;
-    Value **new_elements = (Value**)malloc(size * sizeof(Value*));
-    Value **old_elements = (Value**)val->data.pointer;
-    
-    for (size_t i = 0; i < size; i++) {
-        new_elements[i] = value_retain(old_elements[size - 1 - i]);  // 增加引用计数
+    if (size <= 1) {
+        // 0 或 1 个元素，无需反转
+        value_retain(val);
+        return val;
     }
     
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->refcount = 1;
-    result->flags = VALUE_FLAG_NONE;
-    result->ext_type = EXT_TYPE_NONE;
-    result->data.pointer = new_elements;
-    result->array_size = size;
-    result->string_length = 0;
+    Value **elements = (Value**)val->data.pointer;
     
-    return result;
+    // 原地反转：交换首尾元素
+    for (size_t i = 0; i < size / 2; i++) {
+        Value *tmp = elements[i];
+        elements[i] = elements[size - 1 - i];
+        elements[size - 1 - i] = tmp;
+    }
+    
+    // 返回数组本身（增加引用计数）
+    value_retain(val);
+    return val;
 }
 
 /*
@@ -456,8 +451,10 @@ static int custom_compare(const void *a, const void *b) {
 }
 
 /*
- * sort(array, compare?) - 排序数组
+ * sort(array, compare?) - 排序数组（原地修改）
  * compare 是可选的比较函数，返回负数/0/正数
+ * 直接修改原数组，返回数组本身
+ * 语义与 JavaScript Array.sort() 一致
  */
 Value* value_sort(Value *arr, CompareFunc compare) {
     set_runtime_status(FLYUX_OK, NULL);
@@ -469,39 +466,25 @@ Value* value_sort(Value *arr, CompareFunc compare) {
     
     size_t size = arr->array_size;
     if (size <= 1) {
-        // 返回数组副本
-        return value_reverse(value_reverse(arr));  // 简单方式创建副本
+        // 0 或 1 个元素，无需排序
+        value_retain(arr);
+        return arr;
     }
     
-    // 创建新数组副本
-    Value **new_elements = (Value**)malloc(size * sizeof(Value*));
-    Value **old_elements = (Value**)arr->data.pointer;
-    for (size_t i = 0; i < size; i++) {
-        new_elements[i] = old_elements[i];
-        if (new_elements[i]) {
-            value_retain(new_elements[i]);
-        }
-    }
+    Value **elements = (Value**)arr->data.pointer;
     
-    // 排序
+    // 原地排序
     if (compare) {
         g_compare_func = compare;
-        qsort(new_elements, size, sizeof(Value*), custom_compare);
+        qsort(elements, size, sizeof(Value*), custom_compare);
         g_compare_func = NULL;
     } else {
-        qsort(new_elements, size, sizeof(Value*), default_compare);
+        qsort(elements, size, sizeof(Value*), default_compare);
     }
     
-    Value *result = (Value*)malloc(sizeof(Value));
-    result->type = VALUE_ARRAY;
-    result->declared_type = VALUE_ARRAY;
-    result->refcount = 1;
-    result->flags = VALUE_FLAG_NONE;
-    result->ext_type = EXT_TYPE_NONE;
-    result->data.pointer = new_elements;
-    result->array_size = size;
-    
-    return result;
+    // 返回数组本身（增加引用计数）
+    value_retain(arr);
+    return arr;
 }
 
 

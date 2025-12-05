@@ -48,23 +48,50 @@ ObjectMetadata *find_object(CodeGen *gen, const char *var_name);
 /* 在对象中查找字段 */
 ObjectField *find_field(ObjectMetadata *obj_meta, const char *field_name);
 
-/* 注册变量到符号表 */
+/* 注册变量到符号表（使用当前作用域层级） */
 void register_symbol(CodeGen *gen, const char *var_name);
+
+/* 注册变量并返回IR名称（支持遮蔽时生成唯一名称） */
+const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name);
 
 /* 注册全局变量到全局符号表 */
 void register_global(CodeGen *gen, const char *var_name);
 
-/* 检查变量是否已定义 */
+/* 检查变量是否已定义（在任意层级） */
 int is_symbol_defined(CodeGen *gen, const char *var_name);
+
+/* 检查变量是否在当前作用域层级已定义（用于检测重复声明） */
+int is_symbol_defined_in_current_scope(CodeGen *gen, const char *var_name);
+
+/* 获取变量的IR名称（考虑遮蔽，返回最内层作用域的名称） */
+const char *get_symbol_ir_name(CodeGen *gen, const char *var_name);
 
 /* 检查变量是否是全局变量 */
 int is_global_var(CodeGen *gen, const char *var_name);
+
+/* 进入新的作用域（增加层级） */
+void scope_enter(CodeGen *gen);
+
+/* 退出当前作用域（减少层级，清理该层级的变量） */
+void scope_exit(CodeGen *gen);
+
+/* 生成作用域退出时的变量清理代码 */
+void scope_generate_exit_cleanup(CodeGen *gen);
 
 /* 注册函数名到函数表 */
 void register_function(CodeGen *gen, const char *func_name);
 
 /* 检查名字是否是函数 */
 int is_function_name(CodeGen *gen, const char *name);
+
+/* 检查 IR 名称是否已被分配（用于避免重复 alloca） */
+int is_ir_name_allocated(CodeGen *gen, const char *ir_name);
+
+/* 标记 IR 名称已被分配 */
+void mark_ir_name_allocated(CodeGen *gen, const char *ir_name);
+
+/* 清除已分配 IR 名称集合（在函数退出时调用） */
+void clear_allocated_ir_names(CodeGen *gen);
 
 /* ============================================================================
  * 作用域跟踪函数声明 - codegen_utils.c (P2: 作用域退出清理)

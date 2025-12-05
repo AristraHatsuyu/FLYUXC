@@ -224,10 +224,11 @@ static const char* BUILTIN_FUNC_TABLE[] = {
     "isNull",
     "isUndef",
     
-    /* 时间函数 (3) */
+    /* 时间函数 (4) */
     "now",
+    "time",
     "sleep",
-    "dateStr",
+    "date",
     
     /* 实用工具 (3) */
     "assert",
@@ -414,6 +415,7 @@ static const char* token_kind_name(TokenKind kind) {
 
         case TK_QUESTION:       return "QUESTION";
         case TK_QUESTION_DOT:   return "QUESTION_DOT";
+        case TK_QUESTION_BRACKET: return "QUESTION_BRACKET";
         case TK_NULLISH_COALESCE: return "NULLISH_COALESCE";
         case TK_SPREAD:         return "SPREAD";
         case TK_DOT_AT:         return "DOT_AT";
@@ -1313,6 +1315,17 @@ LexerResult lexer_tokenize(const char* source,
                 if (i + 1 < len && source[i + 1] == '.') {
                     if (!emit_token(&tokens, &result.count, &cap,
                                     TK_QUESTION_DOT, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
+                        result.error_code = -1;
+                        result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
+                        goto fail;
+                    }
+                    i += 2; col += 2;
+                    continue;
+                }
+                /* ?[ 可选链索引访问 */
+                if (i + 1 < len && source[i + 1] == '[') {
+                    if (!emit_token(&tokens, &result.count, &cap,
+                                    TK_QUESTION_BRACKET, source + i, 2, start_line, start_col, norm_source_map, norm_source_map_size, offset_map, offset_map_size, start_offset)) {
                         result.error_code = -1;
                         result.error_msg = str_dup_n("Memory allocation failed", strlen("Memory allocation failed"));
                         goto fail;

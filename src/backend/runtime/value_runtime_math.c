@@ -208,6 +208,30 @@ Value* value_contains(Value* str, Value* substr) {
 // 时间函数 (Time Functions)
 // ========================================
 
+// now() - 获取当前时间戳(毫秒)
+Value* value_now() {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+#ifdef _WIN32
+    // Windows: 使用 GetSystemTimePreciseAsFileTime
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    ULARGE_INTEGER uli;
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    // FILETIME 是从 1601-01-01 开始的 100 纳秒间隔
+    // 转换为 Unix 毫秒时间戳
+    double ms = (double)((uli.QuadPart - 116444736000000000ULL) / 10000);
+    return box_number(ms);
+#else
+    // Unix: 使用 gettimeofday
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    double ms = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+    return box_number(ms);
+#endif
+}
+
 // time() - 获取当前Unix时间戳(秒)
 Value* value_time() {
     set_runtime_status(FLYUX_OK, NULL);

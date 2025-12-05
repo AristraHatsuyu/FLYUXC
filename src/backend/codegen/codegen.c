@@ -15,9 +15,11 @@ CodeGen *codegen_create(FILE *output) {
     
     gen->output = output;
     gen->globals_buf = tmpfile();  // 临时文件存储全局声明
+    gen->strings_buf = tmpfile();  // 临时文件存储字符串常量
     gen->code_buf = tmpfile();     // 临时文件存储函数代码
-    if (!gen->globals_buf || !gen->code_buf) {
+    if (!gen->globals_buf || !gen->strings_buf || !gen->code_buf) {
         if (gen->globals_buf) fclose(gen->globals_buf);
+        if (gen->strings_buf) fclose(gen->strings_buf);
         if (gen->code_buf) fclose(gen->code_buf);
         free(gen);
         return NULL;
@@ -29,6 +31,8 @@ CodeGen *codegen_create(FILE *output) {
     gen->objects = NULL;
     gen->symbols = NULL;
     gen->globals = NULL;  /* 初始无全局变量 */
+    gen->scope_level = 0;  /* 初始作用域层级为0 */
+    gen->shadow_count = 0;  /* 初始遮蔽计数为0 */
     gen->functions = NULL;  /* 初始无函数表 */
     gen->closure_mappings = NULL;  /* 初始无闭包映射 */
     gen->current_var_name = NULL;
@@ -47,6 +51,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->varmap_count = 0;  /* 初始映射表大小为0 */
     gen->original_source = NULL;  /* 初始无原始源代码 */
     gen->current_captured = NULL;  /* 初始无闭包捕获变量 */
+    gen->allocated_ir_names = NULL;  /* 初始无已分配 IR 名称 */
     
     return gen;
 }
@@ -69,6 +74,7 @@ void codegen_set_original_source(CodeGen *gen, const char *source) {
 void codegen_free(CodeGen *gen) {
     if (gen) {
         if (gen->globals_buf) fclose(gen->globals_buf);
+        if (gen->strings_buf) fclose(gen->strings_buf);
         if (gen->code_buf) fclose(gen->code_buf);
         
         // 释放数组元数据
@@ -456,7 +462,8 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_null_preserve_type(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_object(i8*, i64)\n");
-    fprintf(gen->output, "declare %%struct.Value* @box_function(i8*, %%struct.Value**, i32, i32)\n\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_function(i8*, %%struct.Value**, i32, i32)\n");
+    fprintf(gen->output, "declare void @update_closure_captured(%%struct.Value*, i32, %%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");
     fprintf(gen->output, "declare double @unbox_number(%%struct.Value*)\n");
@@ -505,7 +512,9 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare i32 @value_needs_final_newline()\n\n");
     
     fprintf(gen->output, ";; External C library functions\n");
-    fprintf(gen->output, "declare void @abort() noreturn\n\n");
+    fprintf(gen->output, "declare void @abort() noreturn\n");
+    fprintf(gen->output, "declare i8* @malloc(i64)\n");
+    fprintf(gen->output, "declare void @free(i8*)\n\n");
     
     fprintf(gen->output, ";; Type conversion functions\n");
     fprintf(gen->output, "declare %%struct.Value* @value_to_num(%%struct.Value*)\n");
@@ -571,6 +580,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_contains(%%struct.Value*, %%struct.Value*)\n");
     
     fprintf(gen->output, ";; Time functions\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_now()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_time()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_sleep(%%struct.Value*)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_date()\n");
@@ -641,15 +651,21 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     // 4. 传统外部声明（保留向后兼容）
     fprintf(gen->output, "declare i32 @printf(i8*, ...)\n\n");
     
-    // 5. 全局常量（从globals_buf复制）
-    rewind(gen->globals_buf);
+    // 5. 字符串常量（从strings_buf复制）
+    rewind(gen->strings_buf);
     char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), gen->strings_buf)) {
+        fputs(buffer, gen->output);
+    }
+    
+    // 6. 全局声明（从globals_buf复制 - 嵌套函数定义等）
+    rewind(gen->globals_buf);
     while (fgets(buffer, sizeof(buffer), gen->globals_buf)) {
         fputs(buffer, gen->output);
     }
     fprintf(gen->output, "\n");
     
-    // 6. 函数定义（从code_buf复制）
+    // 7. 函数定义（从code_buf复制）
     rewind(gen->code_buf);
     while (fgets(buffer, sizeof(buffer), gen->code_buf)) {
         fputs(buffer, gen->output);
