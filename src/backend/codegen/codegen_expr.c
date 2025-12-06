@@ -897,6 +897,92 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 return result;
             }
             
+            // 特殊处理 throwErr 函数（抛出用户自定义错误）
+            if (strcmp(callee->name, "throwErr") == 0 && (call->arg_count == 1 || call->arg_count == 2)) {
+                // 创建参数数组
+                char *args_array = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = alloca [%zu x %%struct.Value*]\n", 
+                        args_array, call->arg_count);
+                
+                // 填充参数
+                for (size_t i = 0; i < call->arg_count; i++) {
+                    char *arg = codegen_expr(gen, call->args[i]);
+                    char *elem_ptr = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
+                            elem_ptr, call->arg_count, call->arg_count, args_array, i);
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n", arg, elem_ptr);
+                    free(arg);
+                    free(elem_ptr);
+                }
+                
+                // 获取数组首指针并调用 throwErr
+                char *args_ptr = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 0\n",
+                        args_ptr, call->arg_count, call->arg_count, args_array);
+                
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @throwErr(%%struct.Value** %s, i32 %zu)\n",
+                        result, args_ptr, call->arg_count);
+                
+                // throwErr 总是抛出错误，像有 ! 后缀一样处理
+                // 检查是否在 try-catch 中
+                if (gen->in_try_catch) {
+                    // 在 Try-Catch 中：检查错误并跳转到catch标签
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    
+                    char *ok_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, gen->try_catch_label, ok_label);
+                    fprintf(gen->code_buf, "%s:\n", ok_label);
+                    
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(ok_label);
+                } else {
+                    // 不在 Try-Catch 中：检查错误并终止程序
+                    char *is_ok = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_is_ok()\n", is_ok);
+                    char *ok_bool = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = call i32 @value_is_truthy(%%struct.Value* %s)\n", ok_bool, is_ok);
+                    char *is_error = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = icmp eq i32 %s, 0\n", is_error, ok_bool);
+                    
+                    char *ok_label = new_label(gen);
+                    char *error_label = new_label(gen);
+                    fprintf(gen->code_buf, "  br i1 %s, label %%%s, label %%%s\n", is_error, error_label, ok_label);
+                    
+                    // 错误分支：调用 value_fatal_error 终止程序
+                    fprintf(gen->code_buf, "%s:\n", error_label);
+                    fprintf(gen->code_buf, "  call void @value_fatal_error()\n");
+                    fprintf(gen->code_buf, "  unreachable\n");
+                    
+                    // OK分支（理论上不会到达，但保持代码结构完整）
+                    fprintf(gen->code_buf, "%s:\n", ok_label);
+                    
+                    free(is_ok);
+                    free(ok_bool);
+                    free(is_error);
+                    free(error_label);
+                    free(ok_label);
+                }
+                
+                free(args_array);
+                free(args_ptr);
+                return result;
+            }
+            
+            // 特殊处理 sysinfo 函数（获取系统信息）
+            if (strcmp(callee->name, "sysinfo") == 0 && call->arg_count == 0) {
+                char *result = new_temp(gen);
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_sysinfo()\n", result);
+                return result;
+            }
+            
             // ========================================
             // 类型检查函数 (Type Checking Functions)
             // ========================================

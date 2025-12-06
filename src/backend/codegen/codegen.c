@@ -510,7 +510,9 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n");
     fprintf(gen->output, "declare void @value_fatal_error()\n");
-    fprintf(gen->output, "declare i32 @value_needs_final_newline()\n\n");
+    fprintf(gen->output, "declare i32 @value_needs_final_newline()\n");
+    fprintf(gen->output, "declare %%struct.Value* @throwErr(%%struct.Value**, i32)\n");
+    fprintf(gen->output, "declare %%struct.Value* @value_sysinfo()\n\n");
     
     fprintf(gen->output, ";; External C library functions\n");
     fprintf(gen->output, "declare void @abort() noreturn\n");

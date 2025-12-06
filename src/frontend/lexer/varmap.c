@@ -252,8 +252,8 @@ static const char* BUILTIN_IDENTIFIERS[] = {
     /* 时间函数 (4) */
     "now", "sleep", "time", "date",
     
-    /* 系统操作 (4) */
-    "exit", "getEnv", "setEnv",
+    /* 系统操作 & 错误处理 (6) */
+    "exit", "getEnv", "setEnv", "throwErr", "sysinfo",
     
     /* 实用工具 (3) */
     "assert", "exit", "range",

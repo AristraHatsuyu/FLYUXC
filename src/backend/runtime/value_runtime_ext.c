@@ -1018,7 +1018,7 @@ static void print_value_json_depth_safe(Value *v, int depth, PrintVisitedStack *
             if (use_colors) printf("%sundef%s", COLOR_GRAY, COLOR_RESET);
             else printf("undef");
             break;
-        case VALUE_FUNCTION:
+        case VALUE_FUNCTION: {
             // 打印函数类型
             FunctionObject *fn = (FunctionObject*)v->data.pointer;
             if (fn) {
@@ -1034,6 +1034,7 @@ static void print_value_json_depth_safe(Value *v, int depth, PrintVisitedStack *
                 else printf("[Function]");
             }
             break;
+        }
         case VALUE_ARRAY: {
             print_array_json_depth_safe(v, depth, stack);
             break;
@@ -1386,6 +1387,208 @@ void value_fatal_error() {
             time_str);
 
     exit(g_runtime_state.last_status);
+}
+
+/* ============================================================================
+ * throwErr - 用户主动抛出错误
+ * ============================================================================
+ * 接受 1-2 个参数:
+ *   throwErr(errorType)              - 仅错误类型
+ *   throwErr(errorType, message)     - 错误类型 + 详细消息
+ * 
+ * 错误类型映射:
+ *   "error"  -> FLYUX_ERROR (1)
+ *   "type"   -> FLYUX_TYPE_ERROR (3)
+ *   "bounds" -> FLYUX_OUT_OF_BOUNDS (4)
+ *   "io"     -> FLYUX_IO_ERROR (5)
+ *   "math"   -> FLYUX_MATH_ERROR (6)
+ *   其他     -> FLYUX_ERROR (1)
+ * ============================================================================
+ */
+Value* throwErr(Value **args, int arg_count) {
+    if (arg_count < 1) {
+        set_runtime_status(FLYUX_ERROR, "(throwErr) At least 1 argument required");
+        return box_null();
+    }
+    
+    // 第一个参数: 错误类型（字符串）
+    Value *type_val = args[0];
+    if (!type_val || type_val->type != VALUE_STRING) {
+        set_runtime_status(FLYUX_ERROR, "(throwErr) First argument must be a string (error type)");
+        return box_null();
+    }
+    
+    const char *error_type = type_val->data.string;
+    int status = FLYUX_ERROR;  // 默认错误类型
+    
+    // 映射错误类型字符串到状态码
+    if (strcmp(error_type, "error") == 0) {
+        status = FLYUX_ERROR;
+    } else if (strcmp(error_type, "type") == 0) {
+        status = FLYUX_TYPE_ERROR;
+    } else if (strcmp(error_type, "bounds") == 0) {
+        status = FLYUX_OUT_OF_BOUNDS;
+    } else if (strcmp(error_type, "io") == 0) {
+        status = FLYUX_IO_ERROR;
+    } else if (strcmp(error_type, "math") == 0) {
+        status = FLYUX_MATH_ERROR;
+    } else if (strcmp(error_type, "eof") == 0) {
+        status = FLYUX_EOF;
+    } else {
+        // 未知类型，使用默认 FLYUX_ERROR
+        status = FLYUX_ERROR;
+    }
+    
+    // 第二个参数（可选）: 错误消息
+    const char *message = NULL;
+    if (arg_count >= 2) {
+        Value *msg_val = args[1];
+        if (msg_val && msg_val->type == VALUE_STRING) {
+            message = msg_val->data.string;
+        }
+    }
+    
+    // 设置错误状态
+    if (message) {
+        set_runtime_status(status, message);
+    } else {
+        // 如果没有提供消息，使用默认消息
+        char default_msg[128];
+        snprintf(default_msg, sizeof(default_msg), "User threw '%s' error", error_type);
+        set_runtime_status(status, default_msg);
+    }
+    
+    return box_null();
+}
+
+/* ============================================================================
+ * sysinfo - 获取系统信息
+ * ============================================================================
+ * 返回包含系统信息的对象
+ * ============================================================================
+ */
+Value* value_sysinfo() {
+    set_runtime_status(FLYUX_OK, NULL);
+    
+    // 定义与 box_object 兼容的结构
+    typedef struct { char *key; Value *value; } ObjEntry;
+    
+    #define MAX_FIELDS 16
+    ObjEntry entries[MAX_FIELDS];
+    int count = 0;
+    
+    // 1. CPU架构
+    entries[count].key = "arch";
+    #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+        entries[count].value = box_string("arm64");
+    #elif defined(__x86_64__) || defined(_M_X64)
+        entries[count].value = box_string("x86_64");
+    #elif defined(__i386__) || defined(_M_IX86)
+        entries[count].value = box_string("i386");
+    #else
+        entries[count].value = box_string("unknown");
+    #endif
+    count++;
+    
+    // 2. 操作系统
+    entries[count].key = "os";
+    #if defined(__APPLE__) && defined(__MACH__)
+        entries[count].value = box_string("darwin");
+    #elif defined(__linux__)
+        entries[count].value = box_string("linux");
+    #elif defined(_WIN32) || defined(_WIN64)
+        entries[count].value = box_string("windows");
+    #else
+        entries[count].value = box_string("unknown");
+    #endif
+    count++;
+    
+    // 3. 环境变量（作为对象）
+    entries[count].key = "env";
+    extern char **environ;
+    int env_count = 0;
+    for (char **env = environ; *env != NULL; env++) {
+        env_count++;
+    }
+    
+    ObjEntry *env_entries = (ObjEntry*)malloc(sizeof(ObjEntry) * env_count);
+    int env_idx = 0;
+    for (char **env = environ; *env != NULL && env_idx < env_count; env++) {
+        char *eq = strchr(*env, '=');
+        if (eq) {
+            size_t key_len = eq - *env;
+            env_entries[env_idx].key = strndup(*env, key_len);
+            env_entries[env_idx].value = box_string(strdup(eq + 1));
+            env_idx++;
+        }
+    }
+    entries[count].value = box_object(env_entries, env_idx);
+    free(env_entries);
+    count++;
+    
+    // 4. 当前工作目录
+    entries[count].key = "cwd";
+    char cwd_buf[4096];
+    if (getcwd(cwd_buf, sizeof(cwd_buf))) {
+        entries[count].value = box_string(strdup(cwd_buf));
+    } else {
+        entries[count].value = box_null();
+    }
+    count++;
+    
+    // 5. 用户主目录
+    entries[count].key = "home";
+    const char *home = getenv("HOME");
+    entries[count].value = home ? box_string((char*)home) : box_null();
+    count++;
+    
+    // 6. 临时目录
+    entries[count].key = "temp";
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir) tmpdir = getenv("TEMP");
+    if (!tmpdir) tmpdir = getenv("TMP");
+    if (!tmpdir) tmpdir = "/tmp";
+    entries[count].value = box_string((char*)tmpdir);
+    count++;
+    
+    // 7. 进程信息
+    entries[count].key = "process";
+    ObjEntry proc_entries[4];
+    proc_entries[0].key = "pid";
+    proc_entries[0].value = box_number((double)getpid());
+    proc_entries[1].key = "ppid";
+    proc_entries[1].value = box_number((double)getppid());
+    proc_entries[2].key = "uid";
+    proc_entries[2].value = box_number((double)getuid());
+    proc_entries[3].key = "gid";
+    proc_entries[3].value = box_number((double)getgid());
+    entries[count].value = box_object(proc_entries, 4);
+    count++;
+    
+    // 8. 主机名
+    entries[count].key = "hostname";
+    char hostname_buf[256];
+    if (gethostname(hostname_buf, sizeof(hostname_buf)) == 0) {
+        entries[count].value = box_string(strdup(hostname_buf));
+    } else {
+        entries[count].value = box_null();
+    }
+    count++;
+    
+    // 9. 用户名
+    entries[count].key = "username";
+    const char *user = getenv("USER");
+    if (!user) user = getenv("USERNAME");
+    entries[count].value = user ? box_string((char*)user) : box_null();
+    count++;
+    
+    // 10. 当前时间戳
+    entries[count].key = "timestamp";
+    entries[count].value = box_number((double)time(NULL));
+    count++;
+    
+    // 构建最终对象
+    return box_object(entries, count);
 }
 
 /* Get type of value as string */
