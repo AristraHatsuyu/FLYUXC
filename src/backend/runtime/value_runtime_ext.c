@@ -218,22 +218,26 @@ Value* box_undef() {
  * @param captured: 捕获的变量数组（可为 NULL）
  * @param captured_count: 捕获变量数量
  * @param param_count: 函数参数数量
+ * @param needs_self: 是否需要 self 参数
+ * @param capture_by_ref: 是否按引用捕获（1 = captured 是 Value**, 0 = Value*）
  */
-Value* box_function(void *func_ptr, Value **captured, int captured_count, int param_count, int needs_self) {
+Value* box_function_ex(void *func_ptr, Value **captured, int captured_count, int param_count, int needs_self, int capture_by_ref) {
     FunctionObject *fn = (FunctionObject*)malloc(sizeof(FunctionObject));
     fn->func_ptr = func_ptr;
     fn->param_count = param_count;
     fn->captured_count = captured_count;
     fn->bound_self = NULL;  /* 初始没有绑定的 self */
     fn->needs_self = needs_self;  /* 记录函数是否需要 self */
+    fn->capture_by_ref = capture_by_ref;  /* 记录是否按引用捕获 */
     
     /* 复制捕获的变量引用 */
     if (captured_count > 0 && captured) {
         fn->captured = (Value**)malloc(sizeof(Value*) * captured_count);
         for (int i = 0; i < captured_count; i++) {
             fn->captured[i] = captured[i];
-            /* 增加引用计数，因为函数持有这些变量的引用 */
-            if (fn->captured[i]) {
+            /* 只有按值捕获时才增加引用计数 */
+            /* 按引用捕获时，captured[i] 实际上是 Value**（伪装成 Value*），不能 retain */
+            if (!capture_by_ref && fn->captured[i]) {
                 value_retain(fn->captured[i]);
             }
         }
@@ -251,6 +255,11 @@ Value* box_function(void *func_ptr, Value **captured, int captured_count, int pa
     v->array_size = 0;
     v->string_length = 0;
     return v;
+}
+
+/* 兼容旧版本：默认按值捕获 */
+Value* box_function(void *func_ptr, Value **captured, int captured_count, int param_count, int needs_self) {
+    return box_function_ex(func_ptr, captured, captured_count, param_count, needs_self, 0);
 }
 
 /* 获取函数指针 */
@@ -285,9 +294,12 @@ void update_closure_captured(Value *closure, int index, Value *new_value) {
     FunctionObject *fn = (FunctionObject*)closure->data.pointer;
     if (!fn || !fn->captured || index < 0 || index >= fn->captured_count) return;
     
-    /* 释放旧值的引用（通常是 null） */
-    if (fn->captured[index]) {
-        value_release(fn->captured[index]);
+    /* 如果是按引用捕获，captured 数组中的"值"实际上是 Value** 指针，不能 release */
+    if (!fn->capture_by_ref) {
+        /* 按值捕获：释放旧值的引用（通常是 null） */
+        if (fn->captured[index]) {
+            value_release(fn->captured[index]);
+        }
     }
     
     /* 设置新值 - 使用弱引用（不增加引用计数）避免循环引用 */
@@ -349,13 +361,15 @@ Value* bind_method(Value *func_val, Value *self_obj) {
     new_fn->param_count = orig_fn->param_count;
     new_fn->captured_count = orig_fn->captured_count;
     new_fn->needs_self = orig_fn->needs_self;  /* 复制 needs_self 标志 */
+    new_fn->capture_by_ref = orig_fn->capture_by_ref;  /* 复制 capture_by_ref 标志 */
     
     /* 复制捕获的变量 */
     if (orig_fn->captured_count > 0 && orig_fn->captured) {
         new_fn->captured = (Value**)malloc(sizeof(Value*) * orig_fn->captured_count);
         for (int i = 0; i < orig_fn->captured_count; i++) {
             new_fn->captured[i] = orig_fn->captured[i];
-            if (new_fn->captured[i]) {
+            /* 只有按值捕获时才 retain */
+            if (!new_fn->capture_by_ref && new_fn->captured[i]) {
                 value_retain(new_fn->captured[i]);
             }
         }
@@ -1006,8 +1020,19 @@ static void print_value_json_depth_safe(Value *v, int depth, PrintVisitedStack *
             break;
         case VALUE_FUNCTION:
             // 打印函数类型
-            if (use_colors) printf("%s[Function]%s", COLOR_GREEN, COLOR_RESET);
-            else printf("Function");
+            FunctionObject *fn = (FunctionObject*)v->data.pointer;
+            if (fn) {
+                if (use_colors) {
+                    printf("\033[36m[Function: %p, params=%d, captured=%d]\033[0m",
+                           fn->func_ptr, fn->param_count, fn->captured_count);
+                } else {
+                    printf("[Function: %p, params=%d, captured=%d]",
+                           fn->func_ptr, fn->param_count, fn->captured_count);
+                }
+            } else {
+                if (use_colors) printf("\033[36m[Function]\033[0m");
+                else printf("[Function]");
+            }
             break;
         case VALUE_ARRAY: {
             print_array_json_depth_safe(v, depth, stack);
@@ -1266,8 +1291,8 @@ void value_print(Value *v) {
                            fn->func_ptr, fn->param_count, fn->captured_count);
                 }
             } else {
-                if (use_colors) printf("\033[36m[Function: null]\033[0m");
-                else printf("[Function: null]");
+                if (use_colors) printf("\033[36m[Function]\033[0m");
+                else printf("[Function]");
             }
             break;
         }

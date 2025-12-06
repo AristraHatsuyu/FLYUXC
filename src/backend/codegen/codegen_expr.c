@@ -4374,16 +4374,19 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
                 
                 // 填充捕获变量
+                // 关键修改：传递 alloca 指针（Value**），而不是加载后的值（Value*）
+                // 这样闭包内部可以读取和修改外层变量
                 for (size_t i = 0; i < captured->count; i++) {
-                    char *captured_val = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
-                            captured_val, captured->names[i]);
+                    // 将 Value** 转换为 Value* 存储（使用 bitcast）
+                    char *ref_as_val = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = bitcast %%struct.Value** %%%s to %%struct.Value*  ; capture by reference\n",
+                            ref_as_val, captured->names[i]);
                     char *slot_ptr = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
                             slot_ptr, captured->count, captured->count, captured_array, i);
                     fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n",
-                            captured_val, slot_ptr);
-                    free(captured_val);
+                            ref_as_val, slot_ptr);
+                    free(ref_as_val);
                     free(slot_ptr);
                 }
                 
@@ -4405,17 +4408,21 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 // 计算用户可见的参数数量（不包括隐式 self，运行时会自动处理）
                 size_t user_param_count = func->param_count;
                 
-                // 调用 box_function，传递 needs_self 标志
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu, i32 %d)  ; closure '%s'\n",
+                // 调用 box_function_ex，传递 needs_self 和 capture_by_ref 标志
+                // capture_by_ref=1 表示捕获的是 alloca 指针（Value**），不是值（Value*）
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function_ex(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu, i32 %d, i32 1)  ; closure '%s' (capture by ref)\n",
                         temp, func_ptr, captured_ptr, captured->count, user_param_count, func->uses_self ? 1 : 0, func->name);
                 
-                // 自引用闭包修复：在创建闭包后更新捕获的自引用变量
-                // 例如: f := (n) { f(n-1) }  -- 创建时 f 是 null，需要更新为实际函数
+                // 自引用闭包修复：对于按引用捕获，不需要更新！
+                // 因为已经捕获了变量的 alloca，闭包对象会存储到 alloca，
+                // 闭包内部通过 load alloca 就能访问到自己
+                /*
                 if (self_ref_index >= 0) {
                     fprintf(gen->code_buf, "  ; Self-referencing closure fix: update captured[%d] to point to the closure itself\n", self_ref_index);
                     fprintf(gen->code_buf, "  call void @update_closure_captured(%%struct.Value* %s, i32 %d, %%struct.Value* %s)\n",
                             temp, self_ref_index, temp);
                 }
+                */
                 
                 free(captured_array);
                 free(captured_ptr);

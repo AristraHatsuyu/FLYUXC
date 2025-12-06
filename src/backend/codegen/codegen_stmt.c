@@ -1144,15 +1144,31 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 register_symbol(gen, func->name);
             }
             
-            // 特殊处理: main函数需要重命名为_flyux_main,避免与LLVM入口冲突
-            const char *func_llvm_name = func->name;
-            if (strcmp(func->name, "main") == 0) {
-                func_llvm_name = "_flyux_main";
-            }
-            
             // 检测是否是嵌套函数（在另一个函数内部定义）
             // 如果 entry_alloca_buf 非空，说明我们在一个函数体内
             int is_nested = (gen->entry_alloca_buf != NULL);
+            
+            // 生成唯一的 LLVM 函数名
+            // 对于嵌套函数，如果是匿名函数（_anon_*）则添加唯一后缀避免重名
+            // 命名函数在嵌套场景下不需要改名，因为它们在符号表中已经被区分
+            char unique_func_name[256];
+            const char *func_llvm_name = func->name;
+            
+            if (strcmp(func->name, "main") == 0) {
+                // 特殊处理: main函数需要重命名为_flyux_main,避免与LLVM入口冲突
+                func_llvm_name = "_flyux_main";
+            } else if (is_nested && strncmp(func->name, "_anon_", 6) == 0) {
+                // 嵌套的匿名函数：添加唯一后缀避免重名
+                // （匿名函数全局计数可能重复，例如不同作用域的 _anon_0）
+                static int nested_anon_counter = 0;
+                snprintf(unique_func_name, sizeof(unique_func_name), 
+                        "%s_nested_%d", func->name, nested_anon_counter++);
+                func_llvm_name = unique_func_name;
+                
+                // 关键：将实际使用的 LLVM 函数名写回 AST，供后续引用
+                free(func->name);
+                func->name = strdup(func_llvm_name);
+            }
             
             // 为了避免嵌套函数定义交错，始终使用临时缓冲区收集函数定义
             // 然后在完成后追加到目标位置
@@ -1253,12 +1269,14 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             }
             
             // 为捕获的变量创建局部变量
+            // 关键修改：捕获的参数实际上是 Value**（alloca 指针），需要转换回来
             if (captured && captured->count > 0) {
                 for (size_t i = 0; i < captured->count; i++) {
-                    fprintf(output_target, "  %%%s = alloca %%struct.Value*\n", captured->names[i]);
-                    fprintf(output_target, "  store %%struct.Value* %%captured_%s, %%struct.Value** %%%s\n",
+                    // 将传入的 Value* 转换回 Value** (alloca 指针)
+                    fprintf(output_target, "  %%%s = bitcast %%struct.Value* %%captured_%s to %%struct.Value**  ; restore alloca pointer\n",
                             captured->names[i], captured->names[i]);
                     // 注册捕获变量到符号表，使其在函数体内可见
+                    // 注意：现在 %name 直接是 Value**，不再需要额外的 alloca
                     register_symbol(gen, captured->names[i]);
                     mark_ir_name_allocated(gen, captured->names[i]);
                     // 捕获变量不添加到作用域跟踪器（同参数一样，由调用者管理）
@@ -1375,24 +1393,23 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 在父函数中生成代码创建闭包并存储到变量
                 if (captured && captured->count > 0) {
                     // 有捕获变量 - 创建完整闭包
-                    // 分配数组存储捕获的变量
+                    // 分配数组存储捕获的变量（按引用）
                     int arr_temp = gen->temp_count++;
                     fprintf(gen->code_buf, "  %%t%d = alloca [%zu x %%struct.Value*]\n", 
                             arr_temp, captured->count);
                     
-                    // 填充捕获变量数组
+                    // 填充捕获变量数组 - 按引用捕获（传递 alloca 指针）
                     for (size_t i = 0; i < captured->count; i++) {
-                        int load_temp = gen->temp_count++;
+                        int cast_temp = gen->temp_count++;
                         int gep_temp = gen->temp_count++;
-                        fprintf(gen->code_buf, "  %%t%d = load %%struct.Value*, %%struct.Value** %%%s\n",
-                                load_temp, captured->names[i]);
-                        fprintf(gen->code_buf, "  call %%struct.Value* @value_retain(%%struct.Value* %%t%d)\n",
-                                load_temp);
+                        // 将 Value** (alloca) 转换为 Value* 存储
+                        fprintf(gen->code_buf, "  %%t%d = bitcast %%struct.Value** %%%s to %%struct.Value*  ; capture by reference\n",
+                                cast_temp, captured->names[i]);
                         fprintf(gen->code_buf, "  %%t%d = getelementptr inbounds [%zu x %%struct.Value*], "
                                 "[%zu x %%struct.Value*]* %%t%d, i64 0, i64 %zu\n",
                                 gep_temp, captured->count, captured->count, arr_temp, i);
                         fprintf(gen->code_buf, "  store %%struct.Value* %%t%d, %%struct.Value** %%t%d\n",
-                                load_temp, gep_temp);
+                                cast_temp, gep_temp);
                     }
                     
                     // 获取数组起始指针
@@ -1401,9 +1418,9 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                             "[%zu x %%struct.Value*]* %%t%d, i64 0, i64 0\n",
                             ptr_temp, captured->count, captured->count, arr_temp);
                     
-                    // 调用 box_function 创建闭包值
+                    // 调用 box_function_ex 创建闭包值（按引用捕获）
                     int func_val_temp = gen->temp_count++;
-                    fprintf(gen->code_buf, "  %%t%d = call %%struct.Value* @box_function("
+                    fprintf(gen->code_buf, "  %%t%d = call %%struct.Value* @box_function_ex("
                             "i8* bitcast (%%struct.Value* (", func_val_temp);
                     
                     // 生成函数签名参数
@@ -1419,7 +1436,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         need_comma = 1;
                     }
                     
-                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** %%t%d, i32 %zu, i32 %zu, i32 %d)\n",
+                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** %%t%d, i32 %zu, i32 %zu, i32 %d, i32 1)  ; capture by ref\n",
                             func_llvm_name, ptr_temp, captured->count, func->param_count, func->uses_self ? 1 : 0);
                     
                     // 存储到局部变量
@@ -1428,8 +1445,11 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     fprintf(gen->code_buf, "  store %%struct.Value* %%t%d, %%struct.Value** %%%s\n",
                             func_val_temp, func->name);
                     
-                    // 自引用闭包修复：检查捕获变量中是否包含函数自身
-                    // 例如: f := (n) { f(n-1) } - 创建时 f 是 null，需要更新为实际函数
+                    // 自引用闭包修复：对于按引用捕获，不需要更新！
+                    // 因为已经捕获了变量的 alloca，闭包对象存储到 alloca 后，
+                    // 闭包内部通过 load alloca 就能访问到自己
+                    // 注意：按引用捕获时，update_closure_captured 会导致类型混乱
+                    /* 
                     for (size_t i = 0; i < captured->count; i++) {
                         if (strcmp(captured->names[i], func->name) == 0) {
                             fprintf(gen->code_buf, "  ; Self-referencing closure fix: update captured[%zu] to point to the closure itself\n", i);
@@ -1438,6 +1458,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                             break;
                         }
                     }
+                    */
                 } else {
                     // 无捕获变量 - 简单函数值
                     int func_val_temp = gen->temp_count++;

@@ -463,6 +463,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_array(i8*, i64)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_object(i8*, i64)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_function(i8*, %%struct.Value**, i32, i32, i32)\n");  // 添加 needs_self 参数
+    fprintf(gen->output, "declare %%struct.Value* @box_function_ex(i8*, %%struct.Value**, i32, i32, i32, i32)\n");  // 扩展版本：添加 capture_by_ref 参数
     fprintf(gen->output, "declare void @update_closure_captured(%%struct.Value*, i32, %%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");

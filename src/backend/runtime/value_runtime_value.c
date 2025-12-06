@@ -55,6 +55,7 @@ typedef struct FunctionObject {
     int param_count;          /* 函数参数数量 */
     struct Value *bound_self; /* 绑定的 self 对象（用于方法调用）*/
     int needs_self;           /* 函数是否需要 self 作为第一个参数 */
+    int capture_by_ref;       /* 捕获的变量是否是引用（Value**）而不是值（Value*）*/
 } FunctionObject;
 
 /* ============================================================================
@@ -176,7 +177,8 @@ static void value_free_internal(Value *v) {
             FunctionObject *fn = (FunctionObject*)v->data.pointer;
             if (fn) {
                 /* 释放捕获的变量（注意：自引用是弱引用，不能重复释放） */
-                if (fn->captured && fn->captured_count > 0) {
+                /* 如果是按引用捕获，captured 数组存储的是 Value**（伪装成 Value*），不能 release */
+                if (fn->captured && fn->captured_count > 0 && !fn->capture_by_ref) {
                     for (int i = 0; i < fn->captured_count; i++) {
                         /* 检查是否是自引用（弱引用）：captured[i] == v */
                         if (fn->captured[i] && fn->captured[i] != v) {
@@ -184,6 +186,9 @@ static void value_free_internal(Value *v) {
                         }
                         /* 自引用不释放，避免循环释放 */
                     }
+                    free(fn->captured);
+                } else if (fn->captured) {
+                    /* 按引用捕获时，只释放数组本身，不释放元素 */
                     free(fn->captured);
                 }
                 /* 释放绑定的 self（如果有） */
