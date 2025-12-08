@@ -1323,7 +1323,6 @@ int value_needs_final_newline() {
 }
 
 /* 打印致命错误并退出 */
-/* 打印致命错误并退出 */
 void value_fatal_error() {
     const char *platform;
 

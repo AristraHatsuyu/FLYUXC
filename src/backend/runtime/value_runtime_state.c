@@ -67,4 +67,10 @@ void flyux_clear_error() {
     g_runtime_state.error_msg[0] = '\0';
 }
 
+/* 设置错误状态（供 codegen 使用）*/
+void flyux_set_error(int status, const char *message) {
+    set_runtime_status(status, message);
+}
+
+
 

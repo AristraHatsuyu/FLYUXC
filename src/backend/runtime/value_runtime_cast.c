@@ -252,6 +252,9 @@ Value* value_to_str(Value *v) {
             char *str = strdup(buffer);
             return box_string_owned(str);
         }
+
+        case VALUE_FUNCTION:
+            return box_string_owned(strdup("[Function]"));
         
         default:
             return box_string_owned(strdup("unknown"));

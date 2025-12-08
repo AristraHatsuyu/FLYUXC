@@ -516,7 +516,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "@str_type_error = private unnamed_addr constant [10 x i8] c\"TypeError\\00\"\n");
     fprintf(gen->output, "@str_error = private unnamed_addr constant [6 x i8] c\"Error\\00\"\n");
     fprintf(gen->output, "@.str.newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n");
-    fprintf(gen->output, "@.str.not_callable = private unnamed_addr constant [30 x i8] c\"Error: value is not callable\\0A\\00\"\n\n");
+    fprintf(gen->output, "@.str.not_callable = private unnamed_addr constant [22 x i8] c\"value is not callable\\00\"\n\n");
     
     // 2. Value 结构体定义
     fprintf(gen->output, ";; Mixed-type value system\n");
@@ -590,12 +590,14 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @value_clear_error()\n");
     fprintf(gen->output, "declare %%struct.Value* @value_is_ok()\n");
     fprintf(gen->output, "declare void @value_fatal_error()\n");
+    fprintf(gen->output, "declare void @flyux_set_error(i32, i8*)\n");
     fprintf(gen->output, "declare i32 @value_needs_final_newline()\n");
     fprintf(gen->output, "declare %%struct.Value* @throwErr(%%struct.Value**, i32)\n");
     fprintf(gen->output, "declare %%struct.Value* @value_sysinfo()\n\n");
     
     fprintf(gen->output, ";; External C library functions\n");
     fprintf(gen->output, "declare void @abort() noreturn\n");
+    fprintf(gen->output, "declare void @exit(i32) noreturn\n");
     fprintf(gen->output, "declare i8* @malloc(i64)\n");
     fprintf(gen->output, "declare void @free(i8*)\n\n");
     
