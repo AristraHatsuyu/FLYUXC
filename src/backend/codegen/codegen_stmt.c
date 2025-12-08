@@ -77,6 +77,19 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 同级重复声明是错误
                 // 尝试获取原始变量名用于错误消息
                 const char *original_name = codegen_lookup_original_name(gen, decl->name);
+                
+                if (getenv("DEBUG_CODEGEN")) {
+                    fprintf(stderr, "[DEBUG VAR_DECL] Duplicate declaration: name=%s, current_scope_level=%d\n",
+                            decl->name, gen->scope_level);
+                    // 打印符号表中的所有同名符号
+                    for (SymbolEntry *e = gen->symbols; e != NULL; e = e->next) {
+                        if (strcmp(e->name, decl->name) == 0) {
+                            fprintf(stderr, "[DEBUG VAR_DECL]   Found in symbols: name=%s, scope_level=%d, ir_name=%s\n",
+                                    e->name, e->scope_level, e->ir_name);
+                        }
+                    }
+                }
+                
                 codegen_set_error_at(gen, node->loc.orig_line, node->loc.orig_column, 
                                      node->loc.orig_length, 
                                      original_name ? original_name : decl->name,
@@ -88,7 +101,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             int shadows_outer = is_symbol_defined(gen, decl->name);
             
             // 注册变量并获取IR名称（如果遮蔽则生成唯一名称）
-            const char *ir_name = register_symbol_with_shadow(gen, decl->name);
+            const char *ir_name = register_symbol_with_shadow(gen, decl->name, decl->is_const);
             
             // P2: 将变量添加到作用域跟踪器（使用IR名称）
             if (gen->scope) {
@@ -190,8 +203,21 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         
                         // P2 Fix: 表达式结果已经遵循"调用者拥有"规则，不需要额外 retain
                         // 所有权直接转移给变量
-                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
-                                init_val, ir_name);
+                        
+                        // 检查变量是否是 refbox（可能在闭包创建时已被包装）
+                        if (is_refbox_var(gen, ir_name)) {
+                            // 变量已经是 refbox：使用 ref_set 更新内容
+                            char *refbox = new_temp(gen);
+                            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load refbox\n",
+                                    refbox, ir_name);
+                            fprintf(gen->code_buf, "  call void @ref_set(%%struct.Value* %s, %%struct.Value* %s)  ; set initial value via refbox\n",
+                                    refbox, init_val);
+                            free(refbox);
+                        } else {
+                            // 普通变量：直接存储
+                            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
+                                    init_val, ir_name);
+                        }
                         free(init_val);
                     } else {
                         temp_value_clear(gen);
@@ -214,12 +240,31 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 // 检查变量是否已定义
                 int var_exists = is_symbol_defined(gen, target->name);
                 
+                // 如果变量已存在，检查是否为常量
+                if (var_exists && is_symbol_const(gen, target->name)) {
+                    // 查找原始变量名用于错误消息
+                    const char *original_name = codegen_lookup_original_name(gen, target->name);
+                    if (!original_name) {
+                        original_name = target->name;
+                    }
+                    
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg), "Cannot assign to const variable");
+                    codegen_set_error_at(gen, 
+                                       assign->target->loc.orig_line, 
+                                       assign->target->loc.orig_column, 
+                                       (int)strlen(original_name),  // 使用原始变量名的实际长度
+                                       original_name,
+                                       error_msg);
+                    return;
+                }
+                
                 // 获取变量的 IR 名称（考虑遮蔽）
                 const char *ir_name;
                 
                 // 如果变量未定义，先分配空间并注册
                 if (!var_exists) {
-                    ir_name = register_symbol_with_shadow(gen, target->name);
+                    ir_name = register_symbol_with_shadow(gen, target->name, 0);  // 赋值时注册为非常量
                     
                     // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
                     // 但只在未分配过时才分配
@@ -235,12 +280,15 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     ir_name = get_symbol_ir_name(gen, target->name);
                 }
                 
+                // 确定变量前缀（全局用@，局部用%）
+                const char *var_prefix = is_global_var(gen, target->name) ? "@" : "%";
+                
                 // 如果赋值的是null，需要保持变量的declared_type
                 if (assign->value->kind == AST_NULL_LITERAL) {
                     // 先加载旧值获取declared_type，然后用box_null_preserve_type创建新null
                     char *old_val = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
-                            old_val, ir_name);
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s%s\n",
+                            old_val, var_prefix, ir_name);
                     
                     // 释放旧值 (如果变量已存在)
                     if (var_exists) {
@@ -250,8 +298,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     char *new_null = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_null_preserve_type(%%struct.Value* %s)\n",
                             new_null, old_val);
-                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
-                            new_null, ir_name);
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s%s\n",
+                            new_null, var_prefix, ir_name);
                     
                     free(old_val);
                     free(new_null);
@@ -273,15 +321,28 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         
                         // 现在释放旧值（新值已经计算完毕，不再依赖旧值）
                         char *old_val = new_temp(gen);
-                        fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n",
-                                old_val, ir_name);
-                        fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", old_val);
-                        free(old_val);
                         
-                        // P2 Fix: 表达式结果已经遵循"调用者拥有"规则，不需要额外 retain
-                        // 所有权直接转移给变量
-                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
-                                value, ir_name);
+                        // 确定变量前缀（全局用@，局部用%）
+                        const char *var_prefix = is_global_var(gen, target->name) ? "@" : "%";
+                        
+                        // 检查是否是引用盒子变量
+                        if (is_refbox_var(gen, ir_name)) {
+                            // 引用盒子：加载 refbox，使用 ref_set
+                            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s%s  ; load refbox\n",
+                                    old_val, var_prefix, ir_name);
+                            fprintf(gen->code_buf, "  call void @ref_set(%%struct.Value* %s, %%struct.Value* %s)  ; update refbox\n",
+                                    old_val, value);
+                        } else {
+                            // 普通变量：先释放旧值再存储
+                            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s%s\n",
+                                    old_val, var_prefix, ir_name);
+                            fprintf(gen->code_buf, "  call void @value_release(%%struct.Value* %s)\n", old_val);
+                            // P2 Fix: 表达式结果已经遵循"调用者拥有"规则，不需要额外 retain
+                            // 所有权直接转移给变量
+                            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s%s\n",
+                                    value, var_prefix, ir_name);
+                        }
+                        free(old_val);
                     } else {
                         gen->current_var_name = target->name;
                         value = codegen_expr(gen, assign->value);
@@ -292,10 +353,26 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         }
                         // 释放中间值，但保留要赋给变量的值
                         temp_value_release_except(gen, value);
-                        // P2 Fix: 表达式结果已经遵循"调用者拥有"规则，不需要额外 retain
-                        // 所有权直接转移给变量
-                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n",
-                                value, ir_name);
+                        
+                        // 确定变量前缀（全局用@，局部用%）
+                        const char *var_prefix = is_global_var(gen, target->name) ? "@" : "%";
+                        
+                        // 检查是否是引用盒子变量
+                        if (is_refbox_var(gen, ir_name)) {
+                            // 引用盒子：加载 refbox，使用 ref_set
+                            char *refbox = new_temp(gen);
+                            fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s%s  ; load refbox\n",
+                                    refbox, var_prefix, ir_name);
+                            fprintf(gen->code_buf, "  call void @ref_set(%%struct.Value* %s, %%struct.Value* %s)  ; update refbox\n",
+                                    refbox, value);
+                            free(refbox);
+                        } else {
+                            // 普通变量：直接存储
+                            // P2 Fix: 表达式结果已经遵循"调用者拥有"规则，不需要额外 retain
+                            // 所有权直接转移给变量
+                            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s%s\n",
+                                    value, var_prefix, ir_name);
+                        }
                     }
                 }
             }
@@ -900,7 +977,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                 
                 // 注册循环变量（在当前循环作用域中）
                 // 使用 register_symbol_with_shadow 支持遮蔽外层同名变量
-                const char *item_ir_name = register_symbol_with_shadow(gen, item_var);
+                const char *item_ir_name = register_symbol_with_shadow(gen, item_var, 0);  // 循环变量非常量
                 
                 // 如果有entry_alloca_buf，写入到entry block；否则写入当前位置
                 // 但只在未分配过时才分配
@@ -1241,8 +1318,13 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             SymbolEntry *saved_symbols = gen->symbols;  // 保存符号表
             AllocatedIRName *saved_allocated_ir_names = gen->allocated_ir_names;  // 保存已分配名称
             TempValueStack *saved_temp_values = gen->temp_values;  // 保存临时值栈
+            int saved_scope_level = gen->scope_level;  // 保存作用域层级
+            RefBoxVarEntry *saved_refbox_vars = gen->refbox_vars;  // 保存 refbox 变量列表
             gen->allocated_ir_names = NULL;  // 新函数开始，清空已分配名称
             gen->temp_values = NULL;  // 新函数使用新的临时值栈
+            gen->scope_level = 0;  // 函数内部从 scope level 0 开始
+            gen->refbox_vars = NULL;  // 新函数清空 refbox 列表，捕获变量会重新标记
+            gen->symbols = NULL;  // 清空局部符号表，函数内部只能访问参数和捕获变量
             
             // 注意：不清空符号表！顶层预注册的函数名需要在函数体内可见
             // 函数内的局部变量会覆盖同名的全局符号
@@ -1269,14 +1351,18 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             }
             
             // 为捕获的变量创建局部变量
-            // 关键修改：捕获的参数实际上是 Value**（alloca 指针），需要转换回来
+            // 传入的是引用盒子，直接存储即可（不需要 ref_get/ref_set 包装）
             if (captured && captured->count > 0) {
                 for (size_t i = 0; i < captured->count; i++) {
-                    // 将传入的 Value* 转换回 Value** (alloca 指针)
-                    fprintf(output_target, "  %%%s = bitcast %%struct.Value* %%captured_%s to %%struct.Value**  ; restore alloca pointer\n",
+                    // 创建局部 alloca 存储引用盒子
+                    fprintf(output_target, "  %%%s = alloca %%struct.Value*  ; refbox for captured var\n",
+                            captured->names[i]);
+                    fprintf(output_target, "  store %%struct.Value* %%captured_%s, %%struct.Value** %%%s\n",
                             captured->names[i], captured->names[i]);
+                    // 标记为引用盒子变量，使在函数内访问时使用 ref_get/ref_set
+                    // 这个标记只在当前函数作用域有效（函数退出时会恢复）
+                    mark_as_refbox_var(gen, captured->names[i]);
                     // 注册捕获变量到符号表，使其在函数体内可见
-                    // 注意：现在 %name 直接是 Value**，不再需要额外的 alloca
                     register_symbol(gen, captured->names[i]);
                     mark_ir_name_allocated(gen, captured->names[i]);
                     // 捕获变量不添加到作用域跟踪器（同参数一样，由调用者管理）
@@ -1330,6 +1416,8 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
             gen->scope = saved_scope;
             gen->block_terminated = saved_block_terminated;
             gen->temp_values = saved_temp_values;  // 恢复临时值栈
+            gen->scope_level = saved_scope_level;  // 恢复作用域层级
+            gen->refbox_vars = saved_refbox_vars;  // 恢复 refbox 列表
             
             // 清理并恢复已分配名称集合
             clear_allocated_ir_names(gen);
@@ -1398,18 +1486,47 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                     fprintf(gen->code_buf, "  %%t%d = alloca [%zu x %%struct.Value*]\n", 
                             arr_temp, captured->count);
                     
-                    // 填充捕获变量数组 - 按引用捕获（传递 alloca 指针）
+                    // 填充捕获变量数组 - 确保变量是引用盒子
                     for (size_t i = 0; i < captured->count; i++) {
-                        int cast_temp = gen->temp_count++;
+                        const char *var_name = captured->names[i];
+                        int refbox_temp = gen->temp_count++;
                         int gep_temp = gen->temp_count++;
-                        // 将 Value** (alloca) 转换为 Value* 存储
-                        fprintf(gen->code_buf, "  %%t%d = bitcast %%struct.Value** %%%s to %%struct.Value*  ; capture by reference\n",
-                                cast_temp, captured->names[i]);
+                        
+                        // 检查变量是否已经是引用盒子
+                        if (!is_refbox_var(gen, var_name)) {
+                            // 第一次捕获：无论当前值是什么，都包装为 refbox
+                            // 这样后续对变量的赋值会更新 refbox 内容
+                            int val_temp = gen->temp_count++;
+                            int boxed_temp = gen->temp_count++;
+                            
+                            // 加载当前值（可能是 null）
+                            fprintf(gen->code_buf, "  %%t%d = load %%struct.Value*, %%struct.Value** %%%s  ; load value\n",
+                                    val_temp, var_name);
+                            // 创建引用盒子包装（即使是 null 也包装）
+                            fprintf(gen->code_buf, "  %%t%d = call %%struct.Value* @box_ref(%%struct.Value* %%t%d)  ; wrap in refbox\n",
+                                    boxed_temp, val_temp);
+                            // 存回变量（现在变量存储的是 refbox）
+                            fprintf(gen->code_buf, "  store %%struct.Value* %%t%d, %%struct.Value** %%%s  ; variable now holds refbox\n",
+                                    boxed_temp, var_name);
+                            
+                            // 标记变量为引用盒子
+                            mark_as_refbox_var(gen, var_name);
+                            
+                            // 加载 refbox 用于传递
+                            fprintf(gen->code_buf, "  %%t%d = load %%struct.Value*, %%struct.Value** %%%s  ; load refbox for capture\n",
+                                    refbox_temp, var_name);
+                        } else {
+                            // 已经是引用盒子：直接加载
+                            fprintf(gen->code_buf, "  %%t%d = load %%struct.Value*, %%struct.Value** %%%s  ; load existing refbox\n",
+                                    refbox_temp, var_name);
+                        }
+                        
+                        // 将 refbox 存入捕获数组
                         fprintf(gen->code_buf, "  %%t%d = getelementptr inbounds [%zu x %%struct.Value*], "
                                 "[%zu x %%struct.Value*]* %%t%d, i64 0, i64 %zu\n",
                                 gep_temp, captured->count, captured->count, arr_temp, i);
                         fprintf(gen->code_buf, "  store %%struct.Value* %%t%d, %%struct.Value** %%t%d\n",
-                                cast_temp, gep_temp);
+                                refbox_temp, gep_temp);
                     }
                     
                     // 获取数组起始指针
@@ -1436,7 +1553,7 @@ void codegen_stmt(CodeGen *gen, ASTNode *node) {
                         need_comma = 1;
                     }
                     
-                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** %%t%d, i32 %zu, i32 %zu, i32 %d, i32 1)  ; capture by ref\n",
+                    fprintf(gen->code_buf, ")* @%s to i8*), %%struct.Value** %%t%d, i32 %zu, i32 %zu, i32 %d, i32 0)  ; capture by value\n",
                             func_llvm_name, ptr_temp, captured->count, func->param_count, func->uses_self ? 1 : 0);
                     
                     // 存储到局部变量

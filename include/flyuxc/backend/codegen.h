@@ -31,6 +31,7 @@ typedef struct SymbolEntry {
     char *name;             /* 变量名 */
     int scope_level;        /* 作用域层级（0=全局/函数顶层，递增表示嵌套） */
     char *ir_name;          /* LLVM IR 中的变量名（用于遮蔽时生成唯一名称） */
+    int is_const;           /* 是否为常量 */
     struct SymbolEntry *next;
 } SymbolEntry;
 
@@ -112,7 +113,14 @@ typedef struct CodeGen {
     SymbolEntry *functions;  /* 函数名表 - 顶层定义的函数 */
     struct ClosureMapping *closure_mappings;  /* 变量到闭包函数的映射 */
     AllocatedIRName *allocated_ir_names;  /* 当前函数中已分配的 IR 名称 */
+    struct RefBoxVarEntry *refbox_vars;  /* 引用盒子变量集合 */
 } CodeGen;
+
+/* 引用盒子变量条目 - 标记哪些变量是引用盒子 */
+typedef struct RefBoxVarEntry {
+    char *var_name;          /* 变量名 */
+    struct RefBoxVarEntry *next;
+} RefBoxVarEntry;
 
 /* 闭包映射 - 追踪哪些变量存储了闭包函数 */
 typedef struct ClosureMapping {
@@ -184,5 +192,9 @@ void register_closure_mapping(CodeGen *gen, const char *var_name,
 
 /* 查找闭包映射 - 检查变量是否存储了闭包 */
 ClosureMapping *find_closure_mapping(CodeGen *gen, const char *var_name);
+
+/* 引用盒子变量管理 */
+void mark_as_refbox_var(CodeGen *gen, const char *var_name);
+int is_refbox_var(CodeGen *gen, const char *var_name);
 
 #endif /* FLYUXC_CODEGEN_H */

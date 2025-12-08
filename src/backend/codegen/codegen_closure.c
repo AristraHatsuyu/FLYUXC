@@ -194,7 +194,8 @@ static void collect_vars_in_node(ASTNode *node, CapturedVars *captured,
             if (!is_param(name, params, param_count) &&
                 !local_var_set_contains(locals, name) &&
                 !is_builtin(name) &&
-                !is_function_name(gen, name)) {
+                !is_function_name(gen, name) &&
+                !is_global_var(gen, name)) {  // 检查是否是全局变量
                 // 这是一个来自父作用域的变量，需要捕获
                 captured_vars_add(captured, name);
             }

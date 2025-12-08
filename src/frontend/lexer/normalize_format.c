@@ -76,6 +76,54 @@ static int is_call_paren(const char* s, int open_pos){
     return 0;
 }
 
+/* '(' 是否为类型注解的括号：:(type)=
+ * 检查模式：左侧是 ':'，右侧是 '='，内部是类型关键字（num/str/bl/obj/func）
+ */
+static int is_type_annotation_paren(const char* s, int open_pos, int close_pos){
+    // 左侧必须是 ':'
+    int prev = prev_nonspace_idx(s, open_pos-1);
+    if (prev < 0 || s[prev] != ':') return 0;
+    
+    // 右侧必须是 '='
+    int next = next_nonspace_idx(s, close_pos+1);
+    if (next >= (int)strlen(s) || s[next] != '=') return 0;
+    
+    // 内部必须是类型关键字
+    char* inner = dup_range(s, open_pos+1, close_pos-1);
+    if (!inner) return 0;
+    
+    // 去除首尾空格
+    int start = 0, end = (int)strlen(inner) - 1;
+    while (start <= end && is_space_c((unsigned char)inner[start])) start++;
+    while (end >= start && is_space_c((unsigned char)inner[end])) end--;
+    
+    if (start > end) {
+        free(inner);
+        return 0;
+    }
+    
+    // 检查是否是类型关键字
+    int is_type = 0;
+    if (end - start + 1 == 3) {
+        if (strncmp(inner + start, "num", 3) == 0 ||
+            strncmp(inner + start, "str", 3) == 0 ||
+            strncmp(inner + start, "obj", 3) == 0) {
+            is_type = 1;
+        }
+    } else if (end - start + 1 == 2) {
+        if (strncmp(inner + start, "bl", 2) == 0) {
+            is_type = 1;
+        }
+    } else if (end - start + 1 == 4) {
+        if (strncmp(inner + start, "func", 4) == 0) {
+            is_type = 1;
+        }
+    }
+    
+    free(inner);
+    return is_type;
+}
+
 /* '(' 是否为函数定义的参数列表：
  * 1. 左侧是 '='（或 ':=' 的 '='），右侧紧跟 '{'  - 传统函数定义
  * 2. 右侧紧跟 '{'，左侧是 ',' 或 '(' - 匿名函数作为参数
@@ -456,15 +504,19 @@ static char* simplify_parens(const char* expr){
 
             int keep_whole = 0;
 
-            // 1) 函数定义参数列表：保留括号（包括空参数）
-            if (is_function_param_list(expr, i, close)) {
+            // 1) 常量类型注解：保留括号 :(type)=
+            if (is_type_annotation_paren(expr, i, close)) {
                 keep_whole = 1;
             }
-            // 2) 调用括号：保留
+            // 2) 函数定义参数列表：保留括号（包括空参数）
+            else if (is_function_param_list(expr, i, close)) {
+                keep_whole = 1;
+            }
+            // 3) 调用括号：保留
             else if (is_call_paren(expr, i)) {
                 keep_whole = 1;
             }
-            // 3) 右侧紧跟 '||'：为可读性保留一层（但仍会把 inner 的外壳剥到单层）
+            // 4) 右侧紧跟 '||'：为可读性保留一层（但仍会把 inner 的外壳剥到单层）
             else {
                 if (next_i < n && expr[next_i]=='|'){
                     OpInfo Rpeek = read_op_right(expr, next_i);

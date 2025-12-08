@@ -52,6 +52,7 @@ CodeGen *codegen_create(FILE *output) {
     gen->original_source = NULL;  /* 初始无原始源代码 */
     gen->current_captured = NULL;  /* 初始无闭包捕获变量 */
     gen->allocated_ir_names = NULL;  /* 初始无已分配 IR 名称 */
+    gen->refbox_vars = NULL;  /* 初始无引用盒子变量 */
     
     return gen;
 }
@@ -293,7 +294,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                         }
                     }
                     // 注册为全局变量，生成LLVM全局变量声明
-                    register_global(gen, decl->name);
+                    register_global(gen, decl->name, decl->is_const);
                     fprintf(gen->globals_buf, "@%s = global %%struct.Value* null\n", decl->name);
                 }
             }
@@ -329,6 +330,25 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                     }
                     register_symbol(gen, decl->name);
                     register_function(gen, decl->name);  // 同时注册到函数表
+                }
+            }
+        }
+        
+        // 预扫描：注册所有全局变量/常量（在生成函数代码之前）
+        // 这样函数内的闭包分析才能找到这些全局常量
+        for (size_t i = 0; i < prog->stmt_count; i++) {
+            ASTNode *stmt = prog->statements[i];
+            if (stmt->kind == AST_VAR_DECL || stmt->kind == AST_CONST_DECL) {
+                ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                // 跳过函数定义
+                if (decl->init_expr && decl->init_expr->kind == AST_FUNC_DECL) {
+                    continue;
+                }
+                // 注册为全局变量（供闭包分析使用）
+                register_global(gen, decl->name, decl->is_const);
+                if (getenv("DEBUG_GLOBALS")) {
+                    fprintf(stderr, "[PRE-SCAN EARLY] Registered global: %s (const=%d)\n", 
+                            decl->name, decl->is_const);
                 }
             }
         }
@@ -369,6 +389,27 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
             // 调用用户定义的main函数 (重命名为_flyux_main)
             fprintf(gen->code_buf, "  %%user_main_result = call %%struct.Value* @_flyux_main()\n");
         } else {
+            // 没有main函数的情况：顶层变量作为真正的全局变量处理
+            // 预扫描：注册并生成全局变量/常量
+            for (size_t i = 0; i < prog->stmt_count; i++) {
+                ASTNode *stmt = prog->statements[i];
+                if (stmt->kind == AST_VAR_DECL || stmt->kind == AST_CONST_DECL) {
+                    ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                    // 跳过函数定义
+                    if (decl->init_expr && decl->init_expr->kind == AST_FUNC_DECL) {
+                        continue;
+                    }
+                    // 注册为全局变量
+                    register_global(gen, decl->name, decl->is_const);
+                    // 生成LLVM全局变量声明
+                    fprintf(gen->globals_buf, "@%s = global %%struct.Value* null\n", decl->name);
+                    if (getenv("DEBUG_GLOBALS")) {
+                        fprintf(stderr, "[NO-MAIN PRE-SCAN] Registered and declared global: %s (const=%d)\n", 
+                                decl->name, decl->is_const);
+                    }
+                }
+            }
+            
             // 预扫描：收集所有需要在entry块alloca的变量（catch参数等）
             FILE *entry_alloca_buf = tmpfile();
             FILE *main_body_buf = tmpfile();  // 单独的缓冲区保存main body
@@ -384,11 +425,23 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                 }
             }
             
-            // 执行所有顶层语句（这时候新变量的alloca会写入entry_alloca_buf，代码写入main_body_buf）
+            // 执行所有顶层语句（跳过已经作为全局处理的变量声明）
             for (size_t i = 0; i < prog->stmt_count; i++) {
-                if (prog->statements[i]->kind != AST_FUNC_DECL) {
-                    codegen_stmt(gen, prog->statements[i]);
+                ASTNode *stmt = prog->statements[i];
+                // 跳过函数声明
+                if (stmt->kind == AST_FUNC_DECL) {
+                    continue;
                 }
+                // 跳过非函数的变量/常量声明（它们已经作为全局变量处理）
+                if (stmt->kind == AST_VAR_DECL || stmt->kind == AST_CONST_DECL) {
+                    ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                    // 只跳过非函数变量
+                    if (!decl->init_expr || decl->init_expr->kind != AST_FUNC_DECL) {
+                        continue;
+                    }
+                    // 函数变量需要处理（虽然前面已经生成了函数代码，这里生成变量赋值）
+                }
+                codegen_stmt(gen, stmt);
             }
             
             // 恢复code_buf
@@ -398,6 +451,27 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
             // 现在开始写入main函数
             fprintf(gen->code_buf, "\ndefine i32 @main() {\n");
             
+            // 初始化全局变量（就像has_main分支一样）
+            for (size_t i = 0; i < prog->stmt_count; i++) {
+                ASTNode *stmt = prog->statements[i];
+                if ((stmt->kind == AST_VAR_DECL || stmt->kind == AST_CONST_DECL)) {
+                    ASTVarDecl *decl = (ASTVarDecl *)stmt->data;
+                    // 跳过函数定义
+                    if (decl->init_expr && decl->init_expr->kind == AST_FUNC_DECL) {
+                        continue;
+                    }
+                    // 生成初始化代码
+                    if (decl->init_expr) {
+                        char *init_val = codegen_expr(gen, decl->init_expr);
+                        if (init_val) {
+                            fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** @%s\n",
+                                    init_val, decl->name);
+                            free(init_val);
+                        }
+                    }
+                }
+            }
+            
             // 1. 先写入所有alloca
             rewind(entry_alloca_buf);
             char buffer[1024];
@@ -405,7 +479,7 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
                 fputs(buffer, gen->code_buf);
             }
             
-            // 2. 再写入函数体代码
+            // 2. 再写入函数体代码（但跳过变量声明，因为已经作为全局处理）
             rewind(main_body_buf);
             while (fgets(buffer, sizeof(buffer), main_body_buf)) {
                 fputs(buffer, gen->code_buf);
@@ -464,7 +538,13 @@ void codegen_generate(CodeGen *gen, ASTNode *ast) {
     fprintf(gen->output, "declare %%struct.Value* @box_object(i8*, i64)\n");
     fprintf(gen->output, "declare %%struct.Value* @box_function(i8*, %%struct.Value**, i32, i32, i32)\n");  // 添加 needs_self 参数
     fprintf(gen->output, "declare %%struct.Value* @box_function_ex(i8*, %%struct.Value**, i32, i32, i32, i32)\n");  // 扩展版本：添加 capture_by_ref 参数
-    fprintf(gen->output, "declare void @update_closure_captured(%%struct.Value*, i32, %%struct.Value*)\n\n");
+    fprintf(gen->output, "declare void @update_closure_captured(%%struct.Value*, i32, %%struct.Value*)\n");
+    
+    fprintf(gen->output, ";; Reference box functions for closure capture\n");
+    fprintf(gen->output, "declare %%struct.Value* @box_ref(%%struct.Value*)\n");
+    fprintf(gen->output, "declare %%struct.Value* @ref_get(%%struct.Value*)\n");
+    fprintf(gen->output, "declare void @ref_set(%%struct.Value*, %%struct.Value*)\n");
+    fprintf(gen->output, "declare void @ref_free(%%struct.Value*)\n\n");
     
     fprintf(gen->output, ";; Unboxing functions\n");
     fprintf(gen->output, "declare double @unbox_number(%%struct.Value*)\n");

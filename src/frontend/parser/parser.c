@@ -1704,15 +1704,19 @@ static ASTNode *parse_var_declaration(Parser *p) {
     
     char *name = strdup(name_token->lexeme);
     
-    // 跳过可选的类型注解: :[type]= 或 :<type>=
-    // TypeScript 风格：类型注解用于辅助检查但不控制实际类型
+    // 跳过可选的类型注解: :[type]= 或 :<type>= 或 :(type)=
+    // :[type]= - 变量声明（方括号）
+    // :(type)= - 常量声明（圆括号）
+    // :<type>= - 函数返回类型（尖括号）
     ASTNode *type_annotation = NULL;
+    bool is_const = false;  // 是否为常量
+    
     if (check(p, TK_COLON)) {
         advance(p); // 跳过 :
         
-        // 检查是否是 [ 或 < 开头的类型注解
+        // 检查是否是 [ 或 < 或 ( 开头的类型注解
         if (match(p, TK_L_BRACKET)) {
-            // :[type]= 格式
+            // :[type]= 格式 - 变量
             Token *type_tok = current_token(p);
             TokenKind type_kind = type_tok->kind;
             
@@ -1732,9 +1736,33 @@ static ASTNode *parse_var_declaration(Parser *p) {
             ASTTypeAnnotation *type_ann = (ASTTypeAnnotation *)malloc(sizeof(ASTTypeAnnotation));
             type_ann->type_token = type_kind;
             type_annotation->data = type_ann;
+            is_const = false;  // 方括号表示变量
+            
+        } else if (match(p, TK_L_PAREN)) {
+            // :(type)= 格式 - 常量
+            Token *type_tok = current_token(p);
+            TokenKind type_kind = type_tok->kind;
+            
+            // 记录类型token
+            if (!match(p, TK_TYPE_NUM) && !match(p, TK_TYPE_STR) && !match(p, TK_TYPE_BL) && 
+                !match(p, TK_TYPE_OBJ) && !match(p, TK_TYPE_FUNC)) {
+                // 可能是自定义类型，跳过
+                advance(p);
+            }
+            
+            if (!match(p, TK_R_PAREN)) {
+                error_at(p, current_token(p), "Expected ')' after const type annotation");
+            }
+            
+            // 创建类型注解AST节点
+            type_annotation = ast_node_create(AST_TYPE_ANNOTATION, token_to_loc(type_tok));
+            ASTTypeAnnotation *type_ann = (ASTTypeAnnotation *)malloc(sizeof(ASTTypeAnnotation));
+            type_ann->type_token = type_kind;
+            type_annotation->data = type_ann;
+            is_const = true;  // 圆括号表示常量
             
         } else if (match(p, TK_LT)) {
-            // :<type>= 格式
+            // :<type>= 格式 - 函数类型注解
             Token *type_tok = current_token(p);
             TokenKind type_kind = type_tok->kind;
             
@@ -1753,8 +1781,9 @@ static ASTNode *parse_var_declaration(Parser *p) {
             ASTTypeAnnotation *type_ann = (ASTTypeAnnotation *)malloc(sizeof(ASTTypeAnnotation));
             type_ann->type_token = type_kind;
             type_annotation->data = type_ann;
+            is_const = false;
         }
-        // 如果不是 [ 或 <，可能是对象字面量的冒号，回退
+        // 如果不是 [ 或 < 或 (，可能是对象字面量的冒号，回退
         // 但在变量声明上下文中，这不应该发生
     }
     
@@ -1902,6 +1931,13 @@ static ASTNode *parse_var_declaration(Parser *p) {
         return NULL;
     }
     
+    // 检查常量必须初始化
+    if (is_const && init == NULL) {
+        error_at(p, name_token, "Constant must be initialized");
+        free(name);
+        return NULL;
+    }
+    
     // 检查：如果是 := null 则报错（null需要显式类型注解）
     if (!type_annotation && init->kind == AST_NULL_LITERAL) {
         error_at(p, name_token, "Cannot infer type from null value. Use explicit type annotation like 'name:[type]=null'");
@@ -1909,7 +1945,7 @@ static ASTNode *parse_var_declaration(Parser *p) {
         return NULL;
     }
     
-    return ast_var_decl_create(name, type_annotation, false, init, token_to_loc(name_token));
+    return ast_var_decl_create(name, type_annotation, is_const, init, token_to_loc(name_token));
 }
 
 static ASTNode *parse_statement(Parser *p) {
@@ -2070,13 +2106,20 @@ static ASTNode *parse_statement(Parser *p) {
             return parse_var_declaration(p);
         }
         
-        // 检查是否是带类型注解的声明: name :[type]= 或 name :<type>=
+        // 检查是否是带类型注解的声明: name :[type]= 或 name :<type>= 或 name :(type)=
         // 即 next是 : 且不是对象字面量的开始
         if (next->kind == TK_COLON) {
             // 需要lookahead更多token判断是否是类型注解
             Token *third = peek(p, 2);
-            if (third->kind == TK_L_BRACKET || third->kind == TK_LT) {
-                // 这是类型注解: :[...] 或 :<...>
+            if (getenv("DEBUG_CONST")) {
+                fprintf(stderr, "[DEBUG_CONST] name=%s, third->kind=%d (L_PAREN=%d, L_BRACKET=%d, LT=%d)\n",
+                        name_token->lexeme, third->kind, TK_L_PAREN, TK_L_BRACKET, TK_LT);
+            }
+            if (third->kind == TK_L_BRACKET || third->kind == TK_LT || third->kind == TK_L_PAREN) {
+                // 这是类型注解: :[...] 或 :<...> 或 :(...)
+                if (getenv("DEBUG_CONST")) {
+                    fprintf(stderr, "[DEBUG_CONST] Calling parse_var_declaration for %s\n", name_token->lexeme);
+                }
                 return parse_var_declaration(p);
             }
         }

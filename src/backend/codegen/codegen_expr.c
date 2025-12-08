@@ -378,17 +378,36 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             }
             
             // 检查是否是全局变量
-            // 注意：如果当前在闭包中且该变量被捕获，则使用局部变量而非全局变量
             int use_global = is_global_var(gen, id->name);
-            if (use_global && gen->current_captured && 
-                captured_vars_contains(gen->current_captured, id->name)) {
-                // 在闭包中，被捕获的全局变量应该使用局部变量访问
-                use_global = 0;
-            }
             
             // 获取变量的 IR 名称（考虑遮蔽）
             const char *ir_name = get_symbol_ir_name(gen, id->name);
             
+            // 检查是否是引用盒子变量
+            if (is_refbox_var(gen, ir_name)) {
+                // 引用盒子：先加载 refbox，再调用 ref_get 获取实际值
+                int refbox_temp = gen->temp_count++;
+                snprintf(temp, sizeof(temp), "%%t%d", gen->temp_count++);
+                
+                if (use_global) {
+                    fprintf(gen->code_buf, "  %%t%d = load %%struct.Value*, %%struct.Value** @%s  ; load refbox\n", 
+                            refbox_temp, ir_name);
+                } else {
+                    fprintf(gen->code_buf, "  %%t%d = load %%struct.Value*, %%struct.Value** %%%s  ; load refbox\n", 
+                            refbox_temp, ir_name);
+                }
+                
+                // 调用 ref_get 获取实际值（ref_get 已经做了 retain）
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @ref_get(%%struct.Value* %%t%d)  ; get value from refbox\n",
+                        temp, refbox_temp);
+                
+                // 注册为中间值，确保在表达式结束后被释放
+                temp_value_register(gen, temp);
+                
+                return temp;
+            }
+            
+            // 普通变量
             if (use_global) {
                 // 全局变量访问 - 使用 @var_name
                 fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** @%s\n", 
@@ -3621,8 +3640,10 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 
                 // 加载变量值
                 char *func_val = new_temp(gen);
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load potential function value\n", 
-                        func_val, callee->name);
+                // 检查是否是全局变量
+                const char *var_prefix = is_global_var(gen, callee->name) ? "@" : "%";
+                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %s%s  ; load potential function value\n", 
+                        func_val, var_prefix, callee->name);
                 
                 // 检查是否是函数类型
                 char *is_func_check = new_temp(gen);
@@ -3958,36 +3979,76 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 }
                 
                 ASTIdentifier *id = (ASTIdentifier *)unary->operand->data;
+                const char *ir_name = get_symbol_ir_name(gen, id->name);
                 char *old_val = new_temp(gen);
                 char *one = new_temp(gen);
                 char *new_val = new_temp(gen);
                 
-                // 加载当前值
-                fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", old_val, id->name);
-                
-                // 创建 1 的 Value
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 1.0)\n", one);
-                
-                // 增加或减少
-                if (unary->op == TK_PLUS_PLUS) {
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            new_val, old_val, one);
+                // 检查是否是引用盒子变量
+                if (is_refbox_var(gen, ir_name)) {
+                    // 引用盒子：加载 refbox，用 ref_get 获取值
+                    char *refbox = new_temp(gen);
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load refbox\n",
+                            refbox, ir_name);
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @ref_get(%%struct.Value* %s)  ; get value\n",
+                            old_val, refbox);
+                    
+                    // 创建 1 的 Value
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 1.0)\n", one);
+                    
+                    // 增加或减少
+                    if (unary->op == TK_PLUS_PLUS) {
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n", 
+                                new_val, old_val, one);
+                    } else {
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_subtract(%%struct.Value* %s, %%struct.Value* %s)\n", 
+                                new_val, old_val, one);
+                    }
+                    
+                    // 使用 ref_set 更新 refbox
+                    fprintf(gen->code_buf, "  call void @ref_set(%%struct.Value* %s, %%struct.Value* %s)  ; update refbox\n",
+                            refbox, new_val);
+                    
+                    free(refbox);
+                    free(one);
+                    
+                    // 返回值：前缀返回新值，后缀返回旧值
+                    if (unary->is_postfix) {
+                        free(new_val);
+                        return old_val;  // i++: 返回旧值
+                    } else {
+                        free(old_val);
+                        return new_val;  // ++i: 返回新值
+                    }
                 } else {
-                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_subtract(%%struct.Value* %s, %%struct.Value* %s)\n", 
-                            new_val, old_val, one);
-                }
-                
-                // 存储新值
-                fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n", new_val, id->name);
-                
-                // 返回值：前缀返回新值，后缀返回旧值
-                free(one);
-                if (unary->is_postfix) {
-                    free(new_val);
-                    return old_val;  // i++: 返回旧值
-                } else {
-                    free(old_val);
-                    return new_val;  // ++i: 返回新值
+                    // 普通变量
+                    // 加载当前值
+                    fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s\n", old_val, ir_name);
+                    
+                    // 创建 1 的 Value
+                    fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_number(double 1.0)\n", one);
+                    
+                    // 增加或减少
+                    if (unary->op == TK_PLUS_PLUS) {
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_add(%%struct.Value* %s, %%struct.Value* %s)\n", 
+                                new_val, old_val, one);
+                    } else {
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @value_subtract(%%struct.Value* %s, %%struct.Value* %s)\n", 
+                                new_val, old_val, one);
+                    }
+                    
+                    // 存储新值
+                    fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s\n", new_val, ir_name);
+                    
+                    // 返回值：前缀返回新值，后缀返回旧值
+                    free(one);
+                    if (unary->is_postfix) {
+                        free(new_val);
+                        return old_val;  // i++: 返回旧值
+                    } else {
+                        free(old_val);
+                        return new_val;  // ++i: 返回新值
+                    }
                 }
             }
             
@@ -4391,10 +4452,12 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             FILE *saved_entry_alloca = gen->entry_alloca_buf;
             TempValueStack *saved_temp_values = gen->temp_values;
             CapturedVars *saved_captured = gen->current_captured;
+            int saved_scope_level = gen->scope_level;  // 保存作用域层级
             
             // 设置闭包捕获变量
             gen->current_captured = captured;
             gen->temp_values = NULL;  // 函数使用新的临时值栈
+            gen->scope_level = 0;  // 函数内部从 scope level 0 开始
             
             // 创建临时缓冲区用于生成函数代码
             FILE *func_buf = tmpfile();
@@ -4410,6 +4473,7 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
             gen->entry_alloca_buf = saved_entry_alloca;
             gen->temp_values = saved_temp_values;
             gen->current_captured = saved_captured;
+            gen->scope_level = saved_scope_level;  // 恢复作用域层级
             
             // 将函数代码追加到 globals_buf
             rewind(func_buf);
@@ -4459,20 +4523,49 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                     }
                 }
                 
-                // 填充捕获变量
-                // 关键修改：传递 alloca 指针（Value**），而不是加载后的值（Value*）
-                // 这样闭包内部可以读取和修改外层变量
+                // 填充捕获变量 - 确保变量是引用盒子
                 for (size_t i = 0; i < captured->count; i++) {
-                    // 将 Value** 转换为 Value* 存储（使用 bitcast）
-                    char *ref_as_val = new_temp(gen);
-                    fprintf(gen->code_buf, "  %s = bitcast %%struct.Value** %%%s to %%struct.Value*  ; capture by reference\n",
-                            ref_as_val, captured->names[i]);
+                    const char *var_name = captured->names[i];
+                    char *refbox = new_temp(gen);
+                    
+                    // 检查变量是否已经是引用盒子
+                    if (!is_refbox_var(gen, var_name)) {
+                        // 第一次捕获：无论当前值是什么，都包装为 refbox
+                        char *val = new_temp(gen);
+                        char *boxed = new_temp(gen);
+                        
+                        // 加载当前值（可能是 null）
+                        fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load value\n",
+                                val, var_name);
+                        // 创建引用盒子包装（即使是 null 也包装）
+                        fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_ref(%%struct.Value* %s)  ; wrap in refbox\n",
+                                boxed, val);
+                        // 存回变量（现在变量存储的是 refbox）
+                        fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %%%s  ; variable now holds refbox\n",
+                                boxed, var_name);
+                        
+                        // 标记变量为引用盒子
+                        mark_as_refbox_var(gen, var_name);
+                        
+                        // 加载 refbox 用于传递
+                        fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load refbox for capture\n",
+                                refbox, var_name);
+                        
+                        free(val);
+                        free(boxed);
+                    } else {
+                        // 已经是引用盒子：直接加载
+                        fprintf(gen->code_buf, "  %s = load %%struct.Value*, %%struct.Value** %%%s  ; load existing refbox\n",
+                                refbox, var_name);
+                    }
+                    
+                    // 将 refbox 存入捕获数组
                     char *slot_ptr = new_temp(gen);
                     fprintf(gen->code_buf, "  %s = getelementptr inbounds [%zu x %%struct.Value*], [%zu x %%struct.Value*]* %s, i64 0, i64 %zu\n",
                             slot_ptr, captured->count, captured->count, captured_array, i);
                     fprintf(gen->code_buf, "  store %%struct.Value* %s, %%struct.Value** %s\n",
-                            ref_as_val, slot_ptr);
-                    free(ref_as_val);
+                            refbox, slot_ptr);
+                    free(refbox);
                     free(slot_ptr);
                 }
                 
@@ -4495,8 +4588,8 @@ char *codegen_expr(CodeGen *gen, ASTNode *node) {
                 size_t user_param_count = func->param_count;
                 
                 // 调用 box_function_ex，传递 needs_self 和 capture_by_ref 标志
-                // capture_by_ref=1 表示捕获的是 alloca 指针（Value**），不是值（Value*）
-                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function_ex(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu, i32 %d, i32 1)  ; closure '%s' (capture by ref)\n",
+                // capture_by_ref=0 表示按值捕获（让运行时retain），避免逃逸闭包的悬空指针问题
+                fprintf(gen->code_buf, "  %s = call %%struct.Value* @box_function_ex(i8* %s, %%struct.Value** %s, i32 %zu, i32 %zu, i32 %d, i32 0)  ; closure '%s' (capture by value)\n",
                         temp, func_ptr, captured_ptr, captured->count, user_param_count, func->uses_self ? 1 : 0, func->name);
                 
                 // 自引用闭包修复：对于按引用捕获，不需要更新！

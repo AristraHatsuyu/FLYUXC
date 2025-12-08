@@ -2512,3 +2512,92 @@ Value* value_spread_into_array(Value *target, Value *source) {
     return result;
 }
 
+/* ============================================================================
+ * 引用盒子 (Reference Box) - 用于闭包捕获可变变量
+ * ============================================================================ */
+
+/**
+ * 创建引用盒子：将 Value* 包装在堆分配的 Value** 中
+ * 这样闭包可以捕获这个 Value**，即使父函数返回后仍然有效
+ * 
+ * @param value: 要包装的值
+ * @return: 包装后的 Value**（伪装成 Value*）
+ */
+Value* box_ref(Value *value) {
+    /* 分配堆上的 Value** */
+    Value **ref_box = (Value**)malloc(sizeof(Value*));
+    *ref_box = value;
+    
+    /* Retain value to keep it alive */
+    if (value) {
+        value_retain(value);
+    }
+    
+    /* 将 Value** 伪装成 Value* 返回 */
+    return (Value*)ref_box;
+}
+
+/**
+ * 从引用盒子中获取值
+ * 
+ * @param ref_box: 引用盒子（实际上是 Value**）
+ * @return: 包装的值
+ */
+Value* ref_get(Value *ref_box) {
+    if (!ref_box) return box_null();
+    
+    Value **box = (Value**)ref_box;
+    Value *value = *box;
+    
+    /* 返回时增加引用计数 */
+    if (value) {
+        value_retain(value);
+    }
+    
+    return value ? value : box_null();
+}
+
+/**
+ * 设置引用盒子中的值
+ * 
+ * @param ref_box: 引用盒子（实际上是 Value**）
+ * @param new_value: 新值
+ */
+void ref_set(Value *ref_box, Value *new_value) {
+    if (!ref_box) return;
+    
+    Value **box = (Value**)ref_box;
+    Value *old_value = *box;
+    
+    /* 设置新值并增加引用计数 */
+    *box = new_value;
+    if (new_value) {
+        value_retain(new_value);
+    }
+    
+    /* 释放旧值 */
+    if (old_value) {
+        value_release(old_value);
+    }
+}
+
+/**
+ * 释放引用盒子
+ * 
+ * @param ref_box: 引用盒子（实际上是 Value**）
+ */
+void ref_free(Value *ref_box) {
+    if (!ref_box) return;
+    
+    Value **box = (Value**)ref_box;
+    Value *value = *box;
+    
+    /* 释放包装的值 */
+    if (value) {
+        value_release(value);
+    }
+    
+    /* 释放盒子本身 */
+    free(box);
+}
+

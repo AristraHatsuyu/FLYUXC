@@ -120,15 +120,18 @@ void register_symbol(CodeGen *gen, const char *var_name) {
     entry->name = strdup(var_name);
     entry->scope_level = gen->scope_level;
     entry->ir_name = strdup(var_name);  // 默认IR名称与变量名相同
+    entry->is_const = 0;  // 默认不是常量
     entry->next = gen->symbols;
     gen->symbols = entry;
 }
 
 /* 注册变量并返回IR名称（支持遮蔽时生成唯一名称） */
-const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name) {
+const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name, int is_const) {
     SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
     entry->name = strdup(var_name);
     entry->scope_level = gen->scope_level;
+    entry->is_const = is_const;
+    entry->is_const = is_const;
     
     // 检查是否已存在同名变量（任何层级）
     // 如果存在，必须生成唯一的 IR 名称避免 LLVM 重复定义错误
@@ -166,11 +169,12 @@ const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name) {
 }
 
 /* 注册全局变量到全局符号表 */
-void register_global(CodeGen *gen, const char *var_name) {
+void register_global(CodeGen *gen, const char *var_name, int is_const) {
     SymbolEntry *entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
     entry->name = strdup(var_name);
     entry->scope_level = 0;
     entry->ir_name = strdup(var_name);
+    entry->is_const = is_const;  // 使用传入的 is_const
     entry->next = gen->globals;
     gen->globals = entry;
 }
@@ -184,17 +188,30 @@ int is_symbol_defined(CodeGen *gen, const char *var_name) {
         for (SymbolEntry *e = gen->symbols; e != NULL; e = e->next) {
             fprintf(stderr, "  - %s (scope=%d, ir=%s)\n", e->name, e->scope_level, e->ir_name);
         }
+        fprintf(stderr, "[DEBUG is_symbol_defined] Globals list:\n");
+        for (SymbolEntry *e = gen->globals; e != NULL; e = e->next) {
+            fprintf(stderr, "  - %s (const=%d)\n", e->name, e->is_const);
+        }
     }
     for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
         if (strcmp(entry->name, var_name) == 0) {
+            if (getenv("DEBUG_SYMBOL")) {
+                fprintf(stderr, "[DEBUG] Found %s in symbols list\n", var_name);
+            }
             return 1;
         }
     }
     // 也检查全局变量
     for (SymbolEntry *entry = gen->globals; entry != NULL; entry = entry->next) {
         if (strcmp(entry->name, var_name) == 0) {
+            if (getenv("DEBUG_SYMBOL")) {
+                fprintf(stderr, "[DEBUG] Found %s in globals list\n", var_name);
+            }
             return 1;
         }
+    }
+    if (getenv("DEBUG_SYMBOL")) {
+        fprintf(stderr, "[DEBUG] %s NOT FOUND\n", var_name);
     }
     return 0;
 }
@@ -207,6 +224,23 @@ int is_symbol_defined_in_current_scope(CodeGen *gen, const char *var_name) {
         }
     }
     return 0;
+}
+
+/* 检查变量是否是常量 */
+int is_symbol_const(CodeGen *gen, const char *var_name) {
+    // 检查局部符号表
+    for (SymbolEntry *entry = gen->symbols; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return entry->is_const;
+        }
+    }
+    // 检查全局符号表
+    for (SymbolEntry *entry = gen->globals; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->name, var_name) == 0) {
+            return entry->is_const;
+        }
+    }
+    return 0;  // 未定义的变量默认不是常量
 }
 
 /* 获取变量的IR名称（考虑遮蔽，返回最内层作用域的名称） */
@@ -736,3 +770,34 @@ void temp_value_clear(CodeGen *gen) {
     stack->entries = NULL;
     stack->count = 0;
 }
+
+/* ============================================================================
+ * 引用盒子变量管理
+ * ============================================================================ */
+
+/* 标记变量为引用盒子 */
+void mark_as_refbox_var(CodeGen *gen, const char *var_name) {
+    // 检查是否已标记
+    for (RefBoxVarEntry *entry = gen->refbox_vars; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->var_name, var_name) == 0) {
+            return;  // 已存在
+        }
+    }
+    
+    // 添加新条目
+    RefBoxVarEntry *entry = (RefBoxVarEntry *)malloc(sizeof(RefBoxVarEntry));
+    entry->var_name = strdup(var_name);
+    entry->next = gen->refbox_vars;
+    gen->refbox_vars = entry;
+}
+
+/* 检查变量是否为引用盒子 */
+int is_refbox_var(CodeGen *gen, const char *var_name) {
+    for (RefBoxVarEntry *entry = gen->refbox_vars; entry != NULL; entry = entry->next) {
+        if (strcmp(entry->var_name, var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+

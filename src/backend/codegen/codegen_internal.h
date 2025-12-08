@@ -51,17 +51,20 @@ ObjectField *find_field(ObjectMetadata *obj_meta, const char *field_name);
 /* 注册变量到符号表（使用当前作用域层级） */
 void register_symbol(CodeGen *gen, const char *var_name);
 
-/* 注册变量并返回IR名称（支持遮蔽时生成唯一名称） */
-const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name);
+/* 注册变量并返回IR名称（支持遮蔽时生成唯一名称），is_const 标识是否为常量 */
+const char *register_symbol_with_shadow(CodeGen *gen, const char *var_name, int is_const);
 
 /* 注册全局变量到全局符号表 */
-void register_global(CodeGen *gen, const char *var_name);
+void register_global(CodeGen *gen, const char *var_name, int is_const);
 
 /* 检查变量是否已定义（在任意层级） */
 int is_symbol_defined(CodeGen *gen, const char *var_name);
 
 /* 检查变量是否在当前作用域层级已定义（用于检测重复声明） */
 int is_symbol_defined_in_current_scope(CodeGen *gen, const char *var_name);
+
+/* 检查变量是否是常量 */
+int is_symbol_const(CodeGen *gen, const char *var_name);
 
 /* 获取变量的IR名称（考虑遮蔽，返回最内层作用域的名称） */
 const char *get_symbol_ir_name(CodeGen *gen, const char *var_name);
